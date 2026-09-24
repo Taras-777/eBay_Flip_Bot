@@ -1,0 +1,31 @@
+# Віртуальне середовище
+.venv/
+venv/
+
+# Кеш Python
+__pycache__/
+*.py[cod]
+
+# База даних бота — містить Telegram ID користувачів, історію знахідок і статистику
+*.sqlite3
+*.sqlite3-journal
+*.db
+
+# Секрети
+.env
+.env.*
+config.py
+
+# Тести й покриття
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Логи
+*.log
+
+# Налаштування редакторів і системи
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
