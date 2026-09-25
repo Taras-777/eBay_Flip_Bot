@@ -1,7 +1,7 @@
 ﻿"""
 Точка входу: створення бота, реєстрація обробників і запуск.
 """
-
+import asyncio
 import config
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ConversationHandler, MessageHandler, PersistenceInput, PicklePersistence, filters
 
