@@ -2,6 +2,7 @@
 import base64
 import functools
 import html
+import json
 import logging
 import re
 import sqlite3
@@ -9,9 +10,16 @@ import statistics
 import threading
 import time
 import uuid
+from urllib.parse import quote
 from contextlib import contextmanager
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("Europe/Berlin")
+except Exception:  # немає бази часових зон (напр. Windows без tzdata)
+    LOCAL_TZ = timezone.utc
 
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
@@ -79,6 +87,32 @@ GONE_MAX_LISTING_DAYS = 30     # старші лоти не враховуємо
 SOLD_LOOKBACK_DAYS = 60
 MIN_SOLD_SAMPLE = 5
 LISTING_OBS_RETENTION_DAYS = 90
+
+# Якщо в назві оголошення немає пам'яті/процесора, бот дізнається їх з
+# характеристик лота (getItem → localizedAspects). Кожен лот запитується один
+# раз (кеш у БД); ліміти захищають добову квоту eBay API.
+ASPECT_LOOKUP_ENABLED = True
+MAX_SPEC_LOOKUPS_PER_MARKET_SCAN = 30
+MAX_SPEC_LOOKUPS_PER_DEAL_SCAN = 10
+MAX_SPEC_LOOKUPS_PER_DAY = 1000
+
+# Характеристики, наявність яких означає аксесуар чи запчастину ("для якого
+# пристрою підходить") — однаково для будь-якого типу товару
+COMPAT_ASPECTS = {
+    "kompatible marke", "kompatibles modell", "kompatible produktlinie", "kompatibel mit",
+    "compatible brand", "compatible model", "compatible product line",
+}
+# Загальні характеристики, які є і в товару, і в аксесуара — як "обов'язкова
+# характеристика" нічого не доводять, тож не пропонуються
+GENERIC_ASPECTS = {
+    "marke", "brand", "modell", "model", "farbe", "color", "colour", "herstellernummer", "mpn",
+    "ean", "upc", "isbn", "produktart", "type", "typ", "besonderheiten", "features",
+    "herstellungsland und -region", "country/region of manufacture", "zustand", "condition",
+    "material", "stil", "style", "gebrauchsanweisung", "herstellergarantie", "durability guarantee",
+}
+TAXONOMY_BASE = "https://api.ebay.com/commerce/taxonomy/v1"
+CATEGORY_ASPECTS_CACHE_DAYS = 7
+MAX_ASPECT_OPTIONS = 6
 
 # Стани товару за замовчуванням при додаванні нового відстеження
 DEFAULT_CONDITION_IDS = "1000,1500,2000,2500,3000"
@@ -235,6 +269,30 @@ LAPTOP_DEVICE_TERMS = {
     "laptop", "notebook", "macbook", "thinkpad", "chromebook", "ultrabook",
     "computer", "pc",
 }
+PHONE_QUERY_TERMS = {"iphone", "galaxy", "pixel", "smartphone", "handy", "xiaomi", "oneplus"}
+# Слова, характерні для оголошень аксесуарів/ремонту, а не самого телефона.
+# "akku" свідомо немає: "Akku 90%" — звичайна частина назви вживаного телефона.
+PHONE_ACCESSORY_TERMS = {
+    "case", "cases", "cover", "hülle", "hulle", "handyhülle", "schutzhülle", "tasche",
+    "bumper", "wallet", "strap", "band", "skin", "sticker", "folie", "schutzfolie",
+    "panzerglas", "schutzglas", "displayschutz", "glass", "protector", "lens", "linse",
+    "objektiv", "kabel", "cable", "ladegerät", "ladekabel", "charger", "adapter",
+    "halterung", "holder", "reparatur", "repair", "ersatzteil", "ersatzteile",
+    "backcover", "rückseite", "kamera", "camera", "dummy", "attrappe",
+}
+PHONE_FOR_WORDS = {"für", "fur", "for"}
+# Категорії eBay з аксесуарами/запчастинами — при виборі позначаються ⚠️
+ACCESSORY_CATEGORY_WORDS = (
+    "zubehör", "zubehor", "accessor", "ersatzteil", "parts", "hüllen", "cases",
+    "kabel", "taschen", "schutz", "ladegerät", "halterung",
+)
+
+
+def is_accessory_category(name):
+    lowered = (name or "").lower()
+    return any(word in lowered for word in ACCESSORY_CATEGORY_WORDS)
+
+
 # Слова, що позначають ІНШУ модель з помітно іншою ціною: PS5 vs PS5 Pro,
 # iPhone 13 vs 13 Pro Max, Switch vs Switch Lite/OLED. Якщо слова немає в
 # запиті — лоти з ним у назві не враховуються, і навпаки.
@@ -325,6 +383,16 @@ def _title_matches_search(title: str, query: str, exclude_terms: str) -> bool:
         if normalized_query not in normalized_title:
             return False
 
+    if query_tokens.intersection(PHONE_QUERY_TERMS):
+        # Чохол/скло/ремонт "für iPhone 13 Pro" — не телефон. Але лот
+        # "iPhone 13 Pro 128GB + Hülle" з пам'яттю в назві — це телефон.
+        has_phone_evidence = bool(SPEC_SIZE_PATTERN.search(title))
+        looks_like_accessory = bool(title_tokens.intersection(PHONE_ACCESSORY_TERMS)) or (
+            bool(title_tokens.intersection(PHONE_FOR_WORDS)) and not has_phone_evidence
+        )
+        if looks_like_accessory and not has_phone_evidence:
+            return False
+
     requested_variants = query_tokens.intersection(MODEL_VARIANT_TERMS)
     title_variant_tokens = _search_tokens(OS_EDITION_PATTERN.sub(" ", title))
     if title_variant_tokens.intersection(MODEL_VARIANT_TERMS) != requested_variants:
@@ -376,6 +444,36 @@ def extract_cpu_token(title: str):
     return None
 
 
+# Назви характеристик на ebay.de (і англійські варіанти), з яких беремо
+# пам'ять, накопичувач і процесор
+STORAGE_ASPECTS = {
+    "speicherkapazität", "storage capacity", "ssd-speicherkapazität", "ssd capacity",
+    "festplattenkapazität", "hard drive capacity", "kapazität", "capacity",
+}
+RAM_ASPECTS = {"arbeitsspeichergröße", "arbeitsspeicher", "ram size", "ram"}
+LAPTOP_STORAGE_ASPECTS = {"ssd-speicherkapazität", "ssd capacity", "festplattenkapazität", "hard drive capacity"}
+CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type"}
+
+
+def spec_key_from_aspects(title, aspects):
+    """Конфігурація з назви, доповнена характеристиками лота (формат той
+    самий, що й у extract_spec_key: напр. "16GB+512GB+M1PRO")."""
+    tokens = {f"{num}{unit.upper()}" for num, unit in SPEC_SIZE_PATTERN.findall(title or "")}
+    cpu = extract_cpu_token(title)
+    # RAM беремо з характеристик лише в ноутбуків (є характеристика SSD/диска).
+    # У телефонів "Arbeitsspeicher: 6 GB" розбило б одну модель на групи
+    # "128GB" і "128GB+6GB" залежно від того, звідки взяли пам'ять.
+    laptop_like = any(name in LAPTOP_STORAGE_ASPECTS for name in aspects)
+    for name, value in aspects.items():
+        if name in STORAGE_ASPECTS or (name in RAM_ASPECTS and laptop_like):
+            tokens.update(f"{num}{unit.upper()}" for num, unit in SPEC_SIZE_PATTERN.findall(value or ""))
+        elif name in CPU_ASPECTS and not cpu:
+            cpu = extract_cpu_token(value)
+    if cpu:
+        tokens.add(cpu)
+    return "+".join(sorted(tokens)) if tokens else "unspecified"
+
+
 def extract_spec_key(title: str) -> str:
     if not title:
         return "unspecified"
@@ -408,7 +506,9 @@ CREATE TABLE IF NOT EXISTS watches (
     created_at INTEGER NOT NULL,
     category_id TEXT DEFAULT '',
     category_name TEXT DEFAULT '',
-    min_price REAL DEFAULT 0
+    min_price REAL DEFAULT 0,
+    require_spec INTEGER,
+    required_aspect TEXT
 );
 
 CREATE TABLE IF NOT EXISTS market_stats (
@@ -422,6 +522,29 @@ CREATE TABLE IF NOT EXISTS market_stats (
     sale_price REAL,
     sale_source TEXT DEFAULT '',
     PRIMARY KEY (watch_id, cond_group, spec_group)
+);
+
+-- Кеш конфігурації лота, визначеної з його характеристик (getItem)
+CREATE TABLE IF NOT EXISTS item_specs (
+    item_id TEXT PRIMARY KEY,
+    spec_group TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    aspects_json TEXT
+);
+
+-- Кеш характеристик категорії з Taxonomy API
+CREATE TABLE IF NOT EXISTS category_aspects (
+    category_id TEXT PRIMARY KEY,
+    aspects_json TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL
+);
+
+-- Власний лічильник запитів до eBay за добу (UTC)
+CREATE TABLE IF NOT EXISTS api_usage (
+    day TEXT NOT NULL,
+    api TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, api)
 );
 
 -- Спостереження за оголошеннями (дані рівня лота, без даних продавця):
@@ -439,6 +562,8 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     miss_count INTEGER DEFAULT 0,
     status TEXT DEFAULT 'active',
     gone_at INTEGER,
+    title TEXT,
+    url TEXT,
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -541,6 +666,15 @@ def init_db():
 
         conn.executescript(SCHEMA)
 
+        obs_cols = {r["name"] for r in conn.execute("PRAGMA table_info(listing_obs)").fetchall()}
+        for col in ("title", "url"):
+            if obs_cols and col not in obs_cols:
+                conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} TEXT")
+
+        spec_cols = {r["name"] for r in conn.execute("PRAGMA table_info(item_specs)").fetchall()}
+        if "aspects_json" not in spec_cols:
+            conn.execute("ALTER TABLE item_specs ADD COLUMN aspects_json TEXT")
+
         ms_cols = {r["name"] for r in conn.execute("PRAGMA table_info(market_stats)").fetchall()}
         for col, ddl in [("sale_price", "REAL"), ("sale_source", "TEXT DEFAULT ''")]:
             if col not in ms_cols:
@@ -553,6 +687,8 @@ def init_db():
             ("category_id", "TEXT DEFAULT ''"),
             ("category_name", "TEXT DEFAULT ''"),
             ("min_price", "REAL DEFAULT 0"),
+            ("require_spec", "INTEGER"),
+            ("required_aspect", "TEXT"),
         ]:
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")
@@ -612,15 +748,15 @@ def list_users(status=None):
 # ---------- watches ----------
 
 def add_watch(chat_id, label, query, exclude, condition_ids, discount_threshold_pct,
-              category_id="", category_name="", min_price=0):
+              category_id="", category_name="", min_price=0, require_spec=None, required_aspect=None):
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO watches
                (chat_id, label, query, exclude, condition_ids, discount_threshold_pct, active, created_at,
-                category_id, category_name, min_price)
-               VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)""",
+                category_id, category_name, min_price, require_spec, required_aspect)
+               VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
             (chat_id, label, query, exclude, condition_ids, discount_threshold_pct, int(time.time()),
-             category_id or "", category_name or "", float(min_price or 0)),
+             category_id or "", category_name or "", float(min_price or 0), require_spec, required_aspect),
         )
         return cur.lastrowid
 
@@ -700,6 +836,42 @@ def update_watch_category(watch_id, chat_id, category_id, category_name):
         conn.execute(
             "UPDATE watches SET category_id = ?, category_name = ? WHERE id = ? AND chat_id = ?",
             (category_id or "", category_name or "", watch_id, chat_id),
+        )
+
+
+def update_watch_require_spec(watch_id, chat_id, value):
+    """value: 1 — лише лоти з відомою пам'яттю, 0 — усі, None — автоматично."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE watches SET require_spec = ? WHERE id = ? AND chat_id = ?",
+            (value, watch_id, chat_id),
+        )
+
+
+def get_required_aspects(w):
+    """Обов'язкові характеристики товару. У БД — JSON-список; старе
+    значення з однією назвою (до підтримки кількох) теж розуміється."""
+    raw = (w or {}).get("required_aspect")
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return [raw]
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v).strip()]
+    return [str(value)]
+
+
+def encode_required_aspects(names):
+    return json.dumps(list(names), ensure_ascii=False) if names else None
+
+
+def update_watch_required_aspect(watch_id, chat_id, required_aspect, require_spec):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE watches SET required_aspect = ?, require_spec = ? WHERE id = ? AND chat_id = ?",
+            (required_aspect, require_spec, watch_id, chat_id),
         )
 
 
@@ -807,6 +979,32 @@ def cleanup_old_seen_items():
         return cur.rowcount
 
 
+# ---------- лічильник запитів до eBay ----------
+
+def _utc_day():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def record_api_call(api):
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """INSERT INTO api_usage (day, api, count) VALUES (?, ?, 1)
+                   ON CONFLICT(day, api) DO UPDATE SET count = count + 1""",
+                (_utc_day(), api),
+            )
+    except sqlite3.Error as e:
+        log.debug("Не вдалося записати лічильник запитів: %s", e)
+
+
+def get_api_calls_today(api="browse"):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT count FROM api_usage WHERE day = ? AND api = ?", (_utc_day(), api)
+        ).fetchone()
+        return row["count"] if row else 0
+
+
 # ---------- спостереження за лотами ("зниклі" = ймовірно продані) ----------
 
 def update_listing_observations(watch_id, items):
@@ -828,14 +1026,17 @@ def update_listing_observations(watch_id, items):
                 continue
             conn.execute(
                 """INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
-                                            created_at, end_at, first_seen, last_seen, miss_count, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active')
+                                            created_at, end_at, first_seen, last_seen, miss_count, status,
+                                            title, url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)
                    ON CONFLICT(watch_id, item_id) DO UPDATE SET
                      cond_group=excluded.cond_group, spec_group=excluded.spec_group,
                      price=excluded.price, end_at=excluded.end_at, last_seen=excluded.last_seen,
-                     miss_count=0, status='active', gone_at=NULL""",
+                     miss_count=0, status='active', gone_at=NULL,
+                     title=excluded.title, url=excluded.url""",
                 (watch_id, it["item_id"], it["cond_group"], it.get("spec_group", "unspecified"),
-                 it["total_price"], it.get("created_at"), it.get("end_at"), now, now),
+                 it["total_price"], it.get("created_at"), it.get("end_at"), now, now,
+                 it.get("title"), it.get("url")),
             )
 
         if window_start is None:
@@ -881,7 +1082,7 @@ def get_current_listings(watch_id):
     since = int(time.time()) - 2 * MARKET_REFRESH_MINUTES * 60
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
-            """SELECT cond_group, spec_group, price FROM listing_obs
+            """SELECT item_id, cond_group, spec_group, price, title, url FROM listing_obs
                WHERE watch_id = ? AND status = 'active' AND last_seen >= ? AND price IS NOT NULL""",
             (watch_id, since),
         ).fetchall()]
@@ -890,82 +1091,59 @@ def get_current_listings(watch_id):
 def cleanup_old_listing_obs():
     cutoff = int(time.time()) - LISTING_OBS_RETENTION_DAYS * 86400
     with get_conn() as conn:
+        conn.execute("DELETE FROM item_specs WHERE fetched_at < ?", (cutoff,))
         return conn.execute("DELETE FROM listing_obs WHERE last_seen < ?", (cutoff,)).rowcount
 
 
-# ---------- category_hints ----------
-
-def add_category_hint(keywords, pct, reason):
+def get_cached_specs(item_ids):
+    """item_id → (spec_group, aspects dict або None, якщо характеристики не збережені)."""
+    if not item_ids:
+        return {}
     with get_conn() as conn:
-        cur = conn.execute(
-            "INSERT INTO category_hints (keywords, pct, reason, created_at) VALUES (?, ?, ?, ?)",
-            (keywords, pct, reason, int(time.time())),
+        placeholders = ",".join("?" * len(item_ids))
+        rows = conn.execute(
+            f"SELECT item_id, spec_group, aspects_json FROM item_specs WHERE item_id IN ({placeholders})",
+            list(item_ids),
+        ).fetchall()
+    result = {}
+    for r in rows:
+        try:
+            aspects = json.loads(r["aspects_json"]) if r["aspects_json"] else None
+        except ValueError:
+            aspects = None
+        result[r["item_id"]] = (r["spec_group"], aspects)
+    return result
+
+
+def save_cached_spec(item_id, spec_group, aspects=None):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO item_specs (item_id, spec_group, fetched_at, aspects_json) VALUES (?, ?, ?, ?)
+               ON CONFLICT(item_id) DO UPDATE SET spec_group=excluded.spec_group,
+                 fetched_at=excluded.fetched_at, aspects_json=excluded.aspects_json""",
+            (item_id, spec_group, int(time.time()),
+             json.dumps(aspects, ensure_ascii=False) if aspects is not None else None),
         )
-        return cur.lastrowid
 
 
-def list_category_hints():
-    with get_conn() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM category_hints ORDER BY id").fetchall()]
-
-
-def remove_category_hint(hint_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM category_hints WHERE id = ?", (hint_id,))
-
-
-def find_threshold_suggestion(query: str):
-    q_lower = query.lower()
-    for hint in list_category_hints():
-        keywords = [k.strip() for k in hint["keywords"].split(",") if k.strip()]
-        for kw in keywords:
-            if kw in q_lower:
-                return hint["pct"], hint["reason"]
-    return (
-        DEFAULT_DISCOUNT_THRESHOLD_PCT,
-        "для цього товару немає готової підказки в базі, тому запропоновано типове значення",
-    )
-
-
-# ---------- deals ----------
-
-def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious, has_best_offer=False):
-    with get_conn() as conn:
-        cur = conn.execute(
-            """INSERT INTO deals
-               (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious, has_best_offer, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)""",
-            (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url,
-             int(suspicious), int(has_best_offer), int(time.time())),
-        )
-        return cur.lastrowid
-
-
-def set_deal_status(deal_id, status):
-    with get_conn() as conn:
-        conn.execute("UPDATE deals SET status = ? WHERE id = ?", (status, deal_id))
-
-
-def get_deal_owner_chat_id(deal_id):
+def get_cached_category_aspects(category_id):
+    since = int(time.time()) - CATEGORY_ASPECTS_CACHE_DAYS * 86400
     with get_conn() as conn:
         row = conn.execute(
-            """SELECT w.chat_id FROM deals d
-               JOIN watches w ON w.id = d.watch_id WHERE d.id = ?""",
-            (deal_id,),
+            "SELECT aspects_json FROM category_aspects WHERE category_id = ? AND fetched_at >= ?",
+            (str(category_id), since),
         ).fetchone()
-        return row["chat_id"] if row else None
+    return json.loads(row["aspects_json"]) if row else None
 
 
-def get_deal_stats(chat_id):
+def save_category_aspects(category_id, aspects):
     with get_conn() as conn:
-        rows = conn.execute(
-            """SELECT d.status, COUNT(*) AS c FROM deals d
-               JOIN watches w ON w.id = d.watch_id
-               WHERE w.chat_id = ?
-               GROUP BY d.status""",
-            (chat_id,),
-        ).fetchall()
-        return {r["status"]: r["c"] for r in rows}
+        conn.execute(
+            """INSERT INTO category_aspects (category_id, aspects_json, fetched_at) VALUES (?, ?, ?)
+               ON CONFLICT(category_id) DO UPDATE SET aspects_json=excluded.aspects_json,
+                 fetched_at=excluded.fetched_at""",
+            (str(category_id), json.dumps(aspects, ensure_ascii=False), int(time.time())),
+        )
 
 
 # ============================================================
@@ -974,6 +1152,7 @@ def get_deal_stats(chat_id):
 
 OAUTH_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+ITEM_URL = "https://api.ebay.com/buy/browse/v1/item/"
 NETWORK_MAX_ATTEMPTS = 4
 NETWORK_BACKOFF_SECONDS = 1.0
 NETWORK_MAX_BACKOFF_SECONDS = 30.0
@@ -1010,6 +1189,13 @@ def _request_with_retries(method, url, **kwargs):
     for attempt in range(1, NETWORK_MAX_ATTEMPTS + 1):
         try:
             response = requests.request(method, url, **kwargs)
+            if url == SEARCH_URL:
+                record_api_call("browse")
+            elif url.startswith(TAXONOMY_BASE):
+                record_api_call("taxonomy")   # окрема квота Taxonomy API
+            elif url.startswith(ITEM_URL):
+                record_api_call("browse")   # getItem — теж Browse API, та сама квота
+                record_api_call("item")
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             if attempt == NETWORK_MAX_ATTEMPTS:
                 log.error(
@@ -1097,6 +1283,174 @@ def _get_access_token():
         # ніж насправді дозволяє eBay (на час мережевої затримки запиту).
         _token_cache["expires_at"] = time.time() + data["expires_in"]
         return _token_cache["token"]
+
+
+ANALYTICS_RATE_LIMIT_URL = "https://api.ebay.com/developer/analytics/v1_beta/rate_limit/"
+_rate_limit_cache = {"data": None, "fetched_at": 0}
+
+
+def fetch_browse_rate_limit():
+    """
+    Офіційні дані eBay про використання Browse API (getRateLimits):
+    ліміт, зроблено, залишилось, час скидання. Враховує ВСІ запити з цих
+    ключів, не лише з цього сервера. Результат кешується для меню.
+    """
+    token = _get_access_token()
+    resp = _request_with_retries(
+        "GET", ANALYTICS_RATE_LIMIT_URL,
+        headers={"Authorization": "Bearer " + token},
+        params={"api_context": "buy", "api_name": "browse"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    daily = None
+    for api in resp.json().get("rateLimits") or []:
+        for resource in api.get("resources") or []:
+            for rate in resource.get("rates") or []:
+                window = int(rate.get("timeWindow") or 0)
+                # Цікавить добовий ліміт (86400 с); коротші вікна — лише обмеження частоти
+                if daily is None or abs(window - 86400) < abs(int(daily.get("timeWindow") or 0) - 86400):
+                    daily = rate
+    if daily is None:
+        return None
+    limit = int(daily.get("limit") or 0)
+    remaining = int(daily.get("remaining") or 0)
+    data = {
+        "limit": limit,
+        "remaining": remaining,
+        "count": int(daily.get("count") if daily.get("count") is not None else max(limit - remaining, 0)),
+        "reset": _parse_ebay_ts(daily.get("reset")),
+    }
+    _rate_limit_cache.update(data=data, fetched_at=time.time())
+    return data
+
+
+def fetch_item_aspects(item_id):
+    """Характеристики лота (localizedAspects) через Browse getItem →
+    {назва в нижньому регістрі: значення}. Порожній dict, якщо лот уже зник."""
+    token = _get_access_token()
+    resp = _request_with_retries(
+        "GET", ITEM_URL + quote(item_id, safe=""),
+        headers={
+            "Authorization": "Bearer " + token,
+            "X-EBAY-C-MARKETPLACE-ID": EBAY_MARKETPLACE_ID,
+            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country={DELIVERY_COUNTRY},zip={EBAY_BUYER_POSTAL_CODE}",
+        },
+        timeout=15,
+    )
+    if resp.status_code == 404:
+        return {}
+    resp.raise_for_status()
+    return {
+        (a.get("name") or "").strip().lower(): a.get("value") or ""
+        for a in resp.json().get("localizedAspects") or []
+    }
+
+
+_category_tree = {"id": None}
+
+
+def get_category_tree_id():
+    """ID дерева категорій маркетплейсу (EBAY_DE) — один раз за запуск."""
+    if _category_tree["id"]:
+        return _category_tree["id"]
+    token = _get_access_token()
+    resp = _request_with_retries(
+        "GET", f"{TAXONOMY_BASE}/get_default_category_tree_id",
+        headers={"Authorization": "Bearer " + token},
+        params={"marketplace_id": EBAY_MARKETPLACE_ID},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    _category_tree["id"] = resp.json()["categoryTreeId"]
+    return _category_tree["id"]
+
+
+def fetch_category_aspects(category_id):
+    """
+    Характеристики категорії (getItemAspectsForCategory): список
+    {name, required, usage}. required=True — продавець не може виставити
+    лот без цієї характеристики. Кешується на CATEGORY_ASPECTS_CACHE_DAYS днів.
+    """
+    cached = get_cached_category_aspects(category_id)
+    if cached is not None:
+        return cached
+    token = _get_access_token()
+    resp = _request_with_retries(
+        "GET", f"{TAXONOMY_BASE}/category_tree/{get_category_tree_id()}/get_item_aspects_for_category",
+        headers={"Authorization": "Bearer " + token},
+        params={"category_id": str(category_id)},
+        timeout=20,
+    )
+    resp.raise_for_status()
+    aspects = []
+    for a in resp.json().get("aspects") or []:
+        constraint = a.get("aspectConstraint") or {}
+        name = a.get("localizedAspectName")
+        if name:
+            aspects.append({
+                "name": name,
+                "required": bool(constraint.get("aspectRequired")),
+                "usage": constraint.get("aspectUsage") or "",
+            })
+    save_category_aspects(category_id, aspects)
+    return aspects
+
+
+def find_leaf_category(query, category_id):
+    """
+    getItemAspectsForCategory працює лише з КІНЦЕВИМИ категоріями. Якщо обрана
+    категорія батьківська (напр. "Computer, Tablets & Netzwerk"), шукаємо в ній
+    товар і беремо кінцеву підкатегорію (leafCategoryIds), де найбільше
+    оголошень, що проходять перевірку назви, — тобто самого товару, а не аксесуарів.
+    """
+    data = _browse_search(query, condition_ids=DEFAULT_CONDITION_IDS, limit=50, category_id=category_id)
+    counts = {}
+    for it in data.get("itemSummaries") or []:
+        if not _title_matches_search(it.get("title") or "", query, ""):
+            continue
+        for leaf in it.get("leafCategoryIds") or []:
+            counts[str(leaf)] = counts.get(str(leaf), 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
+def aspect_options_for_category(category_id, query=None):
+    """Характеристики, які варто пропонувати як обов'язкові: без загальних
+    (марка, колір…) і без "сумісних" (ті означають аксесуар). Обов'язкові
+    категорії — першими, далі рекомендовані eBay."""
+    try:
+        aspects = fetch_category_aspects(category_id)
+    except requests.exceptions.HTTPError as e:
+        not_leaf = e.response is not None and e.response.status_code == 400
+        if not (not_leaf and query):
+            raise
+        leaf = find_leaf_category(query, category_id)
+        if not leaf:
+            raise
+        log.info("Категорія %s не кінцева — беру характеристики з підкатегорії %s", category_id, leaf)
+        aspects = fetch_category_aspects(leaf)
+        save_category_aspects(category_id, aspects)  # наступного разу — одразу з кешу
+    candidates = [
+        a for a in aspects
+        if a["name"].lower() not in GENERIC_ASPECTS and a["name"].lower() not in COMPAT_ASPECTS
+    ]
+    candidates.sort(key=lambda a: (not a["required"], a["usage"] != "RECOMMENDED"))
+    return candidates[:MAX_ASPECT_OPTIONS]
+
+
+def api_usage_line():
+    """Рядок для головного меню власника."""
+    data = _rate_limit_cache["data"]
+    if data:
+        line = (f"📡 Запити до eBay сьогодні: <b>{data['count']}</b> / {data['limit']} "
+                f"(залишилось {data['remaining']})")
+        if data["reset"]:
+            reset_local = datetime.fromtimestamp(data["reset"], LOCAL_TZ).strftime("%H:%M")
+            line += f"\n🔄 Ліміт скинеться о {reset_local}"
+        updated = datetime.fromtimestamp(_rate_limit_cache["fetched_at"], LOCAL_TZ).strftime("%H:%M")
+        return line + f"\n<i>дані eBay, оновлено о {updated}</i>"
+    return (f"📡 Запити до eBay сьогодні: <b>{get_api_calls_today()}</b>\n"
+            "<i>підрахунок бота; офіційні дані eBay ще не отримані</i>")
 
 
 def _browse_search(query, condition_ids="", exclude_terms="", limit=50,
@@ -1617,15 +1971,17 @@ async def access_decision_callback(update: Update, context: ContextTypes.DEFAULT
 (
     ASK_QUERY,
     ASK_CATEGORY,
+    ASK_ASPECT,
     ASK_MIN_PRICE_CHOICE,
     ASK_CUSTOM_MIN_PRICE,
     ASK_THRESHOLD_CHOICE,
     ASK_CUSTOM_THRESHOLD,
-) = range(6)
+) = range(7)
 
 NEW_WATCH_KEYS = (
     "new_watch_query", "suggested_pct", "new_watch_category_id", "new_watch_category_name",
     "new_watch_category_options", "new_watch_min_price", "suggested_min_price",
+    "new_watch_aspect_options", "new_watch_required_aspect", "new_watch_require_spec",
 )
 
 
@@ -1639,15 +1995,48 @@ def _ebay_configured():
 
 
 def _category_keyboard(options, prefix, extra_rows=None):
-    """Кнопки вибору категорії: callback_data = f'{prefix}{index}' або f'{prefix}all'."""
+    """Кнопки вибору категорії: callback_data = f'{prefix}{index}' або f'{prefix}all'.
+    Категорії аксесуарів/запчастин позначені ⚠️ і показані останніми
+    (індекс лишається індексом у списку options)."""
     rows = []
-    for idx, opt in enumerate(options):
-        label = opt["name"] if len(opt["name"]) <= 40 else opt["name"][:37] + "…"
-        rows.append([InlineKeyboardButton(f"🗂️ {label} ({opt['count']})", callback_data=f"{prefix}{idx}")])
+    order = sorted(range(len(options)), key=lambda i: is_accessory_category(options[i]["name"]))
+    for idx in order:
+        opt = options[idx]
+        label = opt["name"] if len(opt["name"]) <= 38 else opt["name"][:35] + "…"
+        icon = "⚠️" if is_accessory_category(opt["name"]) else "🗂️"
+        rows.append([InlineKeyboardButton(f"{icon} {label} ({opt['count']})", callback_data=f"{prefix}{idx}")])
     rows.append([InlineKeyboardButton("🌐 Усі категорії", callback_data=f"{prefix}all")])
     for row in extra_rows or []:
         rows.append(row)
     return InlineKeyboardMarkup(rows)
+
+
+def _aspect_keyboard(watch_id, options, selected, extra_rows=None):
+    """Перемикачі характеристик ☑️/⬜ + збереження, авто, без вимоги."""
+    rows = []
+    for idx, opt in enumerate(options):
+        mark = "☑️" if opt["name"] in selected else "⬜"
+        badge = " ❗" if opt.get("required") else ""
+        rows.append([InlineKeyboardButton(f"{mark} {opt['name'][:36]}{badge}", callback_data=f"tglasp:{watch_id}:{idx}")])
+    rows.append([InlineKeyboardButton(f"💾 Зберегти вибір ({len(selected)})", callback_data=f"saveasp:{watch_id}")])
+    rows.append([
+        InlineKeyboardButton("🤖 Авто", callback_data=f"setasp:{watch_id}:auto"),
+        InlineKeyboardButton("🚫 Без вимоги", callback_data=f"setasp:{watch_id}:none"),
+    ])
+    for row in extra_rows or []:
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
+
+ASPECT_CHOICE_TEXT = (
+    "Познач одну або кілька характеристик і натисни «💾 Зберегти». Лот враховуватиметься, "
+    "лише якщо в нього заповнені ВСІ позначені характеристики — інакше вважається аксесуаром.\n"
+    "❗ — обов'язкова в цій категорії (продавець не може її пропустити).\n"
+    "🤖 Авто — пам'ять для телефонів, ноутбуків і консолей; 🚫 — без вимоги.\n\n"
+    "⚠️ Якщо характеристик зазвичай немає в назві, бот перевірятиме характеристики кожного "
+    "оголошення — це додаткові запити до eBay (з кешем і лімітом). "
+    "Лоти з «Kompatible Marke/Modell» відкидаються завжди."
+)
 
 
 @require_access
@@ -1709,7 +2098,8 @@ async def addwatch_got_query(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"🗂️ <b>«{html.escape(query)}»: обери категорію</b>\n\n"
         "eBay знаходить цей запит у кількох категоріях. Обери ту, де сам товар "
         "(напр. консолі, а не ігри чи аксесуари) — бот шукатиме лише там.\n"
-        "У дужках — кількість оголошень.",
+        "У дужках — кількість оголошень. ⚠️ — категорії аксесуарів і запчастин: "
+        "зазвичай їх обирати не треба, навіть якщо оголошень там найбільше.",
         reply_markup=_category_keyboard(
             options, "cat:",
             extra_rows=[[InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")]],
@@ -1910,6 +2300,8 @@ async def _finalize_watch(update, context, pct):
     category_id = context.user_data.get("new_watch_category_id") or ""
     category_name = context.user_data.get("new_watch_category_name") or ""
     min_price = context.user_data.get("new_watch_min_price") or 0
+    required_aspect = context.user_data.get("new_watch_required_aspect")
+    require_spec = context.user_data.get("new_watch_require_spec")
     _clear_new_watch(context)
     chat_id = update.effective_chat.id
 
@@ -1923,6 +2315,8 @@ async def _finalize_watch(update, context, pct):
         category_id=category_id,
         category_name=category_name,
         min_price=min_price,
+        require_spec=require_spec,
+        required_aspect=required_aspect,
     )
 
     extras = []
@@ -1930,12 +2324,14 @@ async def _finalize_watch(update, context, pct):
         extras.append(f"🗂️ Категорія: {html.escape(category_name)}")
     if min_price:
         extras.append(f"💶 Мінімальна ціна: {min_price:.0f}€")
+    if required_aspect:
+        extras.append(f"🧾 Обов'язкова характеристика: {html.escape(required_aspect)}")
     extras_txt = ("\n" + "\n".join(extras)) if extras else ""
 
     user_id = update.effective_user.id
     text = (
         f"✅ Додано відстеження #{wid}: «{html.escape(query)}», бажаний прибуток {pct}%."
-        f"{extras_txt}\n\n{MAIN_MENU_TEXT}"
+        f"{extras_txt}\n\n{main_menu_text(update.effective_user.id)}"
     )
     await show_panel(update, context, text, reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
     return ConversationHandler.END
@@ -1946,7 +2342,7 @@ async def addwatch_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await show_panel(
         update, context,
-        f"Скасовано.\n\n{MAIN_MENU_TEXT}",
+        f"Скасовано.\n\n{main_menu_text(update.effective_user.id)}",
         reply_markup=build_main_menu(user_id),
         parse_mode=ParseMode.HTML,
     )
@@ -1978,7 +2374,7 @@ async def addwatch_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_
         user_id = update.effective_user.id
         await show_panel(
             update, context,
-            f"❌ Додавання товару скасовано (нічого не збережено).\n\n{MAIN_MENU_TEXT}",
+            f"❌ Додавання товару скасовано (нічого не збережено).\n\n{main_menu_text(update.effective_user.id)}",
             reply_markup=build_main_menu(user_id),
             parse_mode=ParseMode.HTML,
         )
@@ -2268,7 +2664,7 @@ async def _finalize_category(update, context, reason):
         f"🏷️ Ключові слова: {html.escape(keywords)}\n"
         f"🎯 Поріг: {pct}%\n"
         f"📝 Причина: {html.escape(reason)}\n\n"
-        f"{MAIN_MENU_TEXT}"
+        f"{main_menu_text(update.effective_user.id)}"
     )
     await show_panel(update, context, text, reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
     return ConversationHandler.END
@@ -2280,7 +2676,7 @@ async def addcategory_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     await show_panel(
         update, context,
-        f"Скасовано.\n\n{MAIN_MENU_TEXT}",
+        f"Скасовано.\n\n{main_menu_text(update.effective_user.id)}",
         reply_markup=build_main_menu(user_id),
         parse_mode=ParseMode.HTML,
     )
@@ -2313,7 +2709,7 @@ async def addcategory_menu_interrupt(update: Update, context: ContextTypes.DEFAU
         user_id = update.effective_user.id
         await show_panel(
             update, context,
-            f"❌ Додавання категорії скасовано (нічого не збережено).\n\n{MAIN_MENU_TEXT}",
+            f"❌ Додавання категорії скасовано (нічого не збережено).\n\n{main_menu_text(update.effective_user.id)}",
             reply_markup=build_main_menu(user_id),
             parse_mode=ParseMode.HTML,
         )
@@ -2355,6 +2751,16 @@ MENU_LABELS = {
 MAIN_MENU_TEXT = "📋 <b>Головне меню</b> — обери дію:"
 
 
+def main_menu_text(user_id=None):
+    """Текст головного меню; власник додатково бачить використання eBay API."""
+    if user_id is not None and is_owner(user_id):
+        try:
+            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line()}"
+        except Exception as e:
+            log.debug("Не вдалося сформувати рядок використання API: %s", e)
+    return MAIN_MENU_TEXT
+
+
 def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
     """Inline-клавіатура, прикріплена до повідомлення в чаті. Рядок
     власника показується лише тоді, коли є що показувати."""
@@ -2362,9 +2768,8 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         return InlineKeyboardButton(MENU_LABELS[action], callback_data=f"menu:{action}")
 
     rows = [
-        [btn("addwatch"), btn("addcategory")],
-        [btn("list"), btn("stats")],
-        [btn("categories")],
+        [btn("addwatch")],
+        [btn("list")],
     ]
     if is_owner(user_id):
         owner_row = []
@@ -2394,6 +2799,7 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
     видаляються, щоб не висіли в історії чату.
     """
     chat_id = update.effective_chat.id
+    _remember_panel(context, text, reply_markup, parse_mode)
     if update.callback_query:
         context.user_data["panel_message_id"] = update.callback_query.message.message_id
     elif update.message:
@@ -2419,9 +2825,51 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
     context.user_data["panel_message_id"] = msg.message_id
 
 
+def _remember_panel(context, text, reply_markup, parse_mode):
+    """Запам'ятовує, що зараз показано в панелі — щоб перенести той самий
+    екран униз чату, коли над ним з'являться нові сповіщення."""
+    context.user_data["panel_state"] = {"text": text, "markup": reply_markup, "parse_mode": parse_mode}
+
+
+async def repost_panel(app, chat_id):
+    """
+    Переносить панель у самий низ чату: надсилає той самий екран новим
+    повідомленням і видаляє старе. Викликається після сповіщень бота, щоб
+    меню завжди лишалось останнім повідомленням. Нічого не робить, якщо
+    користувач ще не відкривав панель після запуску бота.
+    """
+    user_data = app.user_data.get(chat_id)  # у приватному чаті chat_id == user_id
+    if not user_data:
+        return
+    state = user_data.get("panel_state")
+    old_id = user_data.get("panel_message_id")
+    if not state or not old_id:
+        return
+    try:
+        msg = await app.bot.send_message(
+            chat_id=chat_id, text=state["text"],
+            reply_markup=state["markup"], parse_mode=state["parse_mode"],
+        )
+    except Exception as e:
+        log.debug("Не вдалося перенести панель у чаті %s: %s", chat_id, e)
+        return
+    user_data["panel_message_id"] = msg.message_id
+    try:
+        await app.bot.delete_message(chat_id=chat_id, message_id=old_id)
+    except Exception as e:
+        log.debug("Не вдалося видалити стару панель у чаті %s: %s", chat_id, e)
+
+
+async def notify(app, chat_id, text, reply_markup=None, parse_mode=None):
+    """Сповіщення від бота (не у відповідь на дію користувача). Чат
+    позначається, щоб після циклу перевірки перенести панель униз."""
+    await app.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+    app.bot_data.setdefault("chats_to_repost_panel", set()).add(chat_id)
+
+
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await show_panel(update, context, MAIN_MENU_TEXT, reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
+    await show_panel(update, context, main_menu_text(user_id), reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
 
 
 async def menu_home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2441,7 +2889,7 @@ async def refresh_owner_menu(bot):
         try:
             await bot.edit_message_text(
                 chat_id=config.OWNER_TELEGRAM_ID, message_id=msg_id,
-                text=MAIN_MENU_TEXT, reply_markup=kb, parse_mode=ParseMode.HTML,
+                text=main_menu_text(config.OWNER_TELEGRAM_ID), reply_markup=kb, parse_mode=ParseMode.HTML,
             )
             return
         except Exception as e:
@@ -2450,7 +2898,7 @@ async def refresh_owner_menu(bot):
     try:
         msg = await bot.send_message(
             chat_id=config.OWNER_TELEGRAM_ID,
-            text=MAIN_MENU_TEXT,
+            text=main_menu_text(config.OWNER_TELEGRAM_ID),
             reply_markup=kb,
             parse_mode=ParseMode.HTML,
         )
@@ -2491,12 +2939,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/setthreshold <id> <%> — бажаний прибуток (% від ціни продажу)\n"
         "/setminprice <id> <€> — мінімальна ціна (0 — без обмеження)\n"
         "/setexclude <id> слова — виключені слова з пошуку\n"
+        "/requirespec <id> <on|off|auto> — лише лоти з відомою пам'яттю\n"
         "/setconditions <id> <new|used|both> — які стани товару шукати\n"
         "\n"
-        "🏷️ Категорії-підказки\n"
-        "/categories — показати всі\n"
-        "/addcategory — додати нову (покроково)\n"
-        "/removecategory <id> — видалити\n\n"
+
         "📊 Статистика\n"
         "/stats — куплено/пропущено"
     )
@@ -2529,8 +2975,11 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     watches = list_watches(chat_id=chat_id)
     if not watches:
         await show_panel(
-            update, context, "Немає активних відстежень. Додай перше через «➕ Додати товар».",
-            reply_markup=back_to_menu_keyboard(),
+            update, context, "Немає активних відстежень. Додай перше:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
+                [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
+            ]),
         )
         return
     lines = ["📦 <b>Активні відстеження</b>\n", "Обери товар, щоб переглянути деталі:"]
@@ -2548,6 +2997,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     rows.extend(
         [
+            [InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
             [InlineKeyboardButton("🗑️ Видалити товар", callback_data="delwatch_prompt")],
             [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
         ]
@@ -2572,6 +3022,11 @@ def _watch_details_text(watch):
         f"🎯 Бажаний прибуток: <b>{pct:g}%</b> від ціни продажу (мін. {MIN_PROFIT_EUR}€)",
         f"🗂️ Категорія: {category_txt}",
         f"💶 Мінімальна ціна: {min_price_txt}",
+        (f"🧾 Обов'язкові характеристики: {html.escape(', '.join(get_required_aspects(watch)))}"
+         if get_required_aspects(watch) else
+         "💾 Лише лоти з відомою пам'яттю: "
+         + ("так" if watch_requires_spec(watch) else "ні")
+         + (" (авто)" if watch.get("require_spec") is None else "")),
     ]
     if not stats:
         lines.append("\n💰 <b>Ринок:</b>\nЩе не проаналізований (потрібно ≥"
@@ -2612,6 +3067,7 @@ async def _show_watch_details(update, context, watch):
         [InlineKeyboardButton("🧩 Усі конфігурації", callback_data=f"configs:{watch_id}")],
         [InlineKeyboardButton("🔄 Перерахувати медіану", callback_data=f"recalc_median:{watch_id}")],
         [InlineKeyboardButton("🗂️ Змінити категорію", callback_data=f"chcat:{watch_id}")],
+        [InlineKeyboardButton("🧾 Обов'язкові характеристики", callback_data=f"reqasp:{watch_id}")],
         [InlineKeyboardButton("◀️ До активних відстежень", callback_data="menu:list")],
     ]
     await show_panel(
@@ -2681,13 +3137,186 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
     lines.append(
         f"\n<i>⚠️ — менше {MIN_SAMPLE_SIZE} оголошень: окремої оцінки «купити/продати» немає, "
-        "лоти цієї конфігурації порівнюються із групою «усі конфігурації» свого стану.</i>"
+        "лоти цієї конфігурації порівнюються із групою «усі конфігурації» свого стану.</i>\n"
+        "Натисни групу нижче, щоб побачити її найдешевші оголошення."
     )
+
+    # Кнопки перегляду оголошень: спершу "усі" для кожного стану, потім конфігурації
+    choices = []
+    conds = sorted({cond for cond, _ in groups})
+    for cond in conds:
+        count = sum(len(p) for (c, _), p in groups.items() if c == cond)
+        choices.append(((cond, "*"), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} — усі ({count})"))
+    for (cond, spec), prices in sorted(groups.items(), key=lambda kv: (kv[0][0], statistics.median(kv[1]))):
+        spec_txt = "без конфігурації" if spec == "unspecified" else spec
+        choices.append(((cond, spec), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} · {spec_txt} ({len(prices)})"))
+    choices = choices[:20]
+    context.user_data[f"cfg_groups_{watch_id}"] = [key for key, _ in choices]
+    rows = [[InlineKeyboardButton(label[:60], callback_data=f"cfgl:{watch_id}:{i}")]
+            for i, (_, label) in enumerate(choices)]
     await show_panel(
         update, context, "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(back_rows),
+        reply_markup=InlineKeyboardMarkup(rows + back_rows),
         parse_mode=ParseMode.HTML,
     )
+
+
+@require_access
+async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """10 найдешевших поточних оголошень обраної групи (з останнього
+    ринкового сканування — без додаткових запитів до eBay)."""
+    query_cb = update.callback_query
+    _, watch_id_str, idx_str = query_cb.data.split(":")
+    watch_id = int(watch_id_str)
+    watch = get_watch(watch_id, update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Це відстеження вже не існує.", show_alert=True)
+        return
+    groups = context.user_data.get(f"cfg_groups_{watch_id}") or []
+    try:
+        cond, spec = groups[int(idx_str)]
+    except (ValueError, IndexError):
+        await query_cb.answer("Список застарів — відкрий «Усі конфігурації» знову.", show_alert=True)
+        return
+
+    rows_db = [
+        r for r in get_current_listings(watch_id)
+        if r["cond_group"] == cond and (spec == "*" or r["spec_group"] == spec) and r.get("url")
+    ]
+    rows_db.sort(key=lambda r: r["price"])
+    top = rows_db[:10]
+
+    spec_txt = "усі конфігурації" if spec == "*" else ("без конфігурації" if spec == "unspecified" else spec)
+    header = (f"🔎 <b>#{watch_id} {html.escape(watch['label'])}</b>\n"
+              f"{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())} · {html.escape(spec_txt)} — "
+              f"найдешевші {len(top)} з {len(rows_db)}")
+    nav = [
+        [InlineKeyboardButton("◀️ До конфігурацій", callback_data=f"configs:{watch_id}")],
+        [InlineKeyboardButton("📌 До товару", callback_data=f"watch_details:{watch_id}")],
+    ]
+    if not top:
+        await show_panel(
+            update, context,
+            header + "\n\nПосилань на оголошення ще немає — вони з'являться після наступного "
+            "ринкового сканування (до години).",
+            reply_markup=InlineKeyboardMarkup(nav), parse_mode=ParseMode.HTML,
+        )
+        return
+
+    lines = [header]
+    buttons = []
+    for i, r in enumerate(top, 1):
+        lines.append(f"\n<b>{i}.</b> {html.escape((r['title'] or 'без назви')[:120])}\n💶 {r['price']:.0f}€")
+        buttons.append([InlineKeyboardButton(f"🔗 Відкрити #{i} · {r['price']:.0f}€", url=r["url"])])
+    await show_panel(
+        update, context, "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(buttons + nav), parse_mode=ParseMode.HTML,
+    )
+
+
+async def _render_aspect_picker(update, context, watch):
+    watch_id = watch["id"]
+    options = context.user_data.get(f"asp_options_{watch_id}") or []
+    selected = context.user_data.get(f"asp_selected_{watch_id}") or set()
+    current = ", ".join(get_required_aspects(watch)) or (
+        "авто" if watch.get("require_spec") is None else "без вимоги")
+    back_row = [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]
+    await show_panel(
+        update, context,
+        f"🧾 <b>#{watch_id} {html.escape(watch['label'])}: обов'язкові характеристики</b>\n"
+        f"Зараз: {html.escape(current)}\n\n{ASPECT_CHOICE_TEXT}",
+        reply_markup=_aspect_keyboard(watch_id, options, selected, extra_rows=[back_row]),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@require_access
+async def required_aspect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка «Обов'язкові характеристики» на екрані товару."""
+    query_cb = update.callback_query
+    watch_id = int(query_cb.data.split(":")[1])
+    watch = get_watch(watch_id, update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Це відстеження вже не існує.", show_alert=True)
+        return
+    back_row = [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]
+    if not watch.get("category_id"):
+        await show_panel(
+            update, context,
+            "Характеристики залежать від категорії eBay. Спершу обери категорію кнопкою "
+            "«🗂️ Змінити категорію».",
+            reply_markup=InlineKeyboardMarkup([back_row]),
+        )
+        return
+
+    await show_panel(update, context, "🔎 Дізнаюсь характеристики категорії в eBay…")
+    try:
+        options = await asyncio.to_thread(aspect_options_for_category, watch["category_id"], watch["query"])
+    except Exception as e:
+        log.warning("Не вдалося отримати характеристики категорії для watch #%s: %s", watch_id, e)
+        options = []
+    selected = set(get_required_aspects(watch))
+    # Уже обрані характеристики лишаються у списку, навіть якщо їх немає серед пропозицій
+    known = {o["name"] for o in options}
+    options += [{"name": name, "required": False, "usage": ""} for name in selected if name not in known]
+    context.user_data[f"asp_options_{watch_id}"] = options
+    context.user_data[f"asp_selected_{watch_id}"] = selected
+    await _render_aspect_picker(update, context, watch)
+
+
+@require_access
+async def toggle_aspect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query_cb = update.callback_query
+    _, watch_id_str, idx_str = query_cb.data.split(":")
+    watch_id = int(watch_id_str)
+    watch = get_watch(watch_id, update.effective_chat.id)
+    options = context.user_data.get(f"asp_options_{watch_id}")
+    if watch is None or options is None:
+        await query_cb.answer("Список застарів — відкрий його знову.", show_alert=True)
+        return
+    try:
+        name = options[int(idx_str)]["name"]
+    except (ValueError, IndexError):
+        return
+    selected = context.user_data.setdefault(f"asp_selected_{watch_id}", set())
+    selected.symmetric_difference_update({name})
+    await _render_aspect_picker(update, context, watch)
+
+
+@require_access
+async def save_aspects_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query_cb = update.callback_query
+    watch_id = int(query_cb.data.split(":")[1])
+    chat_id = update.effective_chat.id
+    if get_watch(watch_id, chat_id) is None:
+        await query_cb.answer("Це відстеження вже не існує.", show_alert=True)
+        return
+    options = context.user_data.get(f"asp_options_{watch_id}") or []
+    selected = context.user_data.get(f"asp_selected_{watch_id}") or set()
+    ordered = [o["name"] for o in options if o["name"] in selected]  # порядок як у списку
+    # Нічого не позначено → автоматичний режим
+    update_watch_required_aspect(watch_id, chat_id, encode_required_aspects(ordered), 0 if ordered else None)
+    context.user_data.pop(f"asp_options_{watch_id}", None)
+    context.user_data.pop(f"asp_selected_{watch_id}", None)
+    reset_watch_market(watch_id)  # інший фільтр лотів — ринок аналізуємо заново
+    await _show_watch_details(update, context, get_watch(watch_id, chat_id))
+
+
+@require_access
+async def set_required_aspect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопки «🤖 Авто» і «🚫 Без вимоги»."""
+    query_cb = update.callback_query
+    _, watch_id_str, choice = query_cb.data.split(":", 2)
+    watch_id = int(watch_id_str)
+    chat_id = update.effective_chat.id
+    if get_watch(watch_id, chat_id) is None or choice not in ("auto", "none"):
+        await query_cb.answer("Це відстеження вже не існує.", show_alert=True)
+        return
+    update_watch_required_aspect(watch_id, chat_id, None, None if choice == "auto" else 0)
+    context.user_data.pop(f"asp_options_{watch_id}", None)
+    context.user_data.pop(f"asp_selected_{watch_id}", None)
+    reset_watch_market(watch_id)
+    await _show_watch_details(update, context, get_watch(watch_id, chat_id))
 
 
 @require_access
@@ -2747,6 +3376,8 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
             return
         update_watch_category(watch_id, chat_id, opt["id"], opt["name"])
     context.user_data.pop(f"cat_options_{watch_id}", None)
+    # Характеристики різних категорій різні — повертаємо автоматичний режим
+    update_watch_required_aspect(watch_id, chat_id, None, None)
     # Інша категорія — інша вибірка, стара статистика вже не відповідає
     reset_watch_market(watch_id)
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
@@ -2765,9 +3396,12 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         # sort=price — eBay повертає лоти від найдешевших. Беремо із запасом
         # (частину відсіє перевірка назви) і показуємо 10 найдешевших.
-        items = await asyncio.to_thread(
-            search_active_items, limit=50, fresh=True, sort="price", **_watch_search_kwargs(watch),
-        )
+        def _cheapest():
+            found = search_active_items(limit=50, fresh=True, sort="price", **_watch_search_kwargs(watch))
+            _annotate_items(found, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=watch)
+            return _apply_item_filters(watch, found)
+
+        items = await asyncio.to_thread(_cheapest)
     except Exception as e:
         log.exception("Не вдалося завантажити оголошення для watch #%s: %s", watch_id, e)
         await query_cb.answer("Не вдалося завантажити оголошення. Спробуй ще раз.", show_alert=True)
@@ -2928,6 +3562,37 @@ async def cmd_setminprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reset_watch_market(wid)  # інша вибірка — ринок аналізуємо заново
     shown = f"{value:.0f}€" if value else "без обмеження"
     await update.message.reply_text(f"💶 Мінімальна ціна для #{wid}: {shown}. Медіану буде перераховано.")
+
+
+@require_access
+async def cmd_requirespec(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    values = {"on": 1, "off": 0, "auto": None}
+    if len(context.args) != 2 or context.args[1].lower() not in values:
+        await update.message.reply_text(
+            "Формат: /requirespec <id> <on|off|auto>\n"
+            "on — враховувати лише лоти з відомою пам'яттю (решта вважається аксесуарами)\n"
+            "off — враховувати всі лоти\n"
+            "auto — увімкнено для телефонів, ноутбуків і консолей"
+        )
+        return
+    try:
+        wid = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("id має бути числом, дивись /list")
+        return
+    watch = get_watch(wid, chat_id)
+    if not watch:
+        await update.message.reply_text("Такого відстеження немає, дивись /list")
+        return
+    mode = context.args[1].lower()
+    update_watch_require_spec(wid, chat_id, values[mode])
+    reset_watch_market(wid)
+    effective = watch_requires_spec(get_watch(wid, chat_id))
+    await update.message.reply_text(
+        f"💾 #{wid}: лише лоти з відомою пам'яттю — {'так' if effective else 'ні'}"
+        f"{' (авто)' if mode == 'auto' else ''}. Ринок буде проаналізовано заново."
+    )
 
 
 @require_access
@@ -3149,6 +3814,11 @@ async def check_all_watches(app: Application):
             await _notify_median_error(app, w, e)
         await asyncio.sleep(1)
 
+    # Сповіщення з'явились над панеллю — переносимо панель униз, по разу на чат
+    chats = app.bot_data.pop("chats_to_repost_panel", set())
+    for chat_id in chats:
+        await repost_panel(app, chat_id)
+
 
 CONDITION_LABELS = {"new": "нові", "used": "вживані", "unknown": "стан невідомий"}
 
@@ -3159,10 +3829,110 @@ def _group_label(cond, spec):
     return f"{cond_txt}, {spec_txt}"
 
 
-def _annotate_items(items):
+def _aspect_satisfied_by_title(required_aspect, title):
+    """Пам'ять можна взяти з назви ("256GB") — тоді характеристики лота не потрібні."""
+    name = (required_aspect or "").lower()
+    return (name in STORAGE_ASPECTS or name in RAM_ASPECTS) and bool(SPEC_SIZE_PATTERN.search(title or ""))
+
+
+def _annotate_items(items, max_lookups=0, watch=None):
+    """
+    Визначає конфігурацію кожного лота і, де потрібно, завантажує його
+    характеристики (it["aspects"]; None — не завантажені).
+
+    Характеристики потрібні, якщо: у назві немає пам'яті/процесора, або для
+    товару обрана обов'язкова характеристика, якої не видно з назви.
+    Джерело — кеш, інакше getItem (не більше max_lookups за виклик і
+    MAX_SPEC_LOOKUPS_PER_DAY за добу). Невстиглі лоти перевіряться наступного
+    разу. Мережеві запити — лише з потоку (asyncio.to_thread).
+    """
+    required = get_required_aspects(watch)
     for it in items:
         it["spec_group"] = extract_spec_key(it["title"])
+        it["aspects"] = None
+
+    def needs_aspects(it):
+        if it["spec_group"] == "unspecified":
+            return True
+        return any(not _aspect_satisfied_by_title(name, it["title"]) for name in required)
+
+    candidates = [it for it in items if it.get("item_id") and needs_aspects(it)]
+    if not candidates:
+        return items
+    cached = get_cached_specs([it["item_id"] for it in candidates])
+
+    lookups_left = 0
+    if ASPECT_LOOKUP_ENABLED and max_lookups > 0:
+        lookups_left = min(max_lookups, MAX_SPEC_LOOKUPS_PER_DAY - get_api_calls_today("item"))
+
+    for it in candidates:
+        title_spec = it["spec_group"]
+        entry = cached.get(it["item_id"])
+        if entry is not None:
+            spec, aspects = entry
+            if title_spec == "unspecified":
+                it["spec_group"] = spec
+            if aspects is not None:
+                it["aspects"] = aspects
+                continue
+            if not required:
+                continue  # старий запис кешу без характеристик — для конфігурації достатньо
+        if lookups_left <= 0:
+            continue
+        lookups_left -= 1
+        try:
+            aspects = fetch_item_aspects(it["item_id"])
+        except Exception as e:
+            log.debug("Не вдалося отримати характеристики лота %s: %s", it["item_id"], e)
+            continue
+        spec = title_spec if title_spec != "unspecified" else spec_key_from_aspects(it["title"], aspects)
+        save_cached_spec(it["item_id"], spec, aspects)
+        it["spec_group"] = spec
+        it["aspects"] = aspects
     return items
+
+
+def spec_required_by_default(query):
+    """Для телефонів, ноутбуків і консолей оголошення без відомої пам'яті
+    майже завжди — аксесуар, чохол чи запчастина."""
+    tokens = _search_tokens(query)
+    return bool(tokens & (PHONE_QUERY_TERMS | LAPTOP_QUERY_TERMS | CONSOLE_QUERY_TERMS))
+
+
+def watch_requires_spec(w):
+    value = w.get("require_spec")
+    if value is None:
+        return spec_required_by_default(w["query"])
+    return bool(value)
+
+
+def _apply_item_filters(w, items):
+    """
+    Жорсткі фільтри лотів:
+      1. У характеристиках є "Kompatible Marke/Modell" → аксесуар, відкидаємо
+         (для будь-якого товару, якщо характеристики лота завантажені).
+      2. Обрані обов'язкові характеристики → лот без будь-якої з них відкидаємо; лот,
+         характеристики якого ще не завантажені, відкладаємо до наступного циклу.
+      3. Інакше, якщо ввімкнено "лише з відомою пам'яттю" → без пам'яті відкидаємо.
+    """
+    required = get_required_aspects(w)
+    kept = []
+    for it in items:
+        aspects = it.get("aspects")
+        if aspects and any(name in COMPAT_ASPECTS for name in aspects):
+            continue
+        if required:
+            # Потрібні ВСІ обрані характеристики
+            missing = [name for name in required if not _aspect_satisfied_by_title(name, it["title"])]
+            if missing:
+                if aspects is None:
+                    continue  # ще не перевірений — наступного циклу
+                if any(not str(aspects.get(name.lower()) or "").strip() for name in missing):
+                    continue
+        elif watch_requires_spec(w) and it.get("spec_group") == "unspecified":
+            continue
+        kept.append(it)
+    return kept
 
 
 def _stat_for_item(stats, it):
@@ -3182,7 +3952,8 @@ def _fetch_market_items(w):
             if it["item_id"] and it["item_id"] not in seen_ids:
                 seen_ids.add(it["item_id"])
                 items.append(it)
-    return _annotate_items(items)
+    _annotate_items(items, max_lookups=MAX_SPEC_LOOKUPS_PER_MARKET_SCAN, watch=w)
+    return _apply_item_filters(w, items)
 
 
 def _compute_group_stats(watch_id, items):
@@ -3263,10 +4034,12 @@ async def check_one_watch(app: Application, w: dict):
             await _notify_median_ready(app, w, [stats[key] for key in newly])
     else:
         stats = {(r["cond_group"], r["spec_group"]): r for r in rows}
-        items = await asyncio.to_thread(
-            search_active_items, limit=DEAL_SCAN_LIMIT, fresh=True, **_watch_search_kwargs(w),
-        )
-        _annotate_items(items)
+        def _deal_scan():
+            found = search_active_items(limit=DEAL_SCAN_LIMIT, fresh=True, **_watch_search_kwargs(w))
+            _annotate_items(found, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=w)
+            return _apply_item_filters(w, found)
+
+        items = await asyncio.to_thread(_deal_scan)
 
     if not items or not stats:
         return
@@ -3358,7 +4131,7 @@ async def _send_single_deal(app, w, deal_id, it, stat):
         ],
         [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
     ]
-    await app.bot.send_message(chat_id=w["chat_id"], text=text, reply_markup=InlineKeyboardMarkup(buttons))
+    await notify(app, w["chat_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def _send_grouped_deals(app, w, new_deals):
@@ -3374,11 +4147,7 @@ async def _send_grouped_deals(app, w, new_deals):
             f"💰 {it['total_price']:.0f}€ → продаж ~{sale_price:.0f}€, прибуток ~{profit:.0f}€"
             f"{spec_note}{warning}{offer_mark}{drop_mark}\n🔗 {it['url']}"
         )
-    await app.bot.send_message(
-        chat_id=w["chat_id"],
-        text="\n\n".join(lines),
-        reply_markup=back_to_menu_keyboard(),
-    )
+    await notify(app, w["chat_id"], "\n\n".join(lines), reply_markup=back_to_menu_keyboard())
 
 
 async def _notify_median_ready(app, w, new_stats):
@@ -3392,7 +4161,7 @@ async def _notify_median_ready(app, w, new_stats):
             f"купувати до ~{buy_limit:.0f}€ ({s['sample_size']} оголошень)"
         )
     try:
-        await app.bot.send_message(chat_id=w["chat_id"], text="\n".join(lines))
+        await notify(app, w["chat_id"], "\n".join(lines))
     except Exception as e:
         log.warning("Не вдалося надіслати сповіщення про ринок для watch #%s: %s", w["id"], e)
 
@@ -3407,11 +4176,7 @@ async def _notify_median_problem(app, w, reason):
         InlineKeyboardButton("📊 Відкрити товар", callback_data=f"watch_details:{w['id']}")
     ]]
     try:
-        await app.bot.send_message(
-            chat_id=w["chat_id"],
-            text=text,
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
+        await notify(app, w["chat_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
     except Exception as e:
         log.warning("Не вдалося надіслати пояснення проблеми медіани для watch #%s: %s", w["id"], e)
 
@@ -3431,6 +4196,11 @@ async def scheduler_loop(app: Application):
         last_cleanup_at = 0
         while True:
             await check_all_watches(app)
+
+            try:
+                await asyncio.to_thread(fetch_browse_rate_limit)
+            except Exception as e:
+                log.debug("Не вдалося отримати ліміти eBay API: %s", e)
 
             # Раз на добу прибираємо застарілі записи seen_items
             now = time.time()
@@ -3458,14 +4228,11 @@ async def post_init(app: Application):
         ("start", "Головне меню та довідка"),
         ("menu", "Показати меню"),
         ("addwatch", "➕ Додати товар для відстеження"),
-        ("addcategory", "🏷️ Додати категорію-підказку"),
         ("list", "📦 Мої відстеження"),
         ("stats", "📊 Моя статистика"),
-        ("categories", "🗂️ Список категорій"),
         ("remove", "Вимкнути відстеження за id"),
         ("setthreshold", "Змінити бажаний прибуток"),
         ("setminprice", "Змінити мінімальну ціну"),
-        ("removecategory", "Видалити категорію за id"),
         ("cancel", "Скасувати поточну дію"),
     ])
 
@@ -3582,6 +4349,7 @@ def main():
     app.add_handler(CommandHandler("setthreshold", cmd_setthreshold))
     app.add_handler(CommandHandler("setminprice", cmd_setminprice))
     app.add_handler(CommandHandler("setexclude", cmd_setexclude))
+    app.add_handler(CommandHandler("requirespec", cmd_requirespec))
     app.add_handler(CommandHandler("setconditions", cmd_setconditions))
     app.add_handler(CommandHandler("categories", cmd_categories))
     app.add_handler(CommandHandler("removecategory", cmd_removecategory))
@@ -3608,6 +4376,11 @@ def main():
     app.add_handler(CallbackQueryHandler(view_listings_callback, pattern="^view_listings:"))
     app.add_handler(CallbackQueryHandler(change_category_callback, pattern="^chcat:"))
     app.add_handler(CallbackQueryHandler(all_configs_callback, pattern="^configs:"))
+    app.add_handler(CallbackQueryHandler(config_listings_callback, pattern="^cfgl:"))
+    app.add_handler(CallbackQueryHandler(required_aspect_callback, pattern="^reqasp:"))
+    app.add_handler(CallbackQueryHandler(set_required_aspect_callback, pattern="^setasp:"))
+    app.add_handler(CallbackQueryHandler(toggle_aspect_callback, pattern="^tglasp:"))
+    app.add_handler(CallbackQueryHandler(save_aspects_callback, pattern="^saveasp:"))
     app.add_handler(CallbackQueryHandler(set_category_callback, pattern="^setcat:"))
     # Підтвердження видалення
     app.add_handler(CallbackQueryHandler(delwatch_yes_callback, pattern="^delwatch_yes:"))
