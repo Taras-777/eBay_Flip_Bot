@@ -10,7 +10,9 @@ __pycache__/
 *.sqlite3
 *.sqlite3-journal
 *.db
-
+ bot_state.pickle
+*.sqlite3-wal
+*.sqlite3-shm
 # Секрети
 .env
 .env.*
