@@ -1,33 +1,37 @@
 ﻿"""
 Точка входу: створення бота, реєстрація обробників і запуск.
 """
-import asyncio
+
+import warnings
+
 import config
+from telegram.warnings import PTBUserWarning
+
+# Діалоги свідомо працюють з per_message=False (у них є і кнопки, і введення
+# тексту) — попередження PTB про це лише інформаційне, ховаємо його.
+warnings.filterwarnings("ignore", message=r".*per_message=False", category=PTBUserWarning)
+
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ConversationHandler, MessageHandler, PersistenceInput, PicklePersistence, filters
 
 import settings
 from settings import log
 from db import init_db
-from panel import menu_home_callback
+from panel import menu_home_callback, refresh_usage_callback
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats
 from handlers import (
     ASK_CATEGORY,
     ASK_CUSTOM_MIN_PRICE,
-    ASK_CUSTOM_THRESHOLD,
     ASK_DELETE_ID,
     ASK_MIN_PRICE_CHOICE,
     ASK_QUERY,
-    ASK_THRESHOLD_CHOICE,
     EDIT_VALUE,
     addwatch_cancel,
     addwatch_category_choice,
     addwatch_custom_min_price,
-    addwatch_custom_threshold,
     addwatch_got_query,
     addwatch_menu_interrupt,
     addwatch_min_price_choice,
     addwatch_start,
-    addwatch_threshold_choice,
     all_configs_callback,
     change_category_callback,
     cmd_list,
@@ -37,13 +41,13 @@ from handlers import (
     cmd_setconditions,
     cmd_setexclude,
     cmd_setminprice,
-    cmd_setthreshold,
     cmd_start,
     cmd_stats,
     config_listings_callback,
     deal_action_callback,
     delete_cancel,
     delete_menu_interrupt,
+    delwatch_ask_callback,
     delwatch_prompt_callback,
     delwatch_yes_callback,
     edit_cancel,
@@ -54,6 +58,9 @@ from handlers import (
     edit_value_text,
     got_delete_id,
     recalculate_median_callback,
+    reject_deal_callback,
+    reject_listing_callback,
+    unlearn_word_callback,
     required_aspect_callback,
     save_aspects_callback,
     set_category_callback,
@@ -112,14 +119,6 @@ def main():
                 menu_interrupt,
                 MessageHandler(filters.TEXT & ~filters.COMMAND, addwatch_custom_min_price),
             ],
-            ASK_THRESHOLD_CHOICE: [
-                CallbackQueryHandler(addwatch_threshold_choice, pattern="^use_"),
-                menu_interrupt,
-            ],
-            ASK_CUSTOM_THRESHOLD: [
-                menu_interrupt,
-                MessageHandler(filters.TEXT & ~filters.COMMAND, addwatch_custom_threshold),
-            ],
         },
         fallbacks=[
             CommandHandler("cancel", addwatch_cancel),
@@ -148,7 +147,7 @@ def main():
     edit_conv = ConversationHandler(
         name="edit_conv",
         persistent=True,
-        entry_points=[CallbackQueryHandler(edit_value_start, pattern="^(edpct|edmin):")],
+        entry_points=[CallbackQueryHandler(edit_value_start, pattern="^edmin:")],
         states={
             EDIT_VALUE: [
                 CallbackQueryHandler(edit_value_button, pattern="^edval:"),
@@ -169,7 +168,6 @@ def main():
     app.add_handler(edit_conv)
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("remove", cmd_remove))
-    app.add_handler(CommandHandler("setthreshold", cmd_setthreshold))
     app.add_handler(CommandHandler("setminprice", cmd_setminprice))
     app.add_handler(CommandHandler("setexclude", cmd_setexclude))
     app.add_handler(CommandHandler("requirespec", cmd_requirespec))
@@ -185,8 +183,13 @@ def main():
 
     app.add_handler(CallbackQueryHandler(deal_action_callback, pattern="^(buy|skip):"))
     app.add_handler(CallbackQueryHandler(access_decision_callback, pattern="^access:"))
+    # «🚫 Не той товар» і скасування вивчених слів
+    app.add_handler(CallbackQueryHandler(reject_deal_callback, pattern="^rejd:"))
+    app.add_handler(CallbackQueryHandler(reject_listing_callback, pattern="^rejl:"))
+    app.add_handler(CallbackQueryHandler(unlearn_word_callback, pattern="^unlw:"))
     # Кнопки головного меню (коли жоден діалог не активний)
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))
+    app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
     app.add_handler(CallbackQueryHandler(cmd_list, pattern="^menu:list$"))
     app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^menu:stats$"))
     app.add_handler(CallbackQueryHandler(watch_details_callback, pattern="^watch_details:"))
@@ -204,12 +207,12 @@ def main():
     app.add_handler(CallbackQueryHandler(save_aspects_callback, pattern="^saveasp:"))
     app.add_handler(CallbackQueryHandler(set_category_callback, pattern="^setcat:"))
     # Підтвердження видалення
+    app.add_handler(CallbackQueryHandler(delwatch_ask_callback, pattern="^delwatch_ask:"))
     app.add_handler(CallbackQueryHandler(delwatch_yes_callback, pattern="^delwatch_yes:"))
 
     app.add_error_handler(error_handler)
 
     log.info("Бот запущено")
-    asyncio.set_event_loop(asyncio.new_event_loop())
     app.run_polling()
 
 

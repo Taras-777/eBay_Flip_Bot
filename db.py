@@ -122,6 +122,25 @@ CREATE TABLE IF NOT EXISTS category_hints (
     created_at INTEGER NOT NULL
 );
 
+-- Лоти, які користувач позначив «🚫 Не той товар» — більше не враховуються
+CREATE TABLE IF NOT EXISTS rejected_items (
+    watch_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    title TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (watch_id, item_id)
+);
+
+-- Слова, які бот сам вивів із відхилених лотів: 'excluded' — додане до
+-- виключених, 'ignored' — користувач скасував, більше не пропонувати
+CREATE TABLE IF NOT EXISTS learned_words (
+    watch_id INTEGER NOT NULL,
+    word TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (watch_id, word)
+);
+
 CREATE TABLE IF NOT EXISTS deals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     watch_id INTEGER NOT NULL,
@@ -775,6 +794,12 @@ def set_deal_status(deal_id, status):
         conn.execute("UPDATE deals SET status = ? WHERE id = ?", (status, deal_id))
 
 
+def get_deal(deal_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM deals WHERE id = ?", (deal_id,)).fetchone()
+        return dict(row) if row else None
+
+
 def get_deal_owner_chat_id(deal_id):
     with get_conn() as conn:
         row = conn.execute(
@@ -795,3 +820,55 @@ def get_deal_stats(chat_id):
             (chat_id,),
         ).fetchall()
         return {r["status"]: r["c"] for r in rows}
+
+
+# ---------- «🚫 Не той товар» і вивчені слова ----------
+
+def reject_item(watch_id, item_id, title):
+    """Позначає лот як чужий для цього товару: більше не потрапляє ні в
+    ринкову статистику, ні в знахідки. Прибираємо його і з поточних
+    спостережень, щоб ціна не зарахувалась як «зниклий» (проданий) лот."""
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO rejected_items (watch_id, item_id, title, created_at) VALUES (?, ?, ?, ?)",
+            (watch_id, item_id, title or "", int(time.time())),
+        )
+        conn.execute("DELETE FROM listing_obs WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))
+
+
+def get_rejected_ids(watch_id):
+    with get_conn() as conn:
+        return {r["item_id"] for r in conn.execute(
+            "SELECT item_id FROM rejected_items WHERE watch_id = ?", (watch_id,)).fetchall()}
+
+
+def get_rejected_titles(watch_id):
+    with get_conn() as conn:
+        return [r["title"] for r in conn.execute(
+            "SELECT title FROM rejected_items WHERE watch_id = ? AND title != ''", (watch_id,)).fetchall()]
+
+
+def get_learned_words(watch_id):
+    """{слово: статус} для товару."""
+    with get_conn() as conn:
+        return {r["word"]: r["status"] for r in conn.execute(
+            "SELECT word, status FROM learned_words WHERE watch_id = ?", (watch_id,)).fetchall()}
+
+
+def set_learned_word(watch_id, word, status):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO learned_words (watch_id, word, status, created_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT(watch_id, word) DO UPDATE SET status = excluded.status""",
+            (watch_id, word, status, int(time.time())),
+        )
+
+
+def delete_listing_obs_by_ids(watch_id, item_ids):
+    if not item_ids:
+        return
+    with get_conn() as conn:
+        conn.executemany(
+            "DELETE FROM listing_obs WHERE watch_id = ? AND item_id = ?",
+            [(watch_id, i) for i in item_ids],
+        )

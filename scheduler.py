@@ -105,8 +105,8 @@ async def check_one_watch(app: Application, w: dict):
 
         sale_price = stat["sale_price"] or stat["median_price"]
         # Вигідно, якщо ціна купівлі (для Best Offer — з урахуванням торгу)
-        # не вища за максимальну, що ще дає бажаний прибуток при перепродажі
-        if it["effective_price"] > max_buy_price(sale_price, w["discount_threshold_pct"]):
+        # не вища за максимальну, що ще дає мінімальний прибуток при перепродажі
+        if it["effective_price"] > max_buy_price(sale_price):
             seen_updates.append((it["item_id"], it["effective_price"], None))
             continue
         discount_pct = (sale_price - it["total_price"]) / sale_price * 100
@@ -224,7 +224,6 @@ async def post_init(app: Application):
         ("list", "📦 Мої відстеження"),
         ("stats", "📊 Моя статистика"),
         ("remove", "Вимкнути відстеження за id"),
-        ("setthreshold", "Змінити бажаний прибуток"),
         ("setminprice", "Змінити мінімальну ціну"),
         ("cancel", "Скасувати поточну дію"),
     ])

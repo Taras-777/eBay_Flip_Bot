@@ -12,10 +12,8 @@ from settings import (
     DEFAULT_CONDITION_IDS,
     EBAY_SELLING_FEES_PCT,
     MARKET_SCAN_PAGES,
-    MAX_ALLOWED_THRESHOLD_PCT,
     MAX_SPEC_LOOKUPS_PER_DAY,
     MAX_SPEC_LOOKUPS_PER_MARKET_SCAN,
-    MIN_ALLOWED_THRESHOLD_PCT,
     MIN_MODEL_SAMPLE_SIZE,
     MIN_PRICE_SUGGESTION_PCT,
     MIN_PROFIT_EUR,
@@ -39,6 +37,7 @@ from db import (
     get_cached_specs,
     get_gone_prices,
     get_market_stats,
+    get_rejected_ids,
     get_required_aspects,
     save_cached_spec,
     update_listing_observations,
@@ -80,18 +79,14 @@ def percentile(values, pct):
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def target_profit(sale_price, target_pct):
-    """Бажаний прибуток: target_pct% від ціни продажу, але не менше MIN_PROFIT_EUR."""
-    return max(sale_price * target_pct / 100, MIN_PROFIT_EUR)
-
-
-def max_buy_price(sale_price, target_pct):
+def max_buy_price(sale_price):
     """
-    Найвища ціна купівлі (з доставкою), за якої перепродаж ще дає бажаний
-    прибуток: ціна продажу − комісія eBay − доставка покупцю − прибуток.
+    Найвища ціна купівлі (з доставкою), за якої перепродаж ще дає
+    щонайменше MIN_PROFIT_EUR чистого прибутку:
+    ціна продажу − комісія eBay − доставка покупцю − MIN_PROFIT_EUR.
     """
     net_sale = sale_price * (1 - EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
-    return net_sale - target_profit(sale_price, target_pct)
+    return net_sale - MIN_PROFIT_EUR
 
 
 def estimate_resale_profit(sale_price, purchase_price):
@@ -136,96 +131,6 @@ def suggest_min_price(query, category_ids=None, condition_ids=DEFAULT_CONDITION_
     median_price = statistics.median(prices)
     suggestion = max(5, round(median_price * MIN_PRICE_SUGGESTION_PCT / 100 / 5) * 5)
     return suggestion, median_price, len(prices)
-
-
-def analyze_market_for_threshold(query: str, category_ids=None, min_price=None):
-    """
-    Реальний аналіз ринку: робить запит до eBay Browse API за назвою
-    товару (в обраній категорії та від мінімальної ціни), бере поточні
-    активні оголошення і рахує коефіцієнт варіації цін (розкид
-    відносно медіани). Що більший розкид — то вищий поріг знижки треба
-    ставити, інакше цілком нормальна ціна для варіативного товару буде
-    помилково сприйматись як "вигідна".
-
-    Повертає dict {pct, reason, median, sample_size} на основі
-    РЕАЛЬНИХ поточних даних, або None, якщо eBay недоступний чи лотів
-    замало для надійного розрахунку.
-    """
-    try:
-        items = search_in_categories(
-            category_ids or [], query=query, limit=100, min_price=min_price,
-        )
-    except Exception as e:
-        log.warning("Не вдалося проаналізувати ринок для «%s»: %s", query, e)
-        return None
-
-    if not items:
-        return None
-
-    prices = [it["total_price"] for it in items]
-    clean = filter_outliers(prices)
-    if len(clean) < MIN_SAMPLE_SIZE:
-        return None
-
-    median_price = statistics.median(clean)
-    stdev = statistics.pstdev(clean)
-    cv = (stdev / median_price) if median_price else 0  # коефіцієнт варіації
-
-    if cv < 0.15:
-        pct, desc = 15, "дуже стабільний ринок, ціни майже однакові"
-    elif cv < 0.25:
-        pct, desc = 20, "стандартизований товар, невеликий розкид цін"
-    elif cv < 0.35:
-        pct, desc = 25, "помірний розкид цін"
-    elif cv < 0.50:
-        pct, desc = 32, "великий розкид цін"
-    else:
-        pct, desc = 40, "дуже великий розкид цін, товар неоднорідний"
-
-    pct = max(MIN_ALLOWED_THRESHOLD_PCT, min(MAX_ALLOWED_THRESHOLD_PCT, pct))
-    reason = (
-        f"на основі {len(clean)} поточних оголошень з eBay: медіана "
-        f"{median_price:.0f}€, розкид цін ~{cv * 100:.0f}% ({desc})"
-    )
-
-    spec_warning = _detect_spec_price_mismatch(items)
-    return {
-        "pct": pct, "reason": reason, "median": median_price,
-        "sample_size": len(clean), "spec_warning": spec_warning,
-    }
-
-
-def _detect_spec_price_mismatch(items):
-    """
-    Перевіряє, чи в межах одного запиту трапляються різні виявлені
-    конфігурації (обсяг пам'яті/накопичувача) з помітно різними
-    медіанними цінами — типовий приклад: "iPhone 12" без зазначення
-    пам'яті змішує 64/128/256GB. Якщо так — повертає текст-підказку
-    вказати конкретну конфігурацію в назві для точнішого відстеження.
-    """
-    by_spec = {}
-    for it in items:
-        spec = extract_spec_key(it["title"])
-        if spec == "unspecified":
-            continue
-        by_spec.setdefault(spec, []).append(it["total_price"])
-
-    candidates = {spec: statistics.median(prices) for spec, prices in by_spec.items() if len(prices) >= 3}
-    if len(candidates) < 2:
-        return None
-
-    lowest_spec = min(candidates, key=candidates.get)
-    highest_spec = max(candidates, key=candidates.get)
-    low, high = candidates[lowest_spec], candidates[highest_spec]
-    if low <= 0 or (high - low) / low < 0.15:
-        return None  # різниця незначна, окреме уточнення не критичне
-
-    parts = ", ".join(f"{spec} ~{price:.0f}€" for spec, price in sorted(candidates.items(), key=lambda kv: kv[1]))
-    return (
-        f"у результатах трапляються різні конфігурації з різними цінами ({parts}). "
-        f"Бот і так рахує медіану окремо для кожної виявленої конфігурації, але для "
-        f"точнішого відстеження краще вказати конкретний обсяг у назві (напр. «256GB»)."
-    )
 
 
 def _annotate_items(items, max_lookups=0, watch=None):
@@ -304,10 +209,14 @@ def _apply_item_filters(w, items):
       2. Обрані обов'язкові характеристики → лот без будь-якої з них відкидаємо; лот,
          характеристики якого ще не завантажені, відкладаємо до наступного циклу.
       3. Інакше, якщо ввімкнено "лише з відомою пам'яттю" → без пам'яті відкидаємо.
+      0. Лоти, позначені користувачем «🚫 Не той товар», відкидаються завжди.
     """
     required = get_required_aspects(w)
+    rejected = get_rejected_ids(w["id"]) if w.get("id") else set()
     kept = []
     for it in items:
+        if it.get("item_id") in rejected:
+            continue
         aspects = it.get("aspects")
         if aspects and any(name in COMPAT_ASPECTS for name in aspects):
             continue

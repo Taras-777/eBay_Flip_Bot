@@ -3,6 +3,8 @@
 фонові сповіщення.
 """
 
+import asyncio
+
 import config
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -10,7 +12,7 @@ from telegram.ext import ContextTypes
 
 from settings import is_owner, log
 from db import list_users
-from ebay_api import api_usage_line
+from ebay_api import api_usage_line, fetch_browse_rate_limit
 
 
 async def _ack_callback(update: Update):
@@ -35,6 +37,7 @@ MENU_LABELS = {
     "stats": "📊 Статистика",
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
+    "refresh_usage": "🔄 Оновити запити",
 }
 
 
@@ -69,6 +72,7 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
             owner_row.append(btn("users"))
         if owner_row:
             rows.append(owner_row)
+        rows.append([btn("refresh_usage")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -163,6 +167,26 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def menu_home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_main_menu(update, context)
+
+
+async def refresh_usage_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """«🔄 Оновити запити» — свіжі дані eBay про ліміт (1 службовий запит,
+    у ліміт Browse не рахується) і перемальоване головне меню."""
+    query_cb = update.callback_query
+    if not is_owner(update.effective_user.id):
+        await _ack_callback(update)
+        await show_main_menu(update, context)
+        return
+    try:
+        await asyncio.to_thread(fetch_browse_rate_limit)
+        await query_cb.answer("Оновлено ✅")
+    except Exception as e:
+        log.warning("Не вдалося оновити дані про ліміт eBay: %s", e)
+        try:
+            await query_cb.answer("Не вдалося отримати дані eBay, спробуй пізніше", show_alert=True)
+        except Exception:
+            pass
     await show_main_menu(update, context)
 
 

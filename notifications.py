@@ -7,13 +7,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from settings import EBAY_SELLING_FEES_PCT, RESALE_SHIPPING_EUR, log
 from textparse import _group_label
 from market import estimate_resale_profit, max_buy_price
-from panel import back_to_menu_keyboard, notify
+from panel import notify
 
 
 async def _send_single_deal(app, w, deal_id, it, stat):
     sale_price = stat["sale_price"] or stat["median_price"]
     _, profit = estimate_resale_profit(sale_price, it["total_price"])
-    buy_limit = max_buy_price(sale_price, w["discount_threshold_pct"])
+    buy_limit = max_buy_price(sale_price)
 
     warning = "\n⚠️ Низький рейтинг продавця — перевір уважно перед покупкою" if it["suspicious"] else ""
     best_offer_note = (
@@ -40,6 +40,7 @@ async def _send_single_deal(app, w, deal_id, it, stat):
             InlineKeyboardButton("✅ Куплено", callback_data=f"buy:{deal_id}"),
             InlineKeyboardButton("❌ Пропущено", callback_data=f"skip:{deal_id}"),
         ],
+        [InlineKeyboardButton("🚫 Не той товар", callback_data=f"rejd:{deal_id}")],
         [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
     ]
     await notify(app, w["chat_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
@@ -47,18 +48,23 @@ async def _send_single_deal(app, w, deal_id, it, stat):
 
 async def _send_grouped_deals(app, w, new_deals):
     lines = [f"🔥 Знайдено {len(new_deals)} вигідних лотів: {w['label']}\n"]
-    for deal_id, it, stat in new_deals:
+    reject_buttons = []
+    for n, (deal_id, it, stat) in enumerate(new_deals, 1):
         sale_price = stat["sale_price"] or stat["median_price"]
         _, profit = estimate_resale_profit(sale_price, it["total_price"])
         warning = " ⚠️" if it["suspicious"] else ""
         offer_mark = " 🎯" if it["has_best_offer"] else ""
         drop_mark = " 🔻" if it.get("price_dropped") else ""
         spec_note = f" · 💾 {it['spec_group']}" if it["spec_group"] != "unspecified" else ""
+        reject_buttons.append(InlineKeyboardButton(f"🚫 #{n} не той", callback_data=f"rejd:{deal_id}"))
         lines.append(
+            f"{n}. {it['title'][:120]}\n"
             f"💰 {it['total_price']:.0f}€ → продаж ~{sale_price:.0f}€, прибуток ~{profit:.0f}€"
             f"{spec_note}{warning}{offer_mark}{drop_mark}\n🔗 {it['url']}"
         )
-    await notify(app, w["chat_id"], "\n\n".join(lines), reply_markup=back_to_menu_keyboard())
+    rows = [reject_buttons[i:i + 3] for i in range(0, len(reject_buttons), 3)]
+    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    await notify(app, w["chat_id"], "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def _notify_median_ready(app, w, new_stats):
@@ -66,7 +72,7 @@ async def _notify_median_ready(app, w, new_stats):
     lines = [f"📊 Ринок для «{w['label']}» проаналізовано — тепер шукаю вигідні лоти!\n"]
     for s in new_stats:
         sale_price = s["sale_price"] or s["median_price"]
-        buy_limit = max_buy_price(sale_price, w["discount_threshold_pct"])
+        buy_limit = max_buy_price(sale_price)
         lines.append(
             f"• {_group_label(s['cond_group'], s['spec_group'])}: продати ~{sale_price:.0f}€, "
             f"купувати до ~{buy_limit:.0f}€ ({s['sample_size']} оголошень)"

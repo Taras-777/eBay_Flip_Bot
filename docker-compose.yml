@@ -1,0 +1,14 @@
+services:
+  bot:
+    build: .
+    container_name: ebay-bot
+    restart: unless-stopped
+    # Секрети: EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, TELEGRAM_BOT_TOKEN, OWNER_TELEGRAM_ID
+    env_file: .env
+    volumes:
+      - ./data:/data          # база SQLite + bot_state.pickle (переживають перезбірку)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"       # логи не з'їдять диск EC2
+        max-file: "3"

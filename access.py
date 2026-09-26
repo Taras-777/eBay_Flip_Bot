@@ -193,7 +193,7 @@ async def cmd_userstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if watches:
         lines.append("📦 Відстеження:")
         for w in watches:
-            lines.append(f"  #{w['id']} {w['label']} — поріг {w['discount_threshold_pct']}%")
+            lines.append(f"  #{w['id']} {w['label']}")
     else:
         lines.append("📦 Немає активних відстежень.")
 

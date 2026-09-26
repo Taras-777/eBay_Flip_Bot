@@ -83,6 +83,14 @@ SPEC_SIZE_PATTERN = re.compile(r"(\d+)\s?(GB|TB)\b", re.IGNORECASE)
 SEARCH_TOKEN_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
 
 
+# «PS5», «PS 5», «PlayStation 5», «Playstation5» — цифра 5 має стояти одразу
+# після назви консолі. Окремі «playstation» і «5» у різних місцях назви
+# («PlayStation 3 ... 3.5.0», «PlayStation 4 ... 5 Controllern») — не PS5.
+PS5_TITLE_PATTERN = re.compile(
+    r"(?<![\w.])(?:ps|play\s*-?\s*station)\s*-?\s*5(?![\d.,])", re.IGNORECASE
+)
+
+
 CONSOLE_QUERY_TERMS = {
     "ps", "ps4", "ps5", "playstation", "xbox", "switch", "nintendo",
 }
@@ -116,6 +124,7 @@ CONSOLE_ACCESSORY_ONLY_TERMS = {
     "controller", "headset", "charger", "charging", "cable", "adapter",
     "case", "cover", "skin", "stand", "dock", "shell", "faceplate",
     "parts", "repair", "replacement", "fan", "hdmi",
+    "portal", "remote",  # PlayStation Portal / Remote Player — не консоль
 }
 
 
@@ -319,11 +328,7 @@ def _title_matches_search(title: str, query: str, exclude_terms: str) -> bool:
         or "playstation5" in normalized_query
     )
     if is_ps5_query:
-        if (
-            "ps5" not in title_tokens
-            and "playstation5" not in normalized_title
-            and not ({"playstation", "5"} <= title_tokens)
-        ):
+        if not PS5_TITLE_PATTERN.search(title):
             return False
         required_variant_tokens = query_tokens - {"ps", "ps5", "playstation", "play", "station", "5"}
         if not required_variant_tokens.issubset(title_tokens):

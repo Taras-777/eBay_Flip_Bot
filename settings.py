@@ -5,6 +5,7 @@
 
 import config
 import logging
+import os
 from datetime import timezone
 
 
@@ -34,12 +35,19 @@ log = logging.getLogger("ebay_flip_bot")
 EBAY_MARKETPLACE_ID = "EBAY_DE"
 
 
-DB_PATH = "ebay_flip_bot.sqlite3"
+# Папка з даними бота (база + стан діалогів). У Docker це змонтований том /data,
+# без Docker — поточна папка, як і раніше.
+DATA_DIR = os.getenv("DATA_DIR", ".")
+os.makedirs(DATA_DIR, exist_ok=True)
 
 
-STATE_FILE = "bot_state.pickle"
+DB_PATH = os.path.join(DATA_DIR, "ebay_flip_bot.sqlite3")
 
 
+STATE_FILE = os.path.join(DATA_DIR, "bot_state.pickle")
+
+
+# Лише значення за замовчуванням для старої колонки БД — у логіці не використовується
 DEFAULT_DISCOUNT_THRESHOLD_PCT = 25
 
 
@@ -50,12 +58,6 @@ MIN_MODEL_SAMPLE_SIZE = 3  # лише для пропозиції мінімал
 
 
 CHECK_INTERVAL_MINUTES = 5   # пошук нових лотів — вигідні лоти розкуповують швидко
-
-
-MIN_ALLOWED_THRESHOLD_PCT = 5
-
-
-MAX_ALLOWED_THRESHOLD_PCT = 70
 
 
 MIN_SELLER_FEEDBACK_SCORE = 5
@@ -77,7 +79,9 @@ EBAY_SELLING_FEES_PCT = 15
 RESALE_SHIPPING_EUR = 7
 
 
-# Мінімальний прибуток у євро — дрібні угоди на 5-10€ не варті зусиль
+# Єдиний критерій вигідності: лот вигідний, якщо після перепродажу
+# (мінус комісія eBay і доставка) лишається щонайменше стільки євро.
+# Хочеш суворіший відбір — збільш це число.
 MIN_PROFIT_EUR = 15
 
 

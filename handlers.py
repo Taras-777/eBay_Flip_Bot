@@ -15,9 +15,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 from settings import (
     CONDITION_PRESETS,
     DEFAULT_CONDITION_IDS,
-    MAX_ALLOWED_THRESHOLD_PCT,
+    DEFAULT_DISCOUNT_THRESHOLD_PCT,
     MAX_SPEC_LOOKUPS_PER_DEAL_SCAN,
-    MIN_ALLOWED_THRESHOLD_PCT,
     MIN_PRICE_SUGGESTION_PCT,
     MIN_PROFIT_EUR,
     MIN_SAMPLE_SIZE,
@@ -25,14 +24,16 @@ from settings import (
     is_owner,
     log,
 )
-from textparse import CONDITION_LABELS, _group_label, category_label, is_accessory_category
+from textparse import CONDITION_LABELS, _group_label, _search_tokens, category_label, is_accessory_category
+from learning import learned_words_note, reject_and_learn, unlearn_word
 from db import (
     add_watch,
     encode_required_aspects,
     find_duplicate_watch,
-    find_threshold_suggestion,
     get_current_listings,
+    get_deal,
     get_deal_owner_chat_id,
+    get_learned_words,
     get_deal_stats,
     get_market_stats,
     get_required_aspects,
@@ -43,7 +44,6 @@ from db import (
     remove_watch,
     reset_watch_market,
     set_deal_status,
-    update_threshold,
     update_watch_categories,
     update_watch_conditions,
     update_watch_exclude,
@@ -63,8 +63,6 @@ from market import (
     _annotate_items,
     _apply_item_filters,
     _recalculate_watch_medians,
-    analyze_market_for_threshold,
-    estimate_resale_profit,
     max_buy_price,
     minimum_sample_size_for_query,
     suggest_min_price,
@@ -76,6 +74,7 @@ from panel import (
     build_main_menu,
     cancel_keyboard,
     main_menu_text,
+    refresh_usage_callback,
     show_main_menu,
     show_panel,
 )
@@ -85,7 +84,7 @@ from notifications import _notify_median_error, _notify_median_problem
 
 # ============================================================
 # ДІАЛОГ ДОДАВАННЯ ВІДСТЕЖЕННЯ (/addwatch)
-# Кроки: назва → категорія eBay → мінімальна ціна → поріг знижки
+# Кроки: назва → категорія eBay → мінімальна ціна
 # ============================================================
 
 (
@@ -94,13 +93,11 @@ from notifications import _notify_median_error, _notify_median_problem
     ASK_ASPECT,
     ASK_MIN_PRICE_CHOICE,
     ASK_CUSTOM_MIN_PRICE,
-    ASK_THRESHOLD_CHOICE,
-    ASK_CUSTOM_THRESHOLD,
-) = range(7)
+) = range(5)
 
 
 NEW_WATCH_KEYS = (
-    "new_watch_query", "suggested_pct", "new_watch_category_id", "new_watch_category_name",
+    "new_watch_query", "new_watch_category_id", "new_watch_category_name",
     "new_watch_categories", "new_watch_category_selected",
     "new_watch_category_options", "new_watch_min_price", "suggested_min_price",
     "new_watch_aspect_options", "new_watch_required_aspect", "new_watch_require_spec",
@@ -189,8 +186,8 @@ async def addwatch_got_query(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if duplicate:
         await show_panel(
             update, context,
-            f"⚠️ У тебе вже є відстеження #{duplicate['id']} «{html.escape(duplicate['query'])}» "
-            f"з такою ж назвою (поріг {duplicate['discount_threshold_pct']}%).\n\n"
+            f"⚠️ У тебе вже є відстеження «{html.escape(duplicate['query'])}» "
+            f"з такою ж назвою.\n\n"
             f"Введи іншу назву — наприклад, додай конкретний обсяг пам'яті чи стан, "
             f"щоб відрізнити від наявного запису.",
             reply_markup=cancel_keyboard(),
@@ -200,7 +197,7 @@ async def addwatch_got_query(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["new_watch_query"] = query
 
     if not _ebay_configured():
-        return await _propose_threshold(update, context)
+        return await _finalize_watch(update, context)
 
     await show_panel(
         update, context,
@@ -284,7 +281,7 @@ async def _propose_min_price(update, context):
     if suggestion is None:
         # Замало даних для пропозиції — без мінімальної ціни
         context.user_data["new_watch_min_price"] = 0
-        return await _propose_threshold(update, context)
+        return await _finalize_watch(update, context)
 
     min_price, median_price, sample_size = suggestion
     context.user_data["suggested_min_price"] = min_price
@@ -327,7 +324,7 @@ async def addwatch_min_price_choice(update: Update, context: ContextTypes.DEFAUL
         context.user_data["new_watch_min_price"] = context.user_data.get("suggested_min_price", 0)
     else:
         context.user_data["new_watch_min_price"] = 0
-    return await _propose_threshold(update, context)
+    return await _finalize_watch(update, context)
 
 
 async def addwatch_custom_min_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,106 +338,10 @@ async def addwatch_custom_min_price(update: Update, context: ContextTypes.DEFAUL
         await show_panel(update, context, "Ціна не може бути відʼємною. Спробуй ще раз.", reply_markup=cancel_keyboard())
         return ASK_CUSTOM_MIN_PRICE
     context.user_data["new_watch_min_price"] = value
-    return await _propose_threshold(update, context)
+    return await _finalize_watch(update, context)
 
 
-async def _propose_threshold(update, context):
-    query = context.user_data["new_watch_query"]
-    category_ids = [c["id"] for c in context.user_data.get("new_watch_categories") or []]
-    min_price = context.user_data.get("new_watch_min_price") or None
-
-    analysis = None
-    validation_note = ""
-    if _ebay_configured():
-        await show_panel(
-            update, context,
-            f"🔎 «{html.escape(query)}»\n\nПеревіряю поточні ціни на eBay, зачекай кілька секунд…",
-            reply_markup=cancel_keyboard(),
-        )
-        analysis = await asyncio.to_thread(analyze_market_for_threshold, query, category_ids, min_price)
-        if analysis is None:
-            validation_note = (
-                "\n\n⚠️ Не вдалося зібрати достатньо оголошень для аналізу ринку — "
-                "поріг нижче запропоновано за загальною підказкою, а не за реальними цінами."
-            )
-    else:
-        validation_note = "\n\n(аналіз ринку на eBay недоступний, поки не додані API-ключі — поріг за загальною підказкою)"
-
-    if analysis:
-        pct = analysis["pct"]
-        reason = analysis["reason"]
-        spec_warning = analysis.get("spec_warning")
-        if spec_warning:
-            validation_note += f"\n\n💡 {html.escape(spec_warning)}"
-    else:
-        pct, reason = find_threshold_suggestion(query)
-
-    context.user_data["suggested_pct"] = pct
-
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(f"✅ Взяти {pct}%", callback_data="use_suggested"),
-                InlineKeyboardButton("✏️ Своє значення", callback_data="use_custom"),
-            ],
-            [InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")],
-        ]
-    )
-    await show_panel(
-        update, context,
-        f"🔎 «{html.escape(query)}»\n\n"
-        f"💡 Пропоную бажаний прибуток: {pct}% від ціни продажу (мінімум {MIN_PROFIT_EUR}€)\n"
-        f"Причина: {html.escape(reason)}\n"
-        f"Бот вважатиме лот вигідним, якщо після перепродажу (мінус комісія eBay і доставка) "
-        f"лишається щонайменше цей прибуток"
-        f"{validation_note}\n\n"
-        f"Це лише рекомендація — остаточне рішення за тобою.",
-        reply_markup=keyboard,
-        parse_mode=ParseMode.HTML,
-    )
-    return ASK_THRESHOLD_CHOICE
-
-
-async def addwatch_threshold_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query_cb = update.callback_query
-    await query_cb.answer()
-
-    if query_cb.data == "use_suggested":
-        pct = context.user_data["suggested_pct"]
-        return await _finalize_watch(update, context, pct)
-
-    await show_panel(
-        update, context,
-        f"✏️ Введи бажаний прибуток у відсотках від ціни продажу "
-        f"(від {MIN_ALLOWED_THRESHOLD_PCT} до {MAX_ALLOWED_THRESHOLD_PCT}), напр: 30",
-        reply_markup=cancel_keyboard(),
-    )
-    return ASK_CUSTOM_THRESHOLD
-
-
-async def addwatch_custom_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().replace("%", "").replace(",", ".")
-    try:
-        pct = float(text)
-    except ValueError:
-        await show_panel(
-            update, context, "Це не схоже на число. Введи, наприклад: 30",
-            reply_markup=cancel_keyboard(),
-        )
-        return ASK_CUSTOM_THRESHOLD
-
-    if not (MIN_ALLOWED_THRESHOLD_PCT <= pct <= MAX_ALLOWED_THRESHOLD_PCT):
-        await show_panel(
-            update, context,
-            f"Значення має бути від {MIN_ALLOWED_THRESHOLD_PCT} до {MAX_ALLOWED_THRESHOLD_PCT}. Спробуй ще раз.",
-            reply_markup=cancel_keyboard(),
-        )
-        return ASK_CUSTOM_THRESHOLD
-
-    return await _finalize_watch(update, context, pct)
-
-
-async def _finalize_watch(update, context, pct):
+async def _finalize_watch(update, context):
     query = context.user_data["new_watch_query"]
     categories = context.user_data.get("new_watch_categories") or []
     category_name = ", ".join(category_label(c["name"]) for c in categories)
@@ -450,13 +351,13 @@ async def _finalize_watch(update, context, pct):
     _clear_new_watch(context)
     chat_id = update.effective_chat.id
 
-    wid = add_watch(
+    add_watch(
         chat_id=chat_id,
         label=query,
         query=query,
         exclude="broken defekt teile parts kaputt",
         condition_ids=DEFAULT_CONDITION_IDS,
-        discount_threshold_pct=pct,
+        discount_threshold_pct=DEFAULT_DISCOUNT_THRESHOLD_PCT,  # колонка лишилась у БД, не використовується
         categories=categories,
         min_price=min_price,
         require_spec=require_spec,
@@ -474,7 +375,7 @@ async def _finalize_watch(update, context, pct):
 
     user_id = update.effective_user.id
     text = (
-        f"✅ Додано відстеження #{wid}: «{html.escape(query)}», бажаний прибуток {pct}%."
+        f"✅ Додано відстеження «{html.escape(query)}»."
         f"{extras_txt}\n\n{main_menu_text(update.effective_user.id)}"
     )
     await show_panel(update, context, text, reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
@@ -511,6 +412,10 @@ async def addwatch_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_
         await cmd_pending(update, context)
     elif action == "users":
         await cmd_users(update, context)
+    elif action == "refresh_usage":
+        await refresh_usage_callback(update, context)
+    else:
+        await show_main_menu(update, context)
     return ConversationHandler.END
 
 
@@ -603,6 +508,8 @@ async def delete_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_TY
         await cmd_users(update, context)
     elif action == "addwatch":
         return await addwatch_start(update, context)
+    elif action == "refresh_usage":
+        await refresh_usage_callback(update, context)
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END
@@ -643,7 +550,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/addwatch — додати новий товар (покроково)\n"
         "/list — активні відстеження\n"
         "/remove <id> — вимкнути відстеження\n"
-        "/setthreshold <id> <%> — бажаний прибуток (% від ціни продажу)\n"
         "/setminprice <id> <€> — мінімальна ціна (0 — без обмеження)\n"
         "/setexclude <id> слова — виключені слова з пошуку\n"
         "/requirespec <id> <on|off|auto> — лише лоти з відомою пам'яттю\n"
@@ -689,21 +595,17 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]),
         )
         return
-    lines = ["📦 <b>Активні відстеження</b>\n", "Обери товар, щоб переглянути деталі:"]
+    lines = [f"📦 <b>Активні відстеження ({len(watches)})</b>\n", "Обери товар, щоб відкрити його:"]
     rows = []
     for w in watches:
-        no_cat = "" if watch_category_ids(w) else " ⚠️ без категорії"
-        lines.append(f"📌 <b>#{w['id']} {html.escape(w['label'])}</b>{no_cat}")
-        rows.append(
-            [
-                InlineKeyboardButton(f"📊 Відкрити #{w['id']}", callback_data=f"watch_details:{w['id']}"),
-                InlineKeyboardButton(f"✏️ Редагувати #{w['id']}", callback_data=f"editw:{w['id']}"),
-            ]
-        )
+        no_cat = " ⚠️" if not watch_category_ids(w) else ""
+        label = w["label"] if len(w["label"]) <= 40 else w["label"][:39] + "…"
+        rows.append([InlineKeyboardButton(f"📦 {label}{no_cat}", callback_data=f"watch_details:{w['id']}")])
+    if any(not watch_category_ids(w) for w in watches):
+        lines.append("\n⚠️ — не обрано категорію eBay (відкрий товар → ✏️ Редагувати)")
     rows.extend(
         [
             [InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
-            [InlineKeyboardButton("🗑️ Видалити товар", callback_data="delwatch_prompt")],
             [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
         ]
     )
@@ -723,10 +625,9 @@ def _watch_details_text(watch):
     ) or "усі (не обрано)"
     min_price = watch.get("min_price") or 0
     min_price_txt = f"{min_price:.0f}€" if min_price else "без обмеження"
-    pct = watch["discount_threshold_pct"]
     lines = [
-        f"📌 <b>#{watch['id']} {html.escape(watch['label'])}</b>",
-        f"🎯 Бажаний прибуток: <b>{pct:g}%</b> від ціни продажу (мін. {MIN_PROFIT_EUR}€)",
+        f"📌 <b>{html.escape(watch['label'])}</b>",
+        f"🎯 Вигідний лот: після продажу лишається ≥ <b>{MIN_PROFIT_EUR}€</b> (після комісії й доставки)",
         f"🗂️ Категорії: {category_txt}",
         f"💶 Мінімальна ціна: {min_price_txt}",
         (f"🧾 Обов'язкові характеристики: {html.escape(', '.join(get_required_aspects(watch)))}"
@@ -735,6 +636,9 @@ def _watch_details_text(watch):
          + ("так" if watch_requires_spec(watch) else "ні")
          + (" (авто)" if watch.get("require_spec") is None else "")),
     ]
+    learned = sorted(w for w, st in get_learned_words(watch["id"]).items() if st == "excluded")
+    if learned:
+        lines.append(f"🧠 Відсіюю за вивченими словами: {html.escape(', '.join(learned))}")
     if not stats:
         lines.append("\n💰 <b>Ринок:</b>\nЩе не проаналізований (потрібно ≥"
                      f"{MIN_SAMPLE_SIZE} оголошень у групі).")
@@ -743,8 +647,7 @@ def _watch_details_text(watch):
     lines.append("\n💰 <b>Купівля і продаж:</b>")
     for s in sorted(stats, key=lambda s: (s["cond_group"], s["spec_group"] != "*", s["spec_group"])):
         sale_price = s["sale_price"] or s["median_price"]
-        buy_limit = max_buy_price(sale_price, pct)
-        _, profit = estimate_resale_profit(sale_price, buy_limit)
+        buy_limit = max_buy_price(sale_price)
         trend = ""
         if s["prev_median_price"]:
             if s["median_price"] < s["prev_median_price"] * 0.98:
@@ -756,13 +659,12 @@ def _watch_details_text(watch):
             f"(оголошень: {s['sample_size']})\n"
             f"  🛒 Купувати до: <b>{buy_limit:.0f}€</b>\n"
             f"  💶 Продати за: ~<b>{sale_price:.0f}€</b> ({html.escape(s['sale_source'] or 'оцінка')})\n"
-            f"  💰 Прибуток при цьому: ~{profit:.0f}€\n"
             f"  📊 Медіана пропозицій: {s['median_price']:.0f}€{trend}"
         )
     lines.append(
         "\n<i>Ціна продажу — оцінка: поки бот не назбирав ≥"
         f"{MIN_SOLD_SAMPLE} «зниклих» (ймовірно проданих) лотів, це нижня чверть "
-        "поточних пропозицій. Прибуток — після комісії eBay і доставки.</i>"
+        f"поточних пропозицій. «Купувати до» лишає ≥{MIN_PROFIT_EUR}€ після комісії eBay і доставки.</i>"
     )
     return "\n".join(lines)
 
@@ -772,7 +674,10 @@ async def _show_watch_details(update, context, watch):
     rows = [
         [InlineKeyboardButton("🔎 Переглянути оголошення", callback_data=f"view_listings:{watch_id}")],
         [InlineKeyboardButton("🧩 Усі конфігурації", callback_data=f"configs:{watch_id}")],
-        [InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}")],
+        [
+            InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
+            InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
+        ],
         [InlineKeyboardButton("◀️ До активних відстежень", callback_data="menu:list")],
     ]
     await show_panel(
@@ -812,7 +717,7 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if not listings:
         await show_panel(
             update, context,
-            f"🧩 <b>#{watch_id} {html.escape(watch['label'])}: конфігурації</b>\n\n"
+            f"🧩 <b>{html.escape(watch['label'])}: конфігурації</b>\n\n"
             "Ще немає даних з ринкового сканування. Натисни «🔄 Перерахувати медіану» "
             "на екрані товару й відкрий цей список знову.",
             reply_markup=InlineKeyboardMarkup(back_rows),
@@ -825,7 +730,7 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         groups.setdefault((row["cond_group"], row["spec_group"]), []).append(row["price"])
 
     lines = [
-        f"🧩 <b>#{watch_id} {html.escape(watch['label'])}: усі конфігурації</b>",
+        f"🧩 <b>{html.escape(watch['label'])}: усі конфігурації</b>",
         f"Оголошень в останньому скануванні: <b>{len(listings)}</b>",
     ]
     current_cond = None
@@ -892,7 +797,7 @@ async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT
     top = rows_db[:10]
 
     spec_txt = "усі конфігурації" if spec == "*" else ("без конфігурації" if spec == "unspecified" else spec)
-    header = (f"🔎 <b>#{watch_id} {html.escape(watch['label'])}</b>\n"
+    header = (f"🔎 <b>{html.escape(watch['label'])}</b>\n"
               f"{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())} · {html.escape(spec_txt)} — "
               f"найдешевші {len(top)} з {len(rows_db)}")
     nav = [
@@ -908,15 +813,17 @@ async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
-    lines = [header]
-    buttons = []
-    for i, r in enumerate(top, 1):
-        lines.append(f"\n<b>{i}.</b> {html.escape((r['title'] or 'без назви')[:120])}\n💶 {r['price']:.0f}€")
-        buttons.append([InlineKeyboardButton(f"🔗 Відкрити #{i} · {r['price']:.0f}€", url=r["url"])])
-    await show_panel(
-        update, context, "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(buttons + nav), parse_mode=ParseMode.HTML,
-    )
+    state = {
+        "header": header,
+        "items": [
+            {"item_id": r["item_id"], "title": r["title"] or "без назви", "price": r["price"],
+             "currency": "€", "condition": None, "url": r["url"]}
+            for r in top
+        ],
+        "nav": [("◀️ До конфігурацій", f"configs:{watch_id}"), ("📌 До товару", f"watch_details:{watch_id}")],
+        "query": watch["query"],
+    }
+    await _render_listing_panel(update, context, watch_id, state)
 
 
 async def _render_aspect_picker(update, context, watch):
@@ -928,7 +835,7 @@ async def _render_aspect_picker(update, context, watch):
     back_row = [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]
     await show_panel(
         update, context,
-        f"🧾 <b>#{watch_id} {html.escape(watch['label'])}: обов'язкові характеристики</b>\n"
+        f"🧾 <b>{html.escape(watch['label'])}: обов'язкові характеристики</b>\n"
         f"Зараз: {html.escape(current)}\n\n{ASPECT_CHOICE_TEXT}",
         reply_markup=_aspect_keyboard(watch_id, options, selected, extra_rows=[back_row]),
         parse_mode=ParseMode.HTML,
@@ -1063,7 +970,7 @@ async def _render_watch_categories(update, context, watch):
     back_row = [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]
     await show_panel(
         update, context,
-        f"🗂️ <b>#{watch_id} {html.escape(watch['label'])}: категорії</b>\n\n" + "Познач одну або кілька категорій, де продають сам товар (напр. консолі, а не ігри), "
+        f"🗂️ <b>{html.escape(watch['label'])}: категорії</b>\n\n" + "Познач одну або кілька категорій, де продають сам товар (напр. консолі, а не ігри), "
         "і натисни «✅ Готово». Кілька категорій корисні, коли продавці кладуть той самий товар "
         "у різні місця.\n"
         "У дужках — кількість оголошень. ⚠️ — аксесуари й запчастини: зазвичай їх обирати не треба.\n"
@@ -1119,6 +1026,9 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
 
 
+LISTINGS_MAX_PAGES = 3  # «Переглянути оголошення»: до 3 запитів до eBay
+
+
 @require_access
 async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query_cb = update.callback_query
@@ -1132,14 +1042,28 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         # sort=price — eBay повертає лоти від найдешевших. Беремо із запасом
         # (частину відсіє перевірка назви) і показуємо 10 найдешевших.
+        # Найдешевші лоти в категорії часто — інші моделі (PS4, PS3, Portal…),
+        # які відсіює перевірка назви. Тому гортаємо до LISTINGS_MAX_PAGES
+        # сторінок по 100, доки не набереться 10 підходящих.
         def _cheapest():
-            found = search_in_categories(
-                watch_category_ids(watch), limit=50, fresh=True, sort="price", **_watch_search_kwargs(watch),
-            )
-            _annotate_items(found, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=watch)
-            return _apply_item_filters(watch, found)
+            kept, seen, pages = [], set(), 0
+            for page in range(LISTINGS_MAX_PAGES):
+                pages += 1
+                found = search_in_categories(
+                    watch_category_ids(watch), limit=100, offset=page * 100, fresh=True, sort="price",
+                    **_watch_search_kwargs(watch),
+                )
+                # search_active_items уже відкинув лоти з чужою назвою, тож
+                # порожня сторінка не означає кінець видачі — гортаємо далі
+                found = [it for it in found if it["item_id"] not in seen]
+                seen.update(it["item_id"] for it in found)
+                _annotate_items(found, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=watch)
+                kept.extend(_apply_item_filters(watch, found))
+                if len(kept) >= 10:
+                    break
+            return kept, pages * 100
 
-        items = await asyncio.to_thread(_cheapest)
+        items, scanned = await asyncio.to_thread(_cheapest)
     except Exception as e:
         log.exception("Не вдалося завантажити оголошення для watch #%s: %s", watch_id, e)
         await query_cb.answer("Не вдалося завантажити оголошення. Спробуй ще раз.", show_alert=True)
@@ -1157,37 +1081,160 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
         await show_panel(
             update,
             context,
-            f"🔎 <b>Оголошення для #{watch_id} {html.escape(watch['label'])}</b>\n\n"
-            "Підходящих оголошень не знайдено.",
+            f"🔎 <b>Оголошення для {html.escape(watch['label'])}</b>\n\n"
+            f"Підходящих оголошень не знайдено серед ~{scanned} найдешевших у категорії.\n\n"
+            "Найчастіше це інші моделі чи аксесуари, які відсіює перевірка назви, "
+            "або лоти без потрібних характеристик.",
             reply_markup=InlineKeyboardMarkup(nav_rows),
             parse_mode=ParseMode.HTML,
         )
         return
 
-    lines = [
-        f"🔎 <b>Оголошення для #{watch_id} {html.escape(watch['label'])}</b>",
-        f"Найдешевші відповідні лоти: <b>{len(items)}</b>\n"
-        f"🕒 Оновлено: {datetime.now().strftime('%H:%M:%S')}\n",
-    ]
-    rows = []
-    for index, item in enumerate(items, 1):
-        title = html.escape(item["title"][:160])
-        lines.append(
-            f"<b>{index}. {title}</b>\n"
-            f"💶 {item['total_price']:.0f} {item['currency']} · "
-            f"стан: {html.escape(item.get('condition') or 'н/д')}"
-        )
-        if item.get("url"):
-            rows.append([InlineKeyboardButton(f"🔗 Відкрити оголошення #{index}", url=item["url"])])
+    state = {
+        "header": (f"🔎 <b>Оголошення для {html.escape(watch['label'])}</b>\n"
+                   f"Найдешевші відповідні лоти: <b>{len(items)}</b>\n"
+                   f"🕒 Оновлено: {datetime.now().strftime('%H:%M:%S')}"),
+        "items": [
+            {"item_id": it["item_id"], "title": it["title"], "price": it["total_price"],
+             "currency": it.get("currency") or "EUR", "condition": it.get("condition"), "url": it.get("url")}
+            for it in items
+        ],
+        "nav": [("◀️ До товару", f"watch_details:{watch_id}"), ("📦 До відстежень", "menu:list"),
+                ("🏠 Меню", "menu:home")],
+        "query": watch["query"],
+    }
+    await _render_listing_panel(update, context, watch_id, state)
 
-    rows.extend(nav_rows)
-    await show_panel(
-        update,
-        context,
-        "\n\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode=ParseMode.HTML,
-    )
+
+# ============================================================
+# «🚫 НЕ ТОЙ ТОВАР»
+# ============================================================
+
+def _listing_state_key(watch_id):
+    return f"listing_view_{watch_id}"
+
+
+def _short_listing_label(title, query, max_len=26):
+    """Коротка назва для кнопки: без слів із назви товару і «Sony/Apple…»,
+    щоб лишилось те, чим лоти відрізняються («Slim 825GB Digital Weiß»)."""
+    skip = _search_tokens(query) | {"sony", "apple", "samsung", "lenovo", "hp", "dell", "nintendo", "microsoft",
+                                     "edition", "konsole", "console", "spielkonsole", "spielekonsole", "videospielkonsole"}
+    words = [w for w in (title or "").split() if not (_search_tokens(w) and _search_tokens(w) <= skip)]
+    words = [w for w in words if w.strip("-–—|,*!") ]
+    label = " ".join(words).strip(" -–—|,") or (title or "")
+    return label if len(label) <= max_len else label[:max_len - 1].rstrip() + "…"
+
+
+async def _render_listing_panel(update, context, watch_id, state, note="", undo_words=()):
+    """Список оголошень з кнопками «🔗 Відкрити» і «🚫 Не той» для кожного.
+    Стан зберігається, щоб після відхилення перемалювати список без
+    нового запиту до eBay."""
+    context.user_data[_listing_state_key(watch_id)] = state
+    lines = [state["header"]]
+    if note:
+        lines.append(html.escape(note))
+    rows = []
+    if not state["items"]:
+        lines.append("Підходящих оголошень не лишилось.")
+    for i, it in enumerate(state["items"], 1):
+        cond = f" · стан: {html.escape(it['condition'])}" if it.get("condition") else ""
+        lines.append(f"<b>{i}. {html.escape(it['title'][:160])}</b>\n"
+                     f"💶 {it['price']:.0f} {html.escape(it['currency'])}{cond}")
+        row = []
+        if it.get("url"):
+            row.append(InlineKeyboardButton(
+                f"🔗 {it['price']:.0f}€ · {_short_listing_label(it['title'], state.get('query', ''))}",
+                url=it["url"]))
+        if it.get("item_id"):
+            row.append(InlineKeyboardButton("🚫 Не той", callback_data=f"rejl:{watch_id}:{i - 1}"))
+        if row:
+            rows.append(row)
+    for word in undo_words:
+        rows.append([InlineKeyboardButton(f"↩️ Не відсіювати «{word}»", callback_data=f"unlw:{watch_id}:{word}")])
+    rows.extend([InlineKeyboardButton(text, callback_data=cb)] for text, cb in state["nav"])
+    await show_panel(update, context, "\n\n".join(lines),
+                     reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+
+
+@require_access
+async def reject_listing_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """rejl:<watch_id>:<індекс> — «не той товар» зі списку оголошень."""
+    query_cb = update.callback_query
+    _, watch_id_str, idx_str = query_cb.data.split(":")
+    watch_id = int(watch_id_str)
+    watch = get_watch(watch_id, update.effective_chat.id)
+    state = context.user_data.get(_listing_state_key(watch_id))
+    try:
+        item = state["items"][int(idx_str)] if state else None
+    except (ValueError, IndexError):
+        item = None
+    if watch is None or item is None:
+        await query_cb.answer("Список застарів — відкрий оголошення знову.", show_alert=True)
+        return
+
+    words = await asyncio.to_thread(reject_and_learn, watch, item["item_id"], item["title"])
+    remaining = [it for it in state["items"] if it["item_id"] != item["item_id"]]
+    if words:
+        word_set = set(words)
+        remaining = [it for it in remaining if not (_search_tokens(it["title"]) & word_set)]
+    state = {**state, "items": remaining}
+    await query_cb.answer("🚫 Прибрано — більше не враховую цей лот")
+    note = learned_words_note(words) if words else ""
+    await _render_listing_panel(update, context, watch_id, state, note=note, undo_words=words)
+
+
+@require_access
+async def reject_deal_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """rejd:<deal_id> — «не той товар» зі сповіщення про знахідку."""
+    query_cb = update.callback_query
+    deal = get_deal(int(query_cb.data.split(":")[1]))
+    watch = get_watch(deal["watch_id"], update.effective_chat.id) if deal else None
+    if watch is None:
+        await query_cb.answer("Цей товар уже не відстежується.", show_alert=True)
+        return
+
+    words = await asyncio.to_thread(reject_and_learn, watch, deal["item_id"], deal["title"])
+    set_deal_status(deal["id"], "skipped")
+    await query_cb.answer("🚫 Прибрано — більше не враховую цей лот")
+
+    old_rows = query_cb.message.reply_markup.inline_keyboard if query_cb.message.reply_markup else []
+    grouped = any(b.callback_data == f"rejd:{deal['id']}" and b.text.startswith("🚫 #")
+                  for row in old_rows for b in row)
+    if grouped:
+        # Кілька знахідок в одному повідомленні — прибираємо лише кнопку цього лота
+        rows = [[b for b in row if b.callback_data != f"rejd:{deal['id']}"] for row in old_rows]
+        rows = [row for row in rows if row]
+        text = query_cb.message.text
+    else:
+        rows = [[InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+        text = f"{query_cb.message.text}\n\n🚫 Не той товар — більше не враховую"
+    if words:
+        text += "\n\n" + learned_words_note(words)
+        rows = [[InlineKeyboardButton(f"↩️ Не відсіювати «{w}»", callback_data=f"unlw:{watch['id']}:{w}")]
+                for w in words] + rows
+    try:
+        await query_cb.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+    except Exception as e:
+        log.debug("Не вдалося оновити сповіщення після відхилення: %s", e)
+
+
+@require_access
+async def unlearn_word_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """unlw:<watch_id>:<слово> — скасувати автоматично вивчене слово."""
+    query_cb = update.callback_query
+    _, watch_id_str, word = query_cb.data.split(":", 2)
+    ok = await asyncio.to_thread(unlearn_word, int(watch_id_str), update.effective_chat.id, word)
+    if not ok:
+        await query_cb.answer("Цей товар уже не відстежується.", show_alert=True)
+        return
+    await query_cb.answer(f"↩️ «{word}» більше не відсіюється")
+    markup = query_cb.message.reply_markup
+    if markup:
+        rows = [[b for b in row if b.callback_data != query_cb.data] for row in markup.inline_keyboard]
+        try:
+            await query_cb.edit_message_reply_markup(InlineKeyboardMarkup([r for r in rows if r]))
+        except Exception as e:
+            log.debug("Не вдалося прибрати кнопку скасування: %s", e)
 
 
 EDIT_VALUE = 0  # окрема коротка розмова: введення нового значення
@@ -1206,7 +1253,6 @@ async def edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     min_price = watch.get("min_price") or 0
     rows = [
         [InlineKeyboardButton("🗂️ Змінити категорії", callback_data=f"chcat:{watch_id}")],
-        [InlineKeyboardButton(f"🎯 Бажаний прибуток ({watch['discount_threshold_pct']:g}%)", callback_data=f"edpct:{watch_id}")],
         [InlineKeyboardButton(
             f"💶 Мінімальна ціна ({f'{min_price:.0f}€' if min_price else 'без обмеження'})",
             callback_data=f"edmin:{watch_id}")],
@@ -1216,7 +1262,7 @@ async def edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ]
     await show_panel(
         update, context,
-        f"✏️ <b>#{watch_id} {html.escape(watch['label'])}</b>\n\nЩо хочеш відредагувати?\n\n"
+        f"✏️ <b>{html.escape(watch['label'])}</b>\n\nЩо хочеш відредагувати?\n\n"
         "<i>🔄 Перерахувати медіану — оновити ринкові ціни зараз, не чекаючи "
         "автоматичного оновлення раз на годину.</i>",
         reply_markup=InlineKeyboardMarkup(rows),
@@ -1227,46 +1273,36 @@ async def edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 @require_access
 async def edit_value_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """edpct:<id> — бажаний прибуток, edmin:<id> — мінімальна ціна."""
+    """edmin:<id> — мінімальна ціна."""
     query_cb = update.callback_query
-    kind, watch_id_str = query_cb.data.split(":")
+    _, watch_id_str = query_cb.data.split(":")
     watch_id = int(watch_id_str)
     watch = get_watch(watch_id, update.effective_chat.id)
     if watch is None:
         await query_cb.answer("Це відстеження вже не існує.", show_alert=True)
         return ConversationHandler.END
-    field = "pct" if kind == "edpct" else "min"
+    field = "min"
     context.user_data["edit"] = {"field": field, "watch_id": watch_id}
     back = [InlineKeyboardButton("◀️ Назад", callback_data=f"editw:{watch_id}")]
 
-    if field == "pct":
-        presets = [10, 15, 20, 25, 30]
-        rows = [[InlineKeyboardButton(f"{p}%", callback_data=f"edval:{p}") for p in presets], back]
-        text = (
-            f"🎯 <b>#{watch_id}: бажаний прибуток</b>\nЗараз: {watch['discount_threshold_pct']:g}%\n\n"
-            "Скільки відсотків від ціни продажу має лишатись тобі після комісії eBay і доставки "
-            f"(мінімум {MIN_PROFIT_EUR}€). Чим більше — тим менше, але вигідніших знахідок.\n\n"
-            f"Обери кнопкою або надішли число від {MIN_ALLOWED_THRESHOLD_PCT} до {MAX_ALLOWED_THRESHOLD_PCT}."
-        )
-    else:
-        stats = get_market_stats(watch_id)
-        medians = sorted(s["median_price"] for s in stats)
-        presets = []
-        if medians:
-            base = medians[0]
-            presets = sorted({max(5, round(base * pct / 100 / 5) * 5) for pct in (30, 40, 50)})
-        rows = []
-        if presets:
-            rows.append([InlineKeyboardButton(f"{p:.0f}€", callback_data=f"edval:{p}") for p in presets])
-        rows.append([InlineKeyboardButton("Без обмеження", callback_data="edval:0")])
-        rows.append(back)
-        current = watch.get("min_price") or 0
-        text = (
-            f"💶 <b>#{watch_id}: мінімальна ціна</b>\nЗараз: {f'{current:.0f}€' if current else 'без обмеження'}\n\n"
-            "Лоти дешевші за цю ціну не враховуються — так відсіюються аксесуари й запчастини."
-            + ("\nКнопки — 30/40/50% від найменшої медіани ринку." if presets else "")
-            + "\n\nОбери кнопкою або надішли число в євро (0 — без обмеження)."
-        )
+    stats = get_market_stats(watch_id)
+    medians = sorted(s["median_price"] for s in stats)
+    presets = []
+    if medians:
+        base = medians[0]
+        presets = sorted({max(5, round(base * pct / 100 / 5) * 5) for pct in (30, 40, 50)})
+    rows = []
+    if presets:
+        rows.append([InlineKeyboardButton(f"{p:.0f}€", callback_data=f"edval:{p}") for p in presets])
+    rows.append([InlineKeyboardButton("Без обмеження", callback_data="edval:0")])
+    rows.append(back)
+    current = watch.get("min_price") or 0
+    text = (
+        f"💶 <b>{html.escape(watch['label'])}: мінімальна ціна</b>\nЗараз: {f'{current:.0f}€' if current else 'без обмеження'}\n\n"
+        "Лоти дешевші за цю ціну не враховуються — так відсіюються аксесуари й запчастини."
+        + ("\nКнопки — 30/40/50% від найменшої медіани ринку." if presets else "")
+        + "\n\nОбери кнопкою або надішли число в євро (0 — без обмеження)."
+    )
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
     return EDIT_VALUE
 
@@ -1287,21 +1323,11 @@ async def _apply_edit(update, context, raw_value):
         await show_panel(update, context, "Це не схоже на число. Спробуй ще раз.", reply_markup=back)
         return EDIT_VALUE
 
-    if edit["field"] == "pct":
-        if not (MIN_ALLOWED_THRESHOLD_PCT <= value <= MAX_ALLOWED_THRESHOLD_PCT):
-            await show_panel(
-                update, context,
-                f"Значення має бути від {MIN_ALLOWED_THRESHOLD_PCT} до {MAX_ALLOWED_THRESHOLD_PCT}. Спробуй ще раз.",
-                reply_markup=back,
-            )
-            return EDIT_VALUE
-        update_threshold(watch_id, chat_id, value)
-    else:
-        if value < 0:
-            await show_panel(update, context, "Ціна не може бути відʼємною. Спробуй ще раз.", reply_markup=back)
-            return EDIT_VALUE
-        update_watch_min_price(watch_id, chat_id, value)
-        reset_watch_market(watch_id)  # інша вибірка — ринок аналізуємо заново
+    if value < 0:
+        await show_panel(update, context, "Ціна не може бути відʼємною. Спробуй ще раз.", reply_markup=back)
+        return EDIT_VALUE
+    update_watch_min_price(watch_id, chat_id, value)
+    reset_watch_market(watch_id)  # інша вибірка — ринок аналізуємо заново
 
     context.user_data.pop("edit", None)
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
@@ -1328,6 +1354,8 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await watch_details_callback(update, context)
     elif data == "menu:list":
         await cmd_list(update, context)
+    elif data == "menu:refresh_usage":
+        await refresh_usage_callback(update, context)
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END
@@ -1377,6 +1405,27 @@ async def recalculate_median_callback(update: Update, context: ContextTypes.DEFA
 
 
 @require_access
+async def delwatch_ask_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """delwatch_ask:<id> — підтвердження видалення з картки товару."""
+    query_cb = update.callback_query
+    watch_id = int(query_cb.data.split(":")[1])
+    watch = get_watch(watch_id, update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Це відстеження вже не існує.", show_alert=True)
+        return
+    await _ack_callback(update)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Так, видалити", callback_data=f"delwatch_yes:{watch_id}"),
+        InlineKeyboardButton("❌ Ні", callback_data=f"watch_details:{watch_id}"),
+    ]])
+    await show_panel(
+        update, context,
+        f"🗑️ Видалити відстеження «{html.escape(watch['label'])}»?",
+        reply_markup=keyboard, parse_mode=ParseMode.HTML,
+    )
+
+
+@require_access
 async def delwatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wid = int(update.callback_query.data.split(":")[1])
     chat_id = update.effective_chat.id
@@ -1401,30 +1450,6 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     remove_watch(wid, chat_id)
     await update.message.reply_text(f"🗑️ Відстеження #{wid} вимкнено.")
-
-
-@require_access
-async def cmd_setthreshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if len(context.args) < 2:
-        await update.message.reply_text("Формат: /setthreshold <id> <%>")
-        return
-    try:
-        wid = int(context.args[0])
-        pct = float(context.args[1].replace("%", ""))
-    except ValueError:
-        await update.message.reply_text("Некоректні значення. Формат: /setthreshold <id> <%>")
-        return
-    if not (MIN_ALLOWED_THRESHOLD_PCT <= pct <= MAX_ALLOWED_THRESHOLD_PCT):
-        await update.message.reply_text(
-            f"Значення має бути від {MIN_ALLOWED_THRESHOLD_PCT} до {MAX_ALLOWED_THRESHOLD_PCT}."
-        )
-        return
-    if not get_watch(wid, chat_id):
-        await update.message.reply_text("Такого відстеження немає, дивись /list")
-        return
-    update_threshold(wid, chat_id, pct)
-    await update.message.reply_text(f"🎯 Бажаний прибуток для #{wid}: {pct}% від ціни продажу.")
 
 
 @require_access

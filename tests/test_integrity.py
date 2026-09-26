@@ -11,12 +11,12 @@ import os
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODULES = ["settings", "textparse", "db", "ebay_api", "market", "panel", "access",
+MODULES = ["settings", "textparse", "db", "learning", "ebay_api", "market", "panel", "access",
            "notifications", "handlers", "scheduler", "main"]
 
 
 def undefined_names(path):
-    tree = ast.parse(open(path, encoding="utf-8").read())
+    tree = ast.parse(open(path, encoding="utf-8-sig").read())
     defined = set(dir(builtins))
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -47,7 +47,7 @@ def test_module_imports(module):
 def test_imported_names_exist():
     """`from X import Y` — Y справді є в модулі X."""
     for module in MODULES:
-        tree = ast.parse(open(os.path.join(ROOT, f"{module}.py"), encoding="utf-8").read())
+        tree = ast.parse(open(os.path.join(ROOT, f"{module}.py"), encoding="utf-8-sig").read())
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module in MODULES:
                 source = importlib.import_module(node.module)

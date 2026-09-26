@@ -10,17 +10,10 @@ def test_percentile():
     assert market.percentile([], 25) is None
 
 
-def test_max_buy_price_gives_target_profit():
-    sale = 500
-    buy = market.max_buy_price(sale, 20)
-    _, profit = market.estimate_resale_profit(sale, buy)
-    assert profit == pytest.approx(sale * 0.20)
-
-
-def test_min_profit_floor():
-    # 10% від 100€ = 10€ < мінімальних 15€ → діє мінімум
-    _, profit = market.estimate_resale_profit(100, market.max_buy_price(100, 10))
-    assert profit == pytest.approx(settings.MIN_PROFIT_EUR)
+def test_max_buy_price_leaves_min_profit():
+    for sale in (100, 500, 1200):
+        _, profit = market.estimate_resale_profit(sale, market.max_buy_price(sale))
+        assert profit == pytest.approx(settings.MIN_PROFIT_EUR)
 
 
 def test_compat_aspects_mark_accessory():
