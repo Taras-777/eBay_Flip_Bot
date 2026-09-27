@@ -61,3 +61,32 @@ def test_accessory_with_compat_aspect_is_not_a_deal(fake_ebay):
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
     assert not [m for m in app.bot.messages if "Вигідна пропозиція" in m]
+
+
+def test_price_drop_notifies_again(fake_ebay):
+    fake_ebay.listings = consoles()
+    db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    app = make_app()
+    asyncio.run(scheduler.check_all_watches(app))
+
+    fake_ebay.listings = [listing("deal", "Sony PlayStation 5 Slim 1TB Konsole", 300)] + consoles()
+    asyncio.run(scheduler.check_all_watches(app))
+    app.bot.messages.clear()
+    fake_ebay.listings = [listing("deal", "Sony PlayStation 5 Slim 1TB Konsole", 250)] + consoles()
+    asyncio.run(scheduler.check_all_watches(app))
+    deals = [m for m in app.bot.messages if "Вигідна пропозиція" in m]
+    assert len(deals) == 1 and "Продавець знизив ціну" in deals[0]
+
+
+def test_many_deals_come_as_one_message(fake_ebay):
+    fake_ebay.listings = consoles()
+    db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    app = make_app()
+    asyncio.run(scheduler.check_all_watches(app))
+
+    cheap = [listing(f"cheap{i}", "Sony PlayStation 5 Slim 1TB Konsole", 250 + i) for i in range(7)]
+    fake_ebay.listings = cheap + consoles()
+    app.bot.messages.clear()
+    asyncio.run(scheduler.check_all_watches(app))
+    grouped = [m for m in app.bot.messages if "Знайдено" in m]
+    assert len(grouped) == 1 and "7 вигідних пропозицій" in grouped[0]

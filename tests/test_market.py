@@ -44,3 +44,82 @@ def test_group_stats_only_for_large_groups():
     stats = market._compute_group_stats(1, items)
     assert ("used", "*") in stats and ("used", "825GB") in stats
     assert ("used", "1TB") not in stats  # 3 оголошення — замало для окремої групи
+
+
+def test_estimate_resale_profit():
+    # 500€ продаж − 15% комісії − 7€ доставки = 418€; купівля 300€ → 118€
+    _, profit = market.estimate_resale_profit(500, 300)
+    assert profit == pytest.approx(118)
+
+
+def _no_budget_limits(monkeypatch):
+    monkeypatch.setattr(market, "browse_budget_left", lambda: 4000)
+
+
+def test_annotate_items_uses_cache_on_second_call(monkeypatch):
+    _no_budget_limits(monkeypatch)
+    fetched = []
+
+    def fake_fetch(item_id):
+        fetched.append(item_id)
+        return {"speicherkapazität": "825 GB"}
+
+    monkeypatch.setattr(market, "fetch_item_aspects", fake_fetch)
+    watch = {"required_aspect": None, "require_spec": None}
+    items = [{"item_id": f"x{i}", "title": "Sony PlayStation 5"} for i in range(5)]
+    market._annotate_items(items, max_lookups=10, watch=watch)
+    assert sorted(fetched) == [f"x{i}" for i in range(5)]
+    assert all(it["aspects"] for it in items)
+
+    again = [{"item_id": f"x{i}", "title": "Sony PlayStation 5"} for i in range(5)]
+    market._annotate_items(again, max_lookups=10, watch=watch)
+    assert len(fetched) == 5  # другий раз — з кешу, без запитів
+    assert all(it["aspects"] for it in again)
+
+
+def test_annotate_items_respects_lookup_limit(monkeypatch):
+    _no_budget_limits(monkeypatch)
+    monkeypatch.setattr(market, "fetch_item_aspects", lambda item_id: {"a": "b"})
+    items = [{"item_id": f"y{i}", "title": "Sony PlayStation 5"} for i in range(10)]
+    market._annotate_items(items, max_lookups=3, watch={"required_aspect": None, "require_spec": None})
+    assert sum(1 for it in items if it["aspects"] is not None) == 3
+
+
+def test_annotate_items_runs_lookups_in_parallel(monkeypatch):
+    import time
+    _no_budget_limits(monkeypatch)
+
+    def slow_fetch(item_id):
+        time.sleep(0.2)
+        return {"a": "b"}
+
+    monkeypatch.setattr(market, "fetch_item_aspects", slow_fetch)
+    items = [{"item_id": f"z{i}", "title": "Sony PlayStation 5"} for i in range(16)]
+    start = time.time()
+    market._annotate_items(items, max_lookups=16, watch={"required_aspect": None, "require_spec": None})
+    assert time.time() - start < 1.5  # по черзі було б 3,2 с
+
+
+def test_failed_lookup_does_not_break_others(monkeypatch):
+    _no_budget_limits(monkeypatch)
+
+    def flaky(item_id):
+        if item_id == "bad":
+            raise RuntimeError("eBay недоступний")
+        return {"a": "b"}
+
+    monkeypatch.setattr(market, "fetch_item_aspects", flaky)
+    items = [{"item_id": "bad", "title": "PS5"}, {"item_id": "good", "title": "PS5"}]
+    market._annotate_items(items, max_lookups=5, watch={"required_aspect": None, "require_spec": None})
+    assert items[0]["aspects"] is None and items[1]["aspects"] == {"a": "b"}
+
+
+def test_rejected_item_filtered_only_for_its_watch():
+    import db
+    import learning
+    w1 = db.get_watch(db.add_watch(1, "PS5", "PS5", "", "", 25), 1)
+    w2 = db.get_watch(db.add_watch(1, "PS5 Digital", "PS5 Digital", "", "", 25), 1)
+    learning.hide_item(w1, "x", "Sony PlayStation 5")
+    item = [{"item_id": "x", "title": "Sony PlayStation 5 825GB", "spec_group": "825GB", "aspects": {}}]
+    assert market._apply_item_filters(w1, item) == []
+    assert len(market._apply_item_filters(w2, item)) == 1
