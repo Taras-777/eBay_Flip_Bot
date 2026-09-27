@@ -103,6 +103,13 @@ def reject_and_learn(watch, item_id, title):
     return words
 
 
+def hide_item(watch, item_id, title):
+    """«🙈 Сховати»: той самий товар, але цей лот не підходить (пошкодження,
+    розбитий екран…). Більше не показується і не впливає на ціни, але слова
+    з його назви бот НЕ вчить — назва зазвичай така сама, як у справних."""
+    reject_item(watch["id"], item_id, title, reason="hidden")
+
+
 def unlearn_word(watch_id, chat_id, word):
     """Скасовує вивчене слово: прибирає з виключених і більше не пропонує."""
     watch = get_watch(watch_id, chat_id)
@@ -115,5 +122,7 @@ def unlearn_word(watch_id, chat_id, word):
 
 def learned_words_note(words):
     quoted = ", ".join(f"«{w}»" for w in words)
-    return (f"🧠 Помітив закономірність: {quoted} — у відхилених лотах і майже ніколи в правильних. "
-            f"Тепер такі лоти відсіюються автоматично.")
+    word = "Слово" if len(words) == 1 else "Слова"
+    verb = "часто трапляється" if len(words) == 1 else "часто трапляються"
+    return (f"🧠 {word} {quoted} {verb} в оголошеннях, які ти відхилив, — "
+            f"тепер відсіюю такі автоматично.")

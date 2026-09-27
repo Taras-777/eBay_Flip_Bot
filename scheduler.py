@@ -6,6 +6,7 @@
 import asyncio
 import config
 import time
+from concurrent.futures import ThreadPoolExecutor
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, ContextTypes
 
@@ -17,6 +18,7 @@ from settings import (
     MARKET_REFRESH_MINUTES,
     MAX_SPEC_LOOKUPS_PER_DEAL_SCAN,
     SEARCH_RESERVE,
+    THREAD_POOL_SIZE,
     WATCH_CONCURRENCY,
     log,
 )
@@ -162,7 +164,7 @@ async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=config.OWNER_TELEGRAM_ID,
                 text=f"⚠️ Помилка в боті: {type(err).__name__}: {str(err)[:300]}\n"
-                     "Повні деталі — в логах (journalctl -u ebay-bot).",
+                     "Повні деталі — в логах (sudo docker compose logs).",
             )
         except Exception:
             pass
@@ -215,16 +217,18 @@ async def scheduler_loop(app: Application):
 
 
 async def post_init(app: Application):
+    # Більше потоків для мережевих запитів: фонова перевірка товарів не
+    # займає всі потоки, тож кнопки не чекають, поки вона закінчиться
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE, thread_name_prefix="bot"))
     app.bot_data["scheduler_task"] = asyncio.create_task(scheduler_loop(app))
     # Список команд, що випадає над клавіатурою в Telegram
     await app.bot.set_my_commands([
         ("start", "Головне меню та довідка"),
         ("menu", "Показати меню"),
-        ("addwatch", "➕ Додати товар для відстеження"),
-        ("list", "📦 Мої відстеження"),
+        ("addwatch", "➕ Додати товар"),
+        ("list", "📦 Мої товари"),
         ("stats", "📊 Моя статистика"),
-        ("remove", "Вимкнути відстеження за id"),
-        ("setminprice", "Змінити мінімальну ціну"),
         ("cancel", "Скасувати поточну дію"),
     ])
 

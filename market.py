@@ -5,10 +5,12 @@
 
 import asyncio
 import statistics
+from concurrent.futures import ThreadPoolExecutor
 
 from settings import (
     ASPECT_LOOKUP_ALL,
     ASPECT_LOOKUP_ENABLED,
+    ASPECT_LOOKUP_WORKERS,
     DEFAULT_CONDITION_IDS,
     EBAY_SELLING_FEES_PCT,
     MARKET_SCAN_PAGES,
@@ -28,6 +30,7 @@ from textparse import (
     COMPAT_ASPECTS,
     _aspect_satisfied_by_title,
     extract_spec_key,
+    plural,
     spec_key_from_aspects,
     spec_required_by_default,
 )
@@ -167,12 +170,12 @@ def _annotate_items(items, max_lookups=0, watch=None):
             browse_budget_left() - SEARCH_RESERVE,  # характеристики — лише з "вільного" бюджету
         )
 
+    to_fetch = []
     for it in candidates:
-        title_spec = it["spec_group"]
         entry = cached.get(it["item_id"])
         if entry is not None:
             spec, aspects = entry
-            if title_spec == "unspecified":
+            if it["spec_group"] == "unspecified":
                 it["spec_group"] = spec
             if aspects is not None:
                 it["aspects"] = aspects
@@ -182,11 +185,26 @@ def _annotate_items(items, max_lookups=0, watch=None):
         if lookups_left <= 0:
             continue
         lookups_left -= 1
+        to_fetch.append(it)
+
+    if not to_fetch:
+        return items
+
+    def _fetch(item_id):
         try:
-            aspects = fetch_item_aspects(it["item_id"])
+            return fetch_item_aspects(item_id)
         except Exception as e:
-            log.debug("Не вдалося отримати характеристики лота %s: %s", it["item_id"], e)
+            log.debug("Не вдалося отримати характеристики лота %s: %s", item_id, e)
+            return None
+
+    # Запити паралельно — інакше 40 лотів це ~20 секунд очікування
+    with ThreadPoolExecutor(max_workers=min(ASPECT_LOOKUP_WORKERS, len(to_fetch))) as pool:
+        results = list(pool.map(_fetch, [it["item_id"] for it in to_fetch]))
+
+    for it, aspects in zip(to_fetch, results):
+        if aspects is None:
             continue
+        title_spec = extract_spec_key(it["title"])
         spec = title_spec if title_spec != "unspecified" else spec_key_from_aspects(it["title"], aspects)
         save_cached_spec(it["item_id"], spec, aspects)
         it["spec_group"] = spec
@@ -301,10 +319,10 @@ def _compute_group_stats(watch_id, items):
         gone = filter_outliers(get_gone_prices(watch_id, cond, None if spec == "*" else spec))
         if len(gone) >= MIN_SOLD_SAMPLE:
             sale_price = min(statistics.median(gone), median_price)
-            source = f"зниклі лоти, {len(gone)} шт."
+            source = f"за {plural(len(gone), 'проданим', 'проданими', 'проданими')}"
         else:
             sale_price = percentile(clean, SALE_PRICE_PERCENTILE)
-            source = "нижня чверть пропозицій"
+            source = "за поточними оголошеннями"
         stats[(cond, spec)] = {
             "cond_group": cond, "spec_group": spec,
             "median_price": median_price, "sale_price": sale_price,

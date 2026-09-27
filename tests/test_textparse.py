@@ -56,3 +56,12 @@ def test_laptop_ram_from_aspects():
 ])
 def test_category_translation(name, expected):
     assert category_label(name) == expected
+
+
+@pytest.mark.parametrize("n,expected", [
+    (1, "1 оголошення"), (2, "2 оголошення"), (5, "5 оголошень"), (11, "11 оголошень"),
+    (12, "12 оголошень"), (21, "21 оголошення"), (24, "24 оголошення"), (111, "111 оголошень"),
+])
+def test_plural(n, expected):
+    from textparse import plural
+    assert plural(n, "оголошення", "оголошення", "оголошень") == expected

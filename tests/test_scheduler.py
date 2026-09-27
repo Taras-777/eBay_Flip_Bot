@@ -42,12 +42,12 @@ def test_deal_found_once(fake_ebay):
     fake_ebay.listings = [listing("deal", "Sony PlayStation 5 Slim 1TB Konsole", 250)] + consoles()
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
-    deals = [m for m in app.bot.messages if "Вигідний лот" in m]
+    deals = [m for m in app.bot.messages if "Вигідна пропозиція" in m]
     assert len(deals) == 1 and "250€" in deals[0]
 
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))       # той самий лот — без повтору
-    assert not [m for m in app.bot.messages if "Вигідний лот" in m]
+    assert not [m for m in app.bot.messages if "Вигідна пропозиція" in m]
 
 
 def test_accessory_with_compat_aspect_is_not_a_deal(fake_ebay):
@@ -60,4 +60,4 @@ def test_accessory_with_compat_aspect_is_not_a_deal(fake_ebay):
     fake_ebay.aspects["case"] = {"Kompatibles Modell": "PlayStation 5 Slim"}
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
-    assert not [m for m in app.bot.messages if "Вигідний лот" in m]
+    assert not [m for m in app.bot.messages if "Вигідна пропозиція" in m]

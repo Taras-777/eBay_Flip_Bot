@@ -17,6 +17,7 @@ from db import (
     upsert_user_request,
 )
 from panel import _ack_callback, back_to_menu_keyboard, refresh_owner_menu, show_panel
+from textparse import plural
 
 
 async def _notify_owner_new_request(bot, user):
@@ -164,7 +165,7 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for u in users:
         name = u["username"] and f"@{u['username']}" or u["first_name"] or str(u["user_id"])
         watch_count = len(list_watches(chat_id=u["chat_id"]))
-        lines.append(f"👤 {name} — ID {u['user_id']} · 📦 {watch_count} відстежень")
+        lines.append(f"👤 {name} — ID {u['user_id']} · 📦 {plural(watch_count, 'товар', 'товари', 'товарів')}")
     lines.append("\nДеталі по користувачу: /userstats <id>")
     await show_panel(update, context, "\n".join(lines), reply_markup=back_to_menu_keyboard())
 
@@ -191,11 +192,11 @@ async def cmd_userstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = [f"👤 {name} (ID: {target_id})\n"]
     if watches:
-        lines.append("📦 Відстеження:")
+        lines.append("📦 Товари:")
         for w in watches:
             lines.append(f"  #{w['id']} {w['label']}")
     else:
-        lines.append("📦 Немає активних відстежень.")
+        lines.append("📦 Немає товарів.")
 
     lines.append(
         f"\n📊 Знахідки: ✅ куплено {deal_stats.get('bought', 0)} · "

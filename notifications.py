@@ -5,7 +5,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from settings import EBAY_SELLING_FEES_PCT, RESALE_SHIPPING_EUR, log
-from textparse import _group_label
+from textparse import _group_label, plural
 from market import estimate_resale_profit, max_buy_price
 from panel import notify
 
@@ -21,14 +21,14 @@ async def _send_single_deal(app, w, deal_id, it, stat):
         if it["has_best_offer"] else ""
     )
     spec_note = f" · 💾 {it['spec_group']}" if it["spec_group"] != "unspecified" else ""
-    price_drop_note = "\n🔻 Ціна впала ще нижче з моменту першої появи цього лота" if it.get("price_dropped") else ""
+    price_drop_note = "\n🔻 Продавець знизив ціну" if it.get("price_dropped") else ""
 
     text = (
-        f"🔥 Вигідний лот: {w['label']}{price_drop_note}\n\n"
+        f"🔥 Вигідна пропозиція: {w['label']}{price_drop_note}\n\n"
         f"{it['title']}\n"
         f"💶 Ціна з доставкою: {it['total_price']:.0f}€ (купувати варто до ~{buy_limit:.0f}€)\n"
-        f"📈 Реалістична ціна продажу: ~{sale_price:.0f}€ ({stat['sale_source']})\n"
-        f"📊 Медіана пропозицій: ~{stat['median_price']:.0f}€\n"
+        f"📈 Продати за: ~{sale_price:.0f}€ ({stat['sale_source']})\n"
+        f"📊 Типова ціна оголошень: ~{stat['median_price']:.0f}€\n"
         f"💰 Орієнтовний прибуток: ~{profit:.0f}€ "
         f"(після комісії eBay ~{EBAY_SELLING_FEES_PCT}% і доставки ~{RESALE_SHIPPING_EUR}€)\n"
         f"🏷️ Стан: {it.get('condition') or 'н/д'}{spec_note}{warning}{best_offer_note}\n"
@@ -40,14 +40,17 @@ async def _send_single_deal(app, w, deal_id, it, stat):
             InlineKeyboardButton("✅ Куплено", callback_data=f"buy:{deal_id}"),
             InlineKeyboardButton("❌ Пропущено", callback_data=f"skip:{deal_id}"),
         ],
-        [InlineKeyboardButton("🚫 Не той товар", callback_data=f"rejd:{deal_id}")],
+        [
+            InlineKeyboardButton("🙈 Сховати", callback_data=f"hided:{deal_id}"),
+            InlineKeyboardButton("❌ Інший товар", callback_data=f"rejd:{deal_id}"),
+        ],
         [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
     ]
     await notify(app, w["chat_id"], text, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def _send_grouped_deals(app, w, new_deals):
-    lines = [f"🔥 Знайдено {len(new_deals)} вигідних лотів: {w['label']}\n"]
+    lines = [f"🔥 Знайдено {plural(len(new_deals), 'вигідну пропозицію', 'вигідні пропозиції', 'вигідних пропозицій')}: {w['label']}\n"]
     reject_buttons = []
     for n, (deal_id, it, stat) in enumerate(new_deals, 1):
         sale_price = stat["sale_price"] or stat["median_price"]
@@ -56,26 +59,29 @@ async def _send_grouped_deals(app, w, new_deals):
         offer_mark = " 🎯" if it["has_best_offer"] else ""
         drop_mark = " 🔻" if it.get("price_dropped") else ""
         spec_note = f" · 💾 {it['spec_group']}" if it["spec_group"] != "unspecified" else ""
-        reject_buttons.append(InlineKeyboardButton(f"🚫 #{n} не той", callback_data=f"rejd:{deal_id}"))
+        reject_buttons.append([
+            InlineKeyboardButton(f"🙈 #{n} сховати", callback_data=f"hided:{deal_id}"),
+            InlineKeyboardButton(f"❌ #{n} інший товар", callback_data=f"rejd:{deal_id}"),
+        ])
         lines.append(
             f"{n}. {it['title'][:120]}\n"
             f"💰 {it['total_price']:.0f}€ → продаж ~{sale_price:.0f}€, прибуток ~{profit:.0f}€"
             f"{spec_note}{warning}{offer_mark}{drop_mark}\n🔗 {it['url']}"
         )
-    rows = [reject_buttons[i:i + 3] for i in range(0, len(reject_buttons), 3)]
+    rows = list(reject_buttons)
     rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
     await notify(app, w["chat_id"], "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def _notify_median_ready(app, w, new_stats):
     """Сповіщає, щойно для товару вперше порахувалась статистика групи."""
-    lines = [f"📊 Ринок для «{w['label']}» проаналізовано — тепер шукаю вигідні лоти!\n"]
+    lines = [f"📊 Ринок для «{w['label']}» проаналізовано — тепер шукаю вигідні пропозиції!\n"]
     for s in new_stats:
         sale_price = s["sale_price"] or s["median_price"]
         buy_limit = max_buy_price(sale_price)
         lines.append(
             f"• {_group_label(s['cond_group'], s['spec_group'])}: продати ~{sale_price:.0f}€, "
-            f"купувати до ~{buy_limit:.0f}€ ({s['sample_size']} оголошень)"
+            f"купувати до ~{buy_limit:.0f}€ ({plural(s['sample_size'], 'оголошення', 'оголошення', 'оголошень')})"
         )
     try:
         await notify(app, w["chat_id"], "\n".join(lines))
@@ -85,7 +91,7 @@ async def _notify_median_ready(app, w, new_stats):
 
 async def _notify_median_problem(app, w, reason):
     text = (
-        f"⚠️ Не вдалося порахувати медіану для «{w['label']}».\n\n"
+        f"⚠️ Не вдалося порахувати ціни для «{w['label']}».\n\n"
         f"Причина: {reason}\n\n"
         "Спробуй оновити оголошення пізніше або перевірити назву товару."
     )

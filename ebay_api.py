@@ -3,6 +3,7 @@
 категорії (Taxonomy), облік лімітів запитів.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import base64
 import config
 import requests
@@ -400,7 +401,7 @@ def api_usage_line():
     data = _rate_limit_cache["data"]
     if data:
         line = (f"📡 Запити до eBay сьогодні: <b>{data['count']}</b> / {data['limit']} "
-                f"(залишилось {data['remaining']}; бот тримається до ~{DAILY_BROWSE_BUDGET})")
+                f"(залишилось {data['remaining']}; бот використовує не більше ~{DAILY_BROWSE_BUDGET})")
         if data["reset"]:
             reset_local = datetime.fromtimestamp(data["reset"], LOCAL_TZ).strftime("%H:%M")
             line += f"\n🔄 Ліміт скинеться о {reset_local}"
@@ -496,7 +497,7 @@ def get_category_options(query, condition_ids=DEFAULT_CONDITION_IDS):
 
 
 def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fresh=False,
-                        category_id=None, min_price=None, sort="newlyListed", offset=0):
+                        category_id=None, min_price=None, sort="newlyListed", offset=0, stats=None):
     """
     Пошук активних оголошень через eBay Browse API.
     Сортування — за датою публікації (newlyListed), а не за ціною.
@@ -512,6 +513,10 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
         query, condition_ids=condition_ids, exclude_terms=exclude_terms, limit=limit,
         category_id=category_id, min_price=min_price, fresh=fresh, sort=sort, offset=offset,
     )
+
+    if stats is not None:
+        # Скільки лотів eBay повернув ДО наших фільтрів — щоб знати, чи видача закінчилась
+        stats["raw"] = stats.get("raw", 0) + len(data.get("itemSummaries") or [])
 
     items = []
     for it in data.get("itemSummaries", []):
@@ -623,9 +628,25 @@ def search_in_categories(category_ids, sort="newlyListed", **kwargs):
     окремо й об'єднуємо без дублікатів. Без категорій — один запит без обмеження.
     Кожна додаткова категорія = ще один запит до eBay.
     """
+    cids = list(category_ids) or [None]
+    stats = kwargs.pop("stats", None)
+
+    def _one(cid):
+        local = {} if stats is not None else None
+        return search_active_items(category_id=cid, sort=sort, stats=local, **kwargs), local
+
+    if len(cids) == 1:
+        results = [_one(cids[0])]
+    else:
+        # Кілька категорій — запити паралельно, а не по черзі
+        with ThreadPoolExecutor(max_workers=min(4, len(cids))) as pool:
+            results = list(pool.map(_one, cids))
+
     merged, seen = [], set()
-    for cid in (list(category_ids) or [None]):
-        for it in search_active_items(category_id=cid, sort=sort, **kwargs):
+    for found, local in results:
+        if stats is not None:
+            stats["raw"] = stats.get("raw", 0) + local.get("raw", 0)
+        for it in found:
             if it["item_id"] and it["item_id"] not in seen:
                 seen.add(it["item_id"])
                 merged.append(it)

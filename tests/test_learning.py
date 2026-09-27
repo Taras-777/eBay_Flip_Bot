@@ -70,4 +70,31 @@ def test_rejected_item_never_becomes_a_deal(fake_ebay):
     fake_ebay.listings = [listing("cheap", "Sony PlayStation 5 Slim 1TB Konsole", 250)] + consoles
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
-    assert not [m for m in app.bot.messages if "Вигідний лот" in m]
+    assert not [m for m in app.bot.messages if "Вигідна пропозиція" in m]
+
+
+def test_hidden_item_is_filtered_but_words_not_learned():
+    w = _watch_with_listings(GOOD)
+    learning.hide_item(w, "h1", "Sony PlayStation 5 Displaybruch Riss")
+    learning.hide_item(w, "h2", "Sony PlayStation 5 Riss am Gehäuse")
+    items = [{"item_id": "h1", "title": "x", "spec_group": "825GB", "aspects": {}},
+             {"item_id": "ok", "title": "x", "spec_group": "825GB", "aspects": {}}]
+    assert [i["item_id"] for i in market._apply_item_filters(w, items)] == ["ok"]
+    # «Сховані» назви не використовуються для навчання слів
+    assert db.get_rejected_titles(w["id"]) == []
+    assert "riss" not in db.get_watch(w["id"], 1)["exclude"].split()
+
+
+def test_old_rejected_items_table_gets_reason_column(tmp_path, monkeypatch):
+    import sqlite3
+    import settings
+    path = str(tmp_path / "old.sqlite3")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE rejected_items (watch_id INTEGER NOT NULL, item_id TEXT NOT NULL, "
+                 "title TEXT, created_at INTEGER NOT NULL, PRIMARY KEY (watch_id, item_id))")
+    conn.execute("INSERT INTO rejected_items VALUES (1, 'a', 'PS3 Slim', 0)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(settings, "DB_PATH", path)
+    db.init_db()
+    assert db.get_rejected_titles(1) == ["PS3 Slim"]  # старі записи — «не той товар»

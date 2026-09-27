@@ -122,12 +122,15 @@ CREATE TABLE IF NOT EXISTS category_hints (
     created_at INTEGER NOT NULL
 );
 
--- Лоти, які користувач позначив «🚫 Не той товар» — більше не враховуються
+-- Лоти, які користувач прибрав: reason='wrong' — «🚫 Не той товар» (з них
+-- бот вчить слова), 'hidden' — «🙈 Сховати» (той товар, але не підходить:
+-- розбитий екран, пошкодження тощо). І ті, і ті більше не враховуються.
 CREATE TABLE IF NOT EXISTS rejected_items (
     watch_id INTEGER NOT NULL,
     item_id TEXT NOT NULL,
     title TEXT,
     created_at INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT 'wrong',
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -235,6 +238,10 @@ def init_db():
         for col in ("title", "url"):
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} TEXT")
+
+        rej_cols = {r["name"] for r in conn.execute("PRAGMA table_info(rejected_items)").fetchall()}
+        if rej_cols and "reason" not in rej_cols:
+            conn.execute("ALTER TABLE rejected_items ADD COLUMN reason TEXT NOT NULL DEFAULT 'wrong'")
 
         spec_cols = {r["name"] for r in conn.execute("PRAGMA table_info(item_specs)").fetchall()}
         if "aspects_json" not in spec_cols:
@@ -824,14 +831,14 @@ def get_deal_stats(chat_id):
 
 # ---------- «🚫 Не той товар» і вивчені слова ----------
 
-def reject_item(watch_id, item_id, title):
+def reject_item(watch_id, item_id, title, reason="wrong"):
     """Позначає лот як чужий для цього товару: більше не потрапляє ні в
     ринкову статистику, ні в знахідки. Прибираємо його і з поточних
     спостережень, щоб ціна не зарахувалась як «зниклий» (проданий) лот."""
     with get_conn() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO rejected_items (watch_id, item_id, title, created_at) VALUES (?, ?, ?, ?)",
-            (watch_id, item_id, title or "", int(time.time())),
+            "INSERT OR IGNORE INTO rejected_items (watch_id, item_id, title, created_at, reason) VALUES (?, ?, ?, ?, ?)",
+            (watch_id, item_id, title or "", int(time.time()), reason),
         )
         conn.execute("DELETE FROM listing_obs WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))
 
@@ -845,7 +852,8 @@ def get_rejected_ids(watch_id):
 def get_rejected_titles(watch_id):
     with get_conn() as conn:
         return [r["title"] for r in conn.execute(
-            "SELECT title FROM rejected_items WHERE watch_id = ? AND title != ''", (watch_id,)).fetchall()]
+            "SELECT title FROM rejected_items WHERE watch_id = ? AND title != '' AND reason = 'wrong'",
+            (watch_id,)).fetchall()]
 
 
 def get_learned_words(watch_id):

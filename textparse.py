@@ -508,3 +508,16 @@ def spec_required_by_default(query):
     майже завжди — аксесуар, чохол чи запчастина."""
     tokens = _search_tokens(query)
     return bool(tokens & (PHONE_QUERY_TERMS | LAPTOP_QUERY_TERMS | CONSOLE_QUERY_TERMS))
+
+
+def plural(n, one, few, many):
+    """Число з правильною формою слова: 1 оголошення, 3 оголошення, 5 оголошень,
+    21 оголошення, 11 оголошень."""
+    n_abs = abs(int(n))
+    if n_abs % 10 == 1 and n_abs % 100 != 11:
+        word = one
+    elif 2 <= n_abs % 10 <= 4 and not 12 <= n_abs % 100 <= 14:
+        word = few
+    else:
+        word = many
+    return f"{n} {word}"

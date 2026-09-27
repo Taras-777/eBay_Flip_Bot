@@ -21,7 +21,6 @@ from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revok
 from handlers import (
     ASK_CATEGORY,
     ASK_CUSTOM_MIN_PRICE,
-    ASK_DELETE_ID,
     ASK_MIN_PRICE_CHOICE,
     ASK_QUERY,
     EDIT_VALUE,
@@ -36,19 +35,11 @@ from handlers import (
     change_category_callback,
     cmd_list,
     cmd_menu,
-    cmd_remove,
-    cmd_requirespec,
-    cmd_setconditions,
-    cmd_setexclude,
-    cmd_setminprice,
     cmd_start,
     cmd_stats,
     config_listings_callback,
     deal_action_callback,
-    delete_cancel,
-    delete_menu_interrupt,
     delwatch_ask_callback,
-    delwatch_prompt_callback,
     delwatch_yes_callback,
     edit_cancel,
     edit_interrupt,
@@ -56,8 +47,8 @@ from handlers import (
     edit_value_button,
     edit_value_start,
     edit_value_text,
-    got_delete_id,
     recalculate_median_callback,
+    listing_page_callback,
     reject_deal_callback,
     reject_listing_callback,
     unlearn_word_callback,
@@ -126,24 +117,6 @@ def main():
         ],
     )
 
-    delete_conv = ConversationHandler(
-        name="delete_conv",
-        persistent=True,
-        entry_points=[
-            CallbackQueryHandler(delwatch_prompt_callback, pattern="^delwatch_prompt$"),
-        ],
-        states={
-            ASK_DELETE_ID: [
-                CallbackQueryHandler(delete_menu_interrupt, pattern="^menu:"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, got_delete_id),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", delete_cancel),
-            CallbackQueryHandler(delete_menu_interrupt, pattern="^menu:"),
-        ],
-    )
-
     edit_conv = ConversationHandler(
         name="edit_conv",
         persistent=True,
@@ -164,14 +137,8 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(addwatch_conv)
-    app.add_handler(delete_conv)
     app.add_handler(edit_conv)
     app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("remove", cmd_remove))
-    app.add_handler(CommandHandler("setminprice", cmd_setminprice))
-    app.add_handler(CommandHandler("setexclude", cmd_setexclude))
-    app.add_handler(CommandHandler("requirespec", cmd_requirespec))
-    app.add_handler(CommandHandler("setconditions", cmd_setconditions))
     app.add_handler(CommandHandler("stats", cmd_stats))
 
     # Команди власника (керування доступом)
@@ -183,9 +150,10 @@ def main():
 
     app.add_handler(CallbackQueryHandler(deal_action_callback, pattern="^(buy|skip):"))
     app.add_handler(CallbackQueryHandler(access_decision_callback, pattern="^access:"))
-    # «🚫 Не той товар» і скасування вивчених слів
-    app.add_handler(CallbackQueryHandler(reject_deal_callback, pattern="^rejd:"))
-    app.add_handler(CallbackQueryHandler(reject_listing_callback, pattern="^rejl:"))
+    # «🚫 Не той товар», «🙈 Сховати» і скасування вивчених слів
+    app.add_handler(CallbackQueryHandler(reject_deal_callback, pattern="^(rejd|hided):"))
+    app.add_handler(CallbackQueryHandler(reject_listing_callback, pattern="^(rejl|hidel):"))
+    app.add_handler(CallbackQueryHandler(listing_page_callback, pattern="^lpage:"))
     app.add_handler(CallbackQueryHandler(unlearn_word_callback, pattern="^unlw:"))
     # Кнопки головного меню (коли жоден діалог не активний)
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))

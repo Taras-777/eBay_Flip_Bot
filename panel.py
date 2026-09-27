@@ -8,6 +8,7 @@ import asyncio
 import config
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from settings import is_owner, log
@@ -33,7 +34,7 @@ async def _ack_callback(update: Update):
 
 MENU_LABELS = {
     "addwatch": "➕ Додати товар",
-    "list": "📦 Мої відстеження",
+    "list": "📦 Мої товари",
     "stats": "📊 Статистика",
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
@@ -94,8 +95,14 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
     """
     chat_id = update.effective_chat.id
     _remember_panel(context, text, reply_markup, parse_mode)
+    previous_id = context.user_data.get("panel_message_id")
     if update.callback_query:
-        context.user_data["panel_message_id"] = update.callback_query.message.message_id
+        # Натиснута кнопка на повідомленні — воно й стає панеллю. Якщо панеллю
+        # досі було інше повідомлення, прибираємо його, щоб меню не двоїлось.
+        clicked_id = update.callback_query.message.message_id
+        if previous_id and previous_id != clicked_id:
+            await _delete_quietly(context.bot, chat_id, previous_id)
+        context.user_data["panel_message_id"] = clicked_id
     elif update.message:
         try:
             await update.message.delete()
@@ -110,6 +117,10 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
                 reply_markup=reply_markup, parse_mode=parse_mode,
             )
             return
+        except BadRequest as e:
+            if "not modified" in str(e).lower():
+                return  # на екрані вже те саме — нове повідомлення не потрібне
+            log.debug("Не вдалося відредагувати панель (%s) — надсилаю нову", e)
         except Exception as e:
             log.debug("Не вдалося відредагувати панель (%s) — надсилаю нову", e)
 
@@ -117,6 +128,15 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
         chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode
     )
     context.user_data["panel_message_id"] = msg.message_id
+    if panel_id and panel_id != msg.message_id:
+        await _delete_quietly(context.bot, chat_id, panel_id)  # стара панель не має лишатись
+
+
+async def _delete_quietly(bot, chat_id, message_id):
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        log.debug("Не вдалося видалити старе повідомлення панелі %s: %s", message_id, e)
 
 
 def _remember_panel(context, text, reply_markup, parse_mode):
