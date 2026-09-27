@@ -11,13 +11,13 @@ import os
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODULES = ["settings", "textparse", "db", "learning", "checker", "ebay_api", "market", "panel", "access",
+MODULES = ["settings", "version", "textparse", "db", "learning", "checker", "ebay_api", "market", "panel", "access",
            "notifications", "handlers", "scheduler", "main"]
 
 
 def undefined_names(path):
     tree = ast.parse(open(path, encoding="utf-8-sig").read())
-    defined = set(dir(builtins))
+    defined = set(dir(builtins)) | {"__file__", "__name__", "__doc__"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             defined.add(node.name)

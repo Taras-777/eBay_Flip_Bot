@@ -14,6 +14,7 @@ from telegram.ext import ContextTypes
 from settings import is_owner, log
 from db import list_users
 from ebay_api import api_usage_line, fetch_browse_rate_limit
+from version import get_version
 
 
 async def _ack_callback(update: Update):
@@ -46,13 +47,15 @@ MAIN_MENU_TEXT = "📋 <b>Головне меню</b> — обери дію:"
 
 
 def main_menu_text(user_id=None):
-    """Текст головного меню; власник додатково бачить використання eBay API."""
+    """Текст головного меню; власник додатково бачить використання eBay API.
+    Внизу — версія бота (змінюється сама після кожного оновлення коду)."""
+    footer = f"\n\n<i>🏷 Версія {get_version()}</i>"
     if user_id is not None and is_owner(user_id):
         try:
-            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line()}"
+            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line()}{footer}"
         except Exception as e:
             log.debug("Не вдалося сформувати рядок використання API: %s", e)
-    return MAIN_MENU_TEXT
+    return MAIN_MENU_TEXT + footer
 
 
 def build_main_menu(user_id: int) -> InlineKeyboardMarkup:

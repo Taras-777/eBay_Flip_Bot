@@ -15,6 +15,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Conv
 
 import settings
 from settings import log
+from version import get_version
 from db import init_db
 from panel import menu_home_callback, refresh_usage_callback
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats
@@ -209,7 +210,7 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    log.info("Бот запущено")
+    log.info("Бот запущено, версія %s", get_version())
     app.run_polling()
 
 

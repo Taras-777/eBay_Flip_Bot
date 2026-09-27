@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS category_aspects (
     fetched_at INTEGER NOT NULL
 );
 
+-- Службові значення бота (напр. номер версії коду)
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Власний лічильник запитів до eBay за добу (UTC)
 CREATE TABLE IF NOT EXISTS api_usage (
     day TEXT NOT NULL,
@@ -908,4 +914,20 @@ def delete_listing_obs_by_ids(watch_id, item_ids):
         conn.executemany(
             "DELETE FROM listing_obs WHERE watch_id = ? AND item_id = ?",
             [(watch_id, i) for i in item_ids],
+        )
+
+
+# ---------- службові значення ----------
+
+def get_meta(key, default=None):
+    with get_conn() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_meta(key, value):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
         )
