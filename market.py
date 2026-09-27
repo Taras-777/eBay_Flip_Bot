@@ -30,6 +30,7 @@ from textparse import (
     COMPAT_ASPECTS,
     _aspect_satisfied_by_title,
     extract_spec_key,
+    is_accessory_category,
     plural,
     spec_key_from_aspects,
     spec_required_by_default,
@@ -42,6 +43,7 @@ from db import (
     get_market_stats,
     get_rejected_ids,
     get_required_aspects,
+    get_watch_categories,
     save_cached_spec,
     update_listing_observations,
     upsert_market_stats,
@@ -231,9 +233,15 @@ def _apply_item_filters(w, items):
     """
     required = get_required_aspects(w)
     rejected = get_rejected_ids(w["id"]) if w.get("id") else set()
+    # Якщо товар шукається у великій категорії («Handys & Kommunikation»), туди
+    # входять і аксесуари. Оголошення, яке сам продавець поклав у категорію
+    # чохлів/запчастин, — не товар (хіба що користувач сам обрав таку категорію).
+    wants_accessories = any(is_accessory_category(c["name"]) for c in get_watch_categories(w))
     kept = []
     for it in items:
         if it.get("item_id") in rejected:
+            continue
+        if not wants_accessories and any(is_accessory_category(n) for n in it.get("category_names") or []):
             continue
         aspects = it.get("aspects")
         if aspects and any(name in COMPAT_ASPECTS for name in aspects):
@@ -260,7 +268,7 @@ def _stat_for_item(stats, it):
 
 def _fetch_market_items(w):
     """
-    До MARKET_SCAN_PAGES × 100 найновіших оголошень у КОЖНІЙ категорії товару.
+    До MARKET_SCAN_PAGES × 200 найновіших оголошень у КОЖНІЙ категорії товару.
     Повертає (відфільтровані лоти, вікно для трекера, id усіх знайдених лотів).
     Вікно — найпізніша з "найстаріших дат" по категоріях: лот, створений після
     неї, гарантовано мав би потрапити у видачу своєї категорії.
@@ -270,7 +278,7 @@ def _fetch_market_items(w):
         cat_created = []
         for page in range(MARKET_SCAN_PAGES):
             batch = search_active_items(
-                limit=100, offset=page * 100, fresh=True, category_id=cid, **_watch_search_kwargs(w),
+                limit=200, offset=page * 200, fresh=True, category_id=cid, **_watch_search_kwargs(w),
             )
             if not batch:
                 break

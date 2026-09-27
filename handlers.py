@@ -26,12 +26,14 @@ from settings import (
 )
 from textparse import CONDITION_LABELS, _group_label, _search_tokens, category_label, is_accessory_category, plural
 from learning import hide_item, learned_words_note, reject_and_learn, unlearn_word
+from checker import CheckError, check_listing
 from db import (
     add_watch,
     encode_required_aspects,
     find_duplicate_watch,
     get_current_listings,
     get_deal,
+    get_auto_min_price,
     get_deal_owner_chat_id,
     get_learned_words,
     get_deal_stats,
@@ -81,7 +83,7 @@ from notifications import _notify_median_error, _notify_median_problem
 
 # ============================================================
 # ДІАЛОГ ДОДАВАННЯ ВІДСТЕЖЕННЯ (/addwatch)
-# Кроки: назва → категорія eBay → мінімальна ціна
+# Кроки: назва → категорії eBay → обов'язкові характеристики → мінімальна ціна
 # ============================================================
 
 (
@@ -97,7 +99,7 @@ NEW_WATCH_KEYS = (
     "new_watch_query", "new_watch_category_id", "new_watch_category_name",
     "new_watch_categories", "new_watch_category_selected",
     "new_watch_category_options", "new_watch_min_price", "suggested_min_price",
-    "new_watch_aspect_options", "new_watch_required_aspect", "new_watch_require_spec",
+    "new_watch_aspect_options", "new_watch_aspect_selected", "new_watch_required_aspect", "new_watch_require_spec",
 )
 
 
@@ -253,7 +255,7 @@ async def addwatch_category_choice(update: Update, context: ContextTypes.DEFAULT
         context.user_data["new_watch_categories"] = [
             {"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected
         ]
-        return await _propose_min_price(update, context)
+        return await _propose_aspects(update, context)
     try:
         cat_id = options[int(choice)]["id"]
     except (ValueError, IndexError):
@@ -261,6 +263,73 @@ async def addwatch_category_choice(update: Update, context: ContextTypes.DEFAULT
     selected.symmetric_difference_update({cat_id})
     await _render_new_watch_categories(update, context)
     return ASK_CATEGORY
+
+
+async def _propose_aspects(update, context):
+    """Крок після категорій: які характеристики мають бути заповнені в оголошенні."""
+    query = context.user_data["new_watch_query"]
+    category_ids = [c["id"] for c in context.user_data.get("new_watch_categories") or []]
+    await show_panel(
+        update, context,
+        f"🔎 «{html.escape(query)}»\n\nДізнаюсь характеристики категорії в eBay…",
+        reply_markup=cancel_keyboard(),
+    )
+    try:
+        options = await asyncio.to_thread(aspect_options_for_categories, category_ids, query)
+    except Exception as e:
+        log.warning("Не вдалося отримати характеристики для «%s»: %s", query, e)
+        options = []
+    if not options:
+        return await _propose_min_price(update, context)  # нічого запропонувати — далі
+    context.user_data["new_watch_aspect_options"] = options
+    context.user_data["new_watch_aspect_selected"] = set()
+    await _render_new_watch_aspects(update, context)
+    return ASK_ASPECT
+
+
+async def _render_new_watch_aspects(update, context):
+    query = context.user_data["new_watch_query"]
+    options = context.user_data.get("new_watch_aspect_options") or []
+    selected = context.user_data.get("new_watch_aspect_selected") or set()
+    rows = []
+    for idx, opt in enumerate(options):
+        mark = "☑️" if opt["name"] in selected else "⬜"
+        badge = " ❗" if opt.get("required") else ""
+        rows.append([InlineKeyboardButton(f"{mark} {opt['name'][:36]}{badge}", callback_data=f"nasp:{idx}")])
+    rows.append([InlineKeyboardButton(f"💾 Зберегти вибір ({len(selected)})", callback_data="nasp:save")])
+    rows.append([
+        InlineKeyboardButton("🤖 Авто", callback_data="nasp:auto"),
+        InlineKeyboardButton("🚫 Без вимоги", callback_data="nasp:none"),
+    ])
+    rows.append([InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")])
+    await show_panel(
+        update, context,
+        f"🧾 <b>«{html.escape(query)}»: обов'язкові характеристики</b>\n\n{ASPECT_CHOICE_TEXT}",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def addwatch_aspect_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """nasp:<індекс> — позначити/зняти, nasp:save / nasp:auto / nasp:none — далі."""
+    await _ack_callback(update)
+    choice = update.callback_query.data.split(":", 1)[1]
+    options = context.user_data.get("new_watch_aspect_options") or []
+    selected = context.user_data.setdefault("new_watch_aspect_selected", set())
+
+    if choice in ("save", "auto", "none"):
+        ordered = [o["name"] for o in options if o["name"] in selected] if choice == "save" else []
+        context.user_data["new_watch_required_aspect"] = encode_required_aspects(ordered)
+        # Нічого не позначено або «Авто» → автоматичний режим; «Без вимоги» → вимкнено
+        context.user_data["new_watch_require_spec"] = 0 if (ordered or choice == "none") else None
+        return await _propose_min_price(update, context)
+    try:
+        name = options[int(choice)]["name"]
+    except (ValueError, IndexError):
+        return ASK_ASPECT
+    selected.symmetric_difference_update({name})
+    await _render_new_watch_aspects(update, context)
+    return ASK_ASPECT
 
 
 async def _propose_min_price(update, context):
@@ -288,7 +357,7 @@ async def _propose_min_price(update, context):
             InlineKeyboardButton(f"✅ Від {min_price:.0f}€", callback_data="minp:use"),
             InlineKeyboardButton("✏️ Своя ціна", callback_data="minp:custom"),
         ],
-        [InlineKeyboardButton("Без обмеження", callback_data="minp:none")],
+        [InlineKeyboardButton("🤖 Автоматично", callback_data="minp:none")],
         [InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")],
     ])
     await show_panel(
@@ -313,7 +382,7 @@ async def addwatch_min_price_choice(update: Update, context: ContextTypes.DEFAUL
     if choice == "custom":
         await show_panel(
             update, context,
-            "✏️ Введи мінімальну ціну в євро (напр. 120), або 0 — без обмеження.",
+            "✏️ Введи мінімальну ціну в євро (напр. 120), або 0 — автоматично.",
             reply_markup=cancel_keyboard(),
         )
         return ASK_CUSTOM_MIN_PRICE
@@ -366,8 +435,9 @@ async def _finalize_watch(update, context):
         extras.append(f"🗂️ Категорії: {html.escape(category_name)}")
     if min_price:
         extras.append(f"💶 Мінімальна ціна: {min_price:.0f}€")
-    if required_aspect:
-        extras.append(f"🧾 Обов'язкова характеристика: {html.escape(required_aspect)}")
+    aspects = get_required_aspects({"required_aspect": required_aspect})
+    if aspects:
+        extras.append(f"🧾 Обов'язкові характеристики: {html.escape(', '.join(aspects))}")
     extras_txt = ("\n" + "\n".join(extras)) if extras else ""
 
     user_id = update.effective_user.id
@@ -512,7 +582,13 @@ def _watch_details_text(watch):
         ", ".join(category_label(c["name"], with_original=True) for c in get_watch_categories(watch))
     ) or "усі (не обрано)"
     min_price = watch.get("min_price") or 0
-    min_price_txt = f"{min_price:.0f}€" if min_price else "без обмеження"
+    auto_min = None if min_price else get_auto_min_price(watch["id"])
+    if min_price:
+        min_price_txt = f"{min_price:.0f}€"
+    elif auto_min:
+        min_price_txt = f"автоматично від {auto_min:.0f}€ (щоб відсіяти аксесуари)"
+    else:
+        min_price_txt = "без обмеження"
     lines = [
         f"📌 <b>{html.escape(watch['label'])}</b>",
         f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{MIN_PROFIT_EUR}€</b> (з урахуванням комісії eBay і доставки)",
@@ -561,7 +637,11 @@ async def _show_watch_details(update, context, watch):
     watch_id = watch["id"]
     rows = [
         [InlineKeyboardButton("🔎 Переглянути оголошення", callback_data=f"view_listings:{watch_id}")],
-        [InlineKeyboardButton("🧩 Усі конфігурації", callback_data=f"configs:{watch_id}")],
+        [InlineKeyboardButton("🔍 Перевірити оголошення", callback_data=f"chkl:{watch_id}")],
+        [
+            InlineKeyboardButton("🧩 Усі конфігурації", callback_data=f"configs:{watch_id}"),
+            InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}"),
+        ],
         [
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
             InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
@@ -607,7 +687,7 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             update, context,
             f"🧩 <b>{html.escape(watch['label'])}: конфігурації</b>\n\n"
             "Ще немає даних з ринкового сканування. На екрані товару натисни "
-            "«✏️ Редагувати» → «🔄 Оновити ціни» й відкрий цей список знову.",
+            "«🔄 Оновити ціни» й відкрий цей список знову.",
             reply_markup=InlineKeyboardMarkup(back_rows),
             parse_mode=ParseMode.HTML,
         )
@@ -1273,17 +1353,14 @@ async def edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     rows = [
         [InlineKeyboardButton("🗂️ Змінити категорії", callback_data=f"chcat:{watch_id}")],
         [InlineKeyboardButton(
-            f"💶 Мінімальна ціна ({f'{min_price:.0f}€' if min_price else 'без обмеження'})",
+            f"💶 Мінімальна ціна ({f'{min_price:.0f}€' if min_price else 'авто'})",
             callback_data=f"edmin:{watch_id}")],
         [InlineKeyboardButton("🧾 Обов'язкові характеристики", callback_data=f"reqasp:{watch_id}")],
-        [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")],
         [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")],
     ]
     await show_panel(
         update, context,
-        f"✏️ <b>{html.escape(watch['label'])}</b>\n\nЩо хочеш відредагувати?\n\n"
-        "<i>🔄 Оновити ціни — перерахувати ринкові ціни зараз, не чекаючи "
-        "автоматичного оновлення раз на годину.</i>",
+        f"✏️ <b>{html.escape(watch['label'])}</b>\n\nЩо хочеш відредагувати?",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode=ParseMode.HTML,
     )
@@ -1313,14 +1390,18 @@ async def edit_value_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = []
     if presets:
         rows.append([InlineKeyboardButton(f"{p:.0f}€", callback_data=f"edval:{p}") for p in presets])
-    rows.append([InlineKeyboardButton("Без обмеження", callback_data="edval:0")])
+    rows.append([InlineKeyboardButton("🤖 Автоматично", callback_data="edval:0")])
     rows.append(back)
     current = watch.get("min_price") or 0
+    auto_min = get_auto_min_price(watch_id)
+    auto_txt = f"автоматично (зараз від {auto_min:.0f}€)" if auto_min else "автоматично (після першого аналізу цін)"
     text = (
-        f"💶 <b>{html.escape(watch['label'])}: мінімальна ціна</b>\nЗараз: {f'{current:.0f}€' if current else 'без обмеження'}\n\n"
-        "Оголошення дешевші за цю ціну не враховуються — так відсіюються аксесуари й запчастини."
+        f"💶 <b>{html.escape(watch['label'])}: мінімальна ціна</b>\nЗараз: {f'{current:.0f}€' if current else auto_txt}\n\n"
+        "Оголошення дешевші за цю ціну eBay боту не віддає — так відсіюються аксесуари й запчастини, "
+        "і справжні оголошення не губляться серед них у великих категоріях."
         + ("\nКнопки — 30, 40 і 50% від найнижчої типової ціни." if presets else "")
-        + "\n\nОбери кнопкою або надішли число в євро (0 — без обмеження)."
+        + f"\n\n🤖 Автоматично — {MIN_PRICE_SUGGESTION_PCT}% від найнижчої типової ціни, бот рахує сам."
+        + "\n\nОбери кнопкою або надішли число в євро (0 — автоматично)."
     )
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
     return EDIT_VALUE
@@ -1380,6 +1461,91 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# ============================================================
+# «🔍 ПЕРЕВІРИТИ ОГОЛОШЕННЯ»
+# ============================================================
+
+CHECK_LINK = 0  # окрема коротка розмова: чекаємо посилання
+
+
+@require_access
+async def check_listing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """chkl:<id> — просимо надіслати посилання на оголошення."""
+    query_cb = update.callback_query
+    watch_id = int(query_cb.data.split(":")[1])
+    watch = get_watch(watch_id, update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Цей товар уже видалено.", show_alert=True)
+        return ConversationHandler.END
+    context.user_data["check_watch_id"] = watch_id
+    await show_panel(
+        update, context,
+        f"🔍 <b>Перевірити оголошення для «{html.escape(watch['label'])}»</b>\n\n"
+        "Надішли посилання на оголошення eBay або його номер. У застосунку eBay: "
+        "«Поділитися» → «Копіювати посилання».\n\n"
+        "Бот перевірить кожен фільтр і скаже, чи бачить він це оголошення, а якщо ні — чому.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+            "◀️ До товару", callback_data=f"watch_details:{watch_id}")]]),
+        parse_mode=ParseMode.HTML,
+    )
+    return CHECK_LINK
+
+
+async def check_listing_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    watch_id = context.user_data.get("check_watch_id")
+    watch = get_watch(watch_id, update.effective_chat.id) if watch_id else None
+    if watch is None:
+        context.user_data.pop("check_watch_id", None)
+        await show_main_menu(update, context)
+        return ConversationHandler.END
+
+    back = [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]
+    await show_panel(update, context, "🔍 ⏳ Перевіряю оголошення на eBay…")
+    try:
+        title, url, checks, verdict = await asyncio.to_thread(check_listing, watch, update.message.text)
+    except CheckError as e:
+        await show_panel(update, context, f"⚠️ {html.escape(str(e))}\n\nНадішли інше посилання.",
+                         reply_markup=InlineKeyboardMarkup([back]), parse_mode=ParseMode.HTML)
+        return CHECK_LINK
+    except Exception as e:
+        log.exception("Не вдалося перевірити оголошення для watch #%s: %s", watch_id, e)
+        await show_panel(update, context, "⚠️ Не вдалося перевірити оголошення. Спробуй ще раз.",
+                         reply_markup=InlineKeyboardMarkup([back]))
+        return CHECK_LINK
+
+    context.user_data.pop("check_watch_id", None)
+    lines = [f"🔍 <b>{html.escape(title)}</b>", ""]
+    lines += [f"{mark} {html.escape(text)}" for mark, text in checks]
+    lines += ["", f"<b>{html.escape(verdict)}</b>"]
+    rows = [
+        [InlineKeyboardButton("🔗 Відкрити оголошення", url=url)],
+        [InlineKeyboardButton("🔍 Перевірити інше", callback_data=f"chkl:{watch_id}")],
+        back,
+    ]
+    await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+async def check_listing_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Інша кнопка, поки бот чекає посилання, — вийти й виконати її."""
+    context.user_data.pop("check_watch_id", None)
+    data = update.callback_query.data
+    if data.startswith("watch_details:"):
+        await watch_details_callback(update, context)
+    elif data == "menu:list":
+        await cmd_list(update, context)
+    else:
+        await show_main_menu(update, context)
+    return ConversationHandler.END
+
+
+async def check_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("check_watch_id", None)
+    await show_main_menu(update, context)
+    return ConversationHandler.END
+
+
 async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("edit", None)
     await show_main_menu(update, context)
@@ -1396,12 +1562,14 @@ async def recalculate_median_callback(update: Update, context: ContextTypes.DEFA
         await query_cb.answer("Цей товар уже видалено.", show_alert=True)
         return
 
+    await show_panel(update, context, f"🔄 <b>{html.escape(watch['label'])}</b>\n\n⏳ Оновлюю ціни з eBay…",
+                     parse_mode=ParseMode.HTML)
     try:
         items, medians, _ = await _recalculate_watch_medians(watch, replace_existing=True)
     except Exception as e:
         log.exception("Не вдалося перерахувати медіану для watch #%s: %s", watch_id, e)
         await _notify_median_error(context.application, watch, e)
-        await query_cb.answer("Не вдалося оновити ціни. Спробуй ще раз.", show_alert=True)
+        await _show_watch_details(update, context, get_watch(watch_id, chat_id))
         return
 
     if not items:

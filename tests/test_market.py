@@ -123,3 +123,56 @@ def test_rejected_item_filtered_only_for_its_watch():
     item = [{"item_id": "x", "title": "Sony PlayStation 5 825GB", "spec_group": "825GB", "aspects": {}}]
     assert market._apply_item_filters(w1, item) == []
     assert len(market._apply_item_filters(w2, item)) == 1
+
+
+def test_auto_min_price_from_market_stats():
+    import db
+    import ebay_api
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 25)
+    w = db.get_watch(wid, 1)
+    assert ebay_api.effective_min_price(w) is None          # ціни ще не пораховані
+    db.upsert_market_stats(wid, "used", "*", 480, 20, sale_price=460)
+    db.upsert_market_stats(wid, "new", "*", 600, 10, sale_price=580)
+    assert ebay_api.effective_min_price(w) == 190           # 40% від 480, округлено до 5
+    with db.get_conn() as conn:
+        conn.execute("UPDATE watches SET min_price = 300 WHERE id = ?", (wid,))
+    assert ebay_api.effective_min_price(db.get_watch(wid, 1)) == 300  # своя ціна важливіша
+
+
+def test_items_from_accessory_categories_are_dropped():
+    import db
+    wid = db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 25,
+                       categories=[{"id": "15032", "name": "Handys & Kommunikation"}])
+    w = db.get_watch(wid, 1)
+    items = [
+        {"item_id": "phone", "title": "iPhone 16 Pro 128GB", "spec_group": "128GB", "aspects": {},
+         "category_names": ["Handys & Smartphones"]},
+        {"item_id": "case", "title": "iPhone 16 Pro 128GB", "spec_group": "128GB", "aspects": {},
+         "category_names": ["Handyhüllen & -taschen"]},
+    ]
+    assert [i["item_id"] for i in market._apply_item_filters(w, items)] == ["phone"]
+
+
+def test_accessory_categories_kept_when_user_chose_them():
+    import db
+    wid = db.add_watch(1, "AirPods Case", "AirPods Case", "", "", 25,
+                       categories=[{"id": "1", "name": "Handyhüllen & -taschen"}])
+    item = [{"item_id": "case", "title": "AirPods Case", "spec_group": "unspecified", "aspects": {},
+             "category_names": ["Handyhüllen & -taschen"]}]
+    w = dict(db.get_watch(wid, 1), require_spec=0)
+    assert len(market._apply_item_filters(w, item)) == 1
+
+
+def test_auto_min_price_before_stats_uses_seen_listings():
+    import time
+    import db
+    import ebay_api
+    wid = db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 25)
+    now = int(time.time())
+    with db.get_conn() as conn:
+        for i, price in enumerate([500, 550, 600]):
+            conn.execute("""INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
+                            first_seen, last_seen, status) VALUES (?, ?, 'used', '128GB', ?, ?, ?, 'active')""",
+                         (wid, f"p{i}", price, now, now))
+    # статистики ще немає, але 3 справжні оголошення вже є → 40% від медіани 550
+    assert ebay_api.effective_min_price(db.get_watch(wid, 1)) == 220

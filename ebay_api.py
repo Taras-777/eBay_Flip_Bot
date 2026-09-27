@@ -6,6 +6,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import base64
 import config
+import re
 import requests
 import threading
 import time
@@ -37,7 +38,13 @@ from textparse import (
     _title_matches_search,
     condition_group_from_item,
 )
-from db import get_api_calls_today, get_cached_category_aspects, record_api_call, save_category_aspects
+from db import (
+    get_api_calls_today,
+    get_auto_min_price,
+    get_cached_category_aspects,
+    record_api_call,
+    save_category_aspects,
+)
 
 
 TAXONOMY_BASE = "https://api.ebay.com/commerce/taxonomy/v1"
@@ -277,6 +284,62 @@ def fetch_item_aspects(item_id):
     }
 
 
+ITEM_ID_PATTERN = re.compile(r"/itm/(?:[^/?#]+/)?(\d{9,15})")
+BARE_ITEM_ID_PATTERN = re.compile(r"\b(\d{10,15})\b")
+LINK_PATTERN = re.compile(r"https?://\S+")
+
+
+def resolve_item_id(text):
+    """
+    Номер оголошення eBay з того, що надіслав користувач: повне посилання
+    ebay.de/itm/…, коротке ebay.io/m/… (з переходом за перенаправленням)
+    або просто номер. None, якщо номер знайти не вдалося.
+    """
+    text = (text or "").strip()
+    found = ITEM_ID_PATTERN.search(text)
+    if found:
+        return found.group(1)
+    link = LINK_PATTERN.search(text)
+    if link:
+        url = link.group(0)
+        for _ in range(4):  # короткі посилання ведуть через 1–2 перенаправлення
+            try:
+                resp = _http_session().get(url, allow_redirects=False, timeout=10)
+            except requests.exceptions.RequestException as e:
+                log.debug("Не вдалося відкрити посилання %s: %s", url, e)
+                return None
+            location = resp.headers.get("Location")
+            if not location:
+                break
+            found = ITEM_ID_PATTERN.search(location)
+            if found:
+                return found.group(1)
+            url = location
+        return None
+    found = BARE_ITEM_ID_PATTERN.search(text)
+    return found.group(1) if found else None
+
+
+def fetch_item_by_legacy_id(legacy_id):
+    """Повні дані оголошення (getItemByLegacyId) так, як їх бачить покупець
+    у Німеччині. None, якщо оголошення не існує."""
+    token = _get_access_token()
+    resp = _request_with_retries(
+        "GET", ITEM_URL + "get_item_by_legacy_id",
+        headers={
+            "Authorization": "Bearer " + token,
+            "X-EBAY-C-MARKETPLACE-ID": EBAY_MARKETPLACE_ID,
+            "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country={DELIVERY_COUNTRY},zip={EBAY_BUYER_POSTAL_CODE}",
+        },
+        params={"legacy_item_id": legacy_id},
+        timeout=15,
+    )
+    if resp.status_code in (400, 404):  # немає такого оголошення або воно вже зникло
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
 _category_tree = {"id": None}
 
 
@@ -429,10 +492,10 @@ def _browse_search(query, condition_ids="", exclude_terms="", limit=50,
     token = _get_access_token()
 
     q = query
-    for term in _search_tokens(exclude_terms):
+    for term in sorted(_search_tokens(exclude_terms)):  # стабільний порядок — однаковий запит щоразу
         q += f" -{term}"
 
-    params = {"q": q, "limit": str(min(max(limit, 1), 100)), "sort": sort}
+    params = {"q": q, "limit": str(min(max(limit, 1), 200)), "sort": sort}  # 200 — максимум eBay
     if offset:
         params["offset"] = str(offset)
     if category_id:
@@ -589,6 +652,7 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "has_best_offer": has_best_offer,
                 "currency": "EUR",
                 "url": it.get("itemWebUrl"),
+                "category_names": [c.get("categoryName") or "" for c in it.get("categories") or []],
                 "condition": it.get("condition"),
                 "cond_group": cond_group,
                 "created_at": _parse_ebay_ts(it.get("itemCreationDate")),
@@ -611,6 +675,13 @@ def _parse_ebay_ts(value):
         return None
 
 
+def effective_min_price(w):
+    """Мінімальна ціна для пошуку: задана користувачем, інакше автоматична."""
+    if w.get("min_price"):
+        return w["min_price"]
+    return get_auto_min_price(w["id"]) if w.get("id") else None
+
+
 def _watch_search_kwargs(w):
     """Параметри пошуку, збережені для конкретного відстеження (без категорій —
     їх перебирає search_in_categories)."""
@@ -618,7 +689,7 @@ def _watch_search_kwargs(w):
         "query": w["query"],
         "condition_ids": w["condition_ids"],
         "exclude_terms": w["exclude"],
-        "min_price": w.get("min_price") or None,
+        "min_price": effective_min_price(w),
     }
 
 

@@ -19,12 +19,19 @@ from db import init_db
 from panel import menu_home_callback, refresh_usage_callback
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats
 from handlers import (
+    ASK_ASPECT,
     ASK_CATEGORY,
     ASK_CUSTOM_MIN_PRICE,
     ASK_MIN_PRICE_CHOICE,
     ASK_QUERY,
     EDIT_VALUE,
+    addwatch_aspect_choice,
     addwatch_cancel,
+    CHECK_LINK,
+    check_cancel,
+    check_listing_interrupt,
+    check_listing_start,
+    check_listing_text,
     addwatch_category_choice,
     addwatch_custom_min_price,
     addwatch_got_query,
@@ -102,6 +109,10 @@ def main():
                 CallbackQueryHandler(addwatch_category_choice, pattern="^cat:"),
                 menu_interrupt,
             ],
+            ASK_ASPECT: [
+                CallbackQueryHandler(addwatch_aspect_choice, pattern="^nasp:"),
+                menu_interrupt,
+            ],
             ASK_MIN_PRICE_CHOICE: [
                 CallbackQueryHandler(addwatch_min_price_choice, pattern="^minp:"),
                 menu_interrupt,
@@ -134,10 +145,28 @@ def main():
         ],
     )
 
+    check_conv = ConversationHandler(
+        name="check_conv",
+        persistent=True,
+        allow_reentry=True,
+        entry_points=[CallbackQueryHandler(check_listing_start, pattern="^chkl:")],
+        states={
+            CHECK_LINK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_listing_text),
+                CallbackQueryHandler(check_listing_interrupt, pattern="^(watch_details:|menu:)"),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", check_cancel),
+            CallbackQueryHandler(check_listing_interrupt, pattern="^(watch_details:|menu:)"),
+        ],
+    )
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(addwatch_conv)
     app.add_handler(edit_conv)
+    app.add_handler(check_conv)
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("stats", cmd_stats))
 

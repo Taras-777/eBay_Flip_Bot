@@ -503,6 +503,35 @@ def upsert_market_stats(watch_id, cond_group, spec_group, median_price, sample_s
         )
 
 
+def get_auto_min_price(watch_id, pct=None):
+    """
+    Автоматична мінімальна ціна для пошуку, якщо користувач свою не задав:
+    pct% від найнижчої типової ціни товару (округлено до 5€). Так eBay сам не
+    віддає чохли, кабелі й запчастини, і справжні оголошення не губляться серед
+    них у великих категоріях.
+
+    Поки ціни ще не пораховані (буває якраз тоді, коли справжні оголошення
+    тонуть серед аксесуарів), беремо медіану тих справжніх оголошень, які бот
+    уже встиг побачити (від 3 шт.). None — якщо даних ще зовсім немає.
+    """
+    pct = settings.MIN_PRICE_SUGGESTION_PCT if pct is None else pct
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT MIN(median_price) AS m FROM market_stats WHERE watch_id = ? AND cond_group != 'parts'",
+            (watch_id,),
+        ).fetchone()
+        base = row["m"] if row and row["m"] else None
+        if base is None:
+            prices = sorted(r["price"] for r in conn.execute(
+                """SELECT price FROM listing_obs WHERE watch_id = ? AND status = 'active'
+                   AND price IS NOT NULL AND cond_group != 'parts'""", (watch_id,)).fetchall())
+            if len(prices) >= 3:
+                base = prices[len(prices) // 2]
+    if not base:
+        return None
+    return max(5, round(base * pct / 100 / 5) * 5)
+
+
 def get_market_stats(watch_id):
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(

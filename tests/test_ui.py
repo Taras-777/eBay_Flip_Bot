@@ -313,3 +313,66 @@ def test_grouped_deals_header_and_buttons(monkeypatch):
     assert text.startswith("🔥 Знайдено 6 вигідних пропозицій: PS5")
     first_row = [b.text for b in markup.inline_keyboard[0]]
     assert first_row == ["🙈 #1 сховати", "❌ #1 інший товар"]
+
+
+# ---------- додавання товару: крок характеристик ----------
+
+def _new_watch_context(categories=({"id": "139971", "name": "Konsolen"},)):
+    ctx = make_context()
+    ctx.user_data.update({
+        "new_watch_query": "PlayStation 5",
+        "new_watch_category_options": [dict(c, count=10) for c in categories],
+        "new_watch_category_selected": {c["id"] for c in categories},
+    })
+    return ctx
+
+
+ASPECTS = [{"name": "Speicherkapazität", "required": False}, {"name": "Plattform", "required": True}]
+
+
+def test_after_categories_bot_asks_for_required_aspects(screen, monkeypatch):
+    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
+    ctx = _new_watch_context()
+    state = run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
+    assert state == handlers.ASK_ASPECT
+    assert "обов'язкові характеристики" in screen.text
+    assert screen.rows[0] == ["⬜ Speicherkapazität"] and screen.rows[1] == ["⬜ Plattform ❗"]
+
+
+def test_chosen_aspects_are_saved_with_new_watch(screen, monkeypatch):
+    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
+    monkeypatch.setattr(handlers, "suggest_min_price", lambda q, ids: None)  # без кроку мін. ціни
+    ctx = _new_watch_context()
+    run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
+    run(handlers.addwatch_aspect_choice(make_update("nasp:0"), ctx))
+    assert screen.rows[0] == ["☑️ Speicherkapazität"]
+    run(handlers.addwatch_aspect_choice(make_update("nasp:save"), ctx))
+    watch = db.list_watches(chat_id=1)[0]
+    assert db.get_required_aspects(watch) == ["Speicherkapazität"]
+    assert "Обов'язкові характеристики: Speicherkapazität" in screen.text
+
+
+@pytest.mark.parametrize("choice,require_spec", [("auto", None), ("none", 0)])
+def test_auto_and_none_aspect_choices(screen, monkeypatch, choice, require_spec):
+    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
+    monkeypatch.setattr(handlers, "suggest_min_price", lambda q, ids: None)
+    ctx = _new_watch_context()
+    run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
+    run(handlers.addwatch_aspect_choice(make_update(f"nasp:{choice}"), ctx))
+    watch = db.list_watches(chat_id=1)[0]
+    assert db.get_required_aspects(watch) == [] and watch["require_spec"] == require_spec
+
+
+def test_aspect_step_skipped_when_ebay_has_none(screen, monkeypatch):
+    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: [])
+    monkeypatch.setattr(handlers, "suggest_min_price", lambda q, ids: (200, 500, 30))
+    state = run(handlers.addwatch_category_choice(make_update("cat:done"), _new_watch_context()))
+    assert state == handlers.ASK_MIN_PRICE_CHOICE
+
+
+def test_refresh_prices_button_on_watch_screen_not_in_edit(screen):
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 25)
+    run(handlers.watch_details_callback(make_update(f"watch_details:{wid}"), make_context()))
+    assert "🔄 Оновити ціни" in screen.buttons()
+    run(handlers.edit_menu_callback(make_update(f"editw:{wid}"), make_context()))
+    assert "🔄 Оновити ціни" not in screen.buttons()

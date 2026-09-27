@@ -25,7 +25,7 @@ def test_search_params(captured):
     ebay_api._browse_search("PlayStation 5", condition_ids="1000,3000", exclude_terms="defekt teile",
                             category_id="139971", min_price=195, sort="price", offset=100)
     params = captured[0]["params"]
-    assert params["q"] == "PlayStation 5 -defekt -teile"
+    assert params["q"] == "PlayStation 5 -defekt -teile"  # слова за абеткою
     assert params["category_ids"] == "139971"
     assert params["sort"] == "price" and params["offset"] == "100"
     f = params["filter"]
@@ -91,3 +91,15 @@ def test_budget_uses_fresh_ebay_data(monkeypatch):
                                       fetched_at=time.time())
     # з 1000 залишку eBay боту доступно лише те, що вкладається в його власний бюджет
     assert ebay_api.browse_budget_left() == 1000 - (5000 - ebay_api.DAILY_BROWSE_BUDGET)
+
+
+def test_search_limit_allows_200(captured):
+    ebay_api._browse_search("PS5", limit=500)
+    assert captured[0]["params"]["limit"] == "200"
+
+
+def test_category_names_are_kept(fake_ebay):
+    fake_ebay.listings = [listing("a", "Sony PlayStation 5 Konsole", 400,
+                                  categories=[{"categoryId": "139971", "categoryName": "Konsolen"}])]
+    found = ebay_api.search_active_items("PlayStation 5")
+    assert found[0]["category_names"] == ["Konsolen"]
