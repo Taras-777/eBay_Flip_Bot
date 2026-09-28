@@ -48,6 +48,7 @@ MENU_LABELS = {
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
     "refresh_usage": "🔄 Оновити запити",
+    "refresh_prices": "💰 Оновити ціни",
     "ebay_account": "🔐 Акаунт eBay",
 }
 
@@ -121,7 +122,8 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
             owner_row.append(btn("users"))
         if owner_row:
             rows.append(owner_row)
-        rows.append([btn("refresh_usage"), btn("ebay_account")])
+        rows.append([btn("refresh_usage"), btn("refresh_prices")])
+        rows.append([btn("ebay_account")])
     return InlineKeyboardMarkup(rows)
 
 

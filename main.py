@@ -17,7 +17,7 @@ import settings
 from settings import log
 from version import get_version
 from db import init_db
-from panel import menu_home_callback
+from panel import menu_home_callback, refresh_usage_callback
 from account import (
     EBAY_CODE,
     ebay_account_cancel,
@@ -223,7 +223,8 @@ def main():
     app.add_handler(CallbackQueryHandler(unlearn_word_callback, pattern="^unlw:"))
     # Кнопки головного меню (коли жоден діалог не активний)
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))
-    app.add_handler(CallbackQueryHandler(refresh_all_callback, pattern="^menu:refresh_usage$"))
+    app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
+    app.add_handler(CallbackQueryHandler(refresh_all_callback, pattern="^menu:refresh_prices$"))
     app.add_handler(CallbackQueryHandler(discover_callback, pattern="^menu:discover$"))
     app.add_handler(CallbackQueryHandler(discover_add_callback, pattern="^dadd:"))
     app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))

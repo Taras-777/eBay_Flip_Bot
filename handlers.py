@@ -84,6 +84,7 @@ from market import (
     watch_requires_spec,
 )
 from panel import (
+    refresh_usage_callback,
     _ack_callback,
     back_to_menu_keyboard,
     build_main_menu,
@@ -497,6 +498,8 @@ async def addwatch_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_
     elif action == "users":
         await cmd_users(update, context)
     elif action == "refresh_usage":
+        await refresh_usage_callback(update, context)
+    elif action == "refresh_prices":
         await refresh_all_callback(update, context)
     elif action == "discover":
         await discover_callback(update, context)
@@ -1607,6 +1610,8 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu:list":
         await cmd_list(update, context)
     elif data == "menu:refresh_usage":
+        await refresh_usage_callback(update, context)
+    elif data == "menu:refresh_prices":
         await refresh_all_callback(update, context)
     elif data == "menu:discover":
         await discover_callback(update, context)
@@ -1975,8 +1980,8 @@ async def recalculate_median_callback(update: Update, context: ContextTypes.DEFA
 
 
 async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """menu:refresh_usage («🔄 Оновити запити», лише власник): свіжі ціни з eBay для
-    всіх товарів власника + свіжі дані про ліміт запитів."""
+    """menu:refresh_prices («💰 Оновити ціни», лише власник): свіжі ціни з eBay для
+    всіх товарів власника (+ свіжі дані про ліміт запитів)."""
     if not is_owner(update.effective_user.id):
         await _ack_callback(update)
         await show_main_menu(update, context)
