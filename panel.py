@@ -6,13 +6,14 @@
 import asyncio
 
 import config
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-from settings import is_owner, log
-from db import list_users
+from settings import TRADING_DAILY_BUDGET, is_owner, log
+from db import get_api_calls_today, list_users
+from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit
 from version import get_version
 
@@ -33,6 +34,10 @@ async def _ack_callback(update: Update):
 # яке редагується на кожному кроці, а не в потоці нових повідомлень)
 # ============================================================
 
+# Панель — меню, а не стаття: прев'ю посилань лише займали б місце
+NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+
+
 MENU_LABELS = {
     "addwatch": "➕ Додати товар",
     "discover": "💡 Що перепродавати",
@@ -41,10 +46,20 @@ MENU_LABELS = {
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
     "refresh_usage": "🔄 Оновити запити",
+    "ebay_account": "🔐 Акаунт eBay",
 }
 
 
 MAIN_MENU_TEXT = "📋 <b>Головне меню</b> — обери дію:"
+
+
+def sold_checks_line():
+    """Рядок про запити Trading API (перевірки продажів) — коли акаунт eBay підключено
+    або сьогодні вже були перевірки."""
+    count = get_api_calls_today("trading")
+    if not count and not is_connected():
+        return ""
+    return f"🧾 Перевірки продажів сьогодні: <b>{count}</b> / {TRADING_DAILY_BUDGET}"
 
 
 def main_menu_text(user_id=None):
@@ -53,7 +68,7 @@ def main_menu_text(user_id=None):
     footer = f"\n\n<i>🏷 Версія {get_version()}</i>"
     if user_id is not None and is_owner(user_id):
         try:
-            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line()}{footer}"
+            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line(sold_checks_line())}{footer}"
         except Exception as e:
             log.debug("Не вдалося сформувати рядок використання API: %s", e)
     return MAIN_MENU_TEXT + footer
@@ -78,7 +93,7 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
             owner_row.append(btn("users"))
         if owner_row:
             rows.append(owner_row)
-        rows.append([btn("refresh_usage")])
+        rows.append([btn("refresh_usage"), btn("ebay_account")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -119,7 +134,7 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id, message_id=panel_id, text=text,
-                reply_markup=reply_markup, parse_mode=parse_mode,
+                reply_markup=reply_markup, parse_mode=parse_mode, link_preview_options=NO_PREVIEW,
             )
             return
         except BadRequest as e:
@@ -130,7 +145,8 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
             log.debug("Не вдалося відредагувати панель (%s) — надсилаю нову", e)
 
     msg = await context.bot.send_message(
-        chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode
+        chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode,
+        link_preview_options=NO_PREVIEW,
     )
     context.user_data["panel_message_id"] = msg.message_id
     if panel_id and panel_id != msg.message_id:

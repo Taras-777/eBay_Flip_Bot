@@ -16,10 +16,13 @@ from settings import (
     DEFAULT_DISCOUNT_THRESHOLD_PCT,
     GONE_MAX_LISTING_DAYS,
     GONE_MISS_THRESHOLD,
+    LOCAL_TZ,
     LISTING_OBS_RETENTION_DAYS,
     MARKET_REFRESH_MINUTES,
+    PRICE_HISTORY_DAYS,
     SEED_CATEGORY_HINTS,
     SEEN_ITEMS_RETENTION_DAYS,
+    SOLD_CHECK_MAX_AGE_DAYS,
     SOLD_LOOKBACK_DAYS,
     log,
 )
@@ -89,6 +92,8 @@ CREATE TABLE IF NOT EXISTS discovery_obs (
     last_seen INTEGER,
     status TEXT DEFAULT 'active',
     gone_at INTEGER,
+    sold_check TEXT,      -- перевірка через Trading API, як у listing_obs
+    checked_at INTEGER,
     PRIMARY KEY (candidate, item_id)
 );
 
@@ -129,7 +134,20 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     gone_at INTEGER,
     title TEXT,
     url TEXT,
+    sold_check TEXT,      -- перевірка через Trading API: pending/sold/unsold/active/unknown
+    checked_at INTEGER,
     PRIMARY KEY (watch_id, item_id)
+);
+
+-- Типова ціна кожної групи по днях — для попереджень про падіння цін
+CREATE TABLE IF NOT EXISTS price_history (
+    watch_id INTEGER NOT NULL,
+    cond_group TEXT NOT NULL,
+    spec_group TEXT NOT NULL,
+    day TEXT NOT NULL,
+    median_price REAL NOT NULL,
+    sale_price REAL,
+    PRIMARY KEY (watch_id, cond_group, spec_group, day)
 );
 
 CREATE TABLE IF NOT EXISTS seen_items (
@@ -263,9 +281,14 @@ def init_db():
             conn.execute("ALTER TABLE seen_items ADD COLUMN last_seen_at INTEGER")
 
         obs_cols = {r["name"] for r in conn.execute("PRAGMA table_info(listing_obs)").fetchall()}
-        for col in ("title", "url"):
+        for col, ddl in [("title", "TEXT"), ("url", "TEXT"), ("sold_check", "TEXT"), ("checked_at", "INTEGER")]:
             if obs_cols and col not in obs_cols:
-                conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} TEXT")
+                conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
+
+        disc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(discovery_obs)").fetchall()}
+        for col, ddl in [("sold_check", "TEXT"), ("checked_at", "INTEGER")]:
+            if disc_cols and col not in disc_cols:
+                conn.execute(f"ALTER TABLE discovery_obs ADD COLUMN {col} {ddl}")
 
         rej_cols = {r["name"] for r in conn.execute("PRAGMA table_info(rejected_items)").fetchall()}
         if rej_cols and "reason" not in rej_cols:
@@ -402,6 +425,7 @@ def remove_watch(watch_id, chat_id):
         conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM seen_items WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (watch_id,))
+        conn.execute("DELETE FROM price_history WHERE watch_id = ?", (watch_id,))
 
 
 def reset_watch_market(watch_id):
@@ -410,6 +434,7 @@ def reset_watch_market(watch_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (watch_id,))
+        conn.execute("DELETE FROM price_history WHERE watch_id = ?", (watch_id,))
 
 
 def update_threshold(watch_id, chat_id, new_pct):
@@ -705,7 +730,7 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                    ON CONFLICT(watch_id, item_id) DO UPDATE SET
                      cond_group=excluded.cond_group, spec_group=excluded.spec_group,
                      price=excluded.price, end_at=excluded.end_at, last_seen=excluded.last_seen,
-                     miss_count=0, status='active', gone_at=NULL,
+                     miss_count=0, status='active', gone_at=NULL, sold_check=NULL,
                      title=excluded.title, url=excluded.url""",
                 (watch_id, it["item_id"], it["cond_group"], it.get("spec_group", "unspecified"),
                  it["total_price"], it.get("created_at"), it.get("end_at"), now, now,
@@ -730,12 +755,59 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                 status = "gone" if age_days <= GONE_MAX_LISTING_DAYS else "ended"
             else:
                 status = "active"
+            # Зниклий лот ставимо в чергу на перевірку «справді продано?» (Trading API)
             conn.execute(
                 """UPDATE listing_obs SET miss_count = ?, status = ?,
-                     gone_at = CASE WHEN ? = 'gone' THEN ? ELSE gone_at END
+                     gone_at = CASE WHEN ? != 'active' THEN ? ELSE gone_at END,
+                     sold_check = CASE WHEN ? != 'active' THEN 'pending' ELSE sold_check END
                    WHERE watch_id = ? AND item_id = ?""",
-                (misses, status, status, now, watch_id, r["item_id"]),
+                (misses, status, status, now, status, watch_id, r["item_id"]),
             )
+
+
+# Результат перевірки Trading API → (новий статус лота, позначка перевірки).
+# None — статус не змінюємо (eBay не дав відповіді — лишається оцінка за зникненням).
+SOLD_CHECK_OUTCOMES = {
+    "sold": ("gone", "sold"),        # справді продано — ціна йде в статистику
+    "unsold": ("ended", "unsold"),   # продавець зняв без продажу — не рахуємо
+    "active": ("ended", "active"),   # ще продається, просто випало з видачі — не рахуємо
+    "not_found": (None, "unknown"),
+    "unknown": (None, "unknown"),
+}
+
+
+def get_pending_sold_checks(limit):
+    """Зниклі лоти, які ще треба перевірити через Trading API (найсвіжіші першими)."""
+    since = int(time.time()) - SOLD_CHECK_MAX_AGE_DAYS * 86400
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT watch_id, item_id, price, status FROM listing_obs
+               WHERE sold_check = 'pending' AND gone_at >= ?
+               ORDER BY gone_at DESC LIMIT ?""",
+            (since, limit),
+        ).fetchall()]
+
+
+def apply_sold_check(watch_id, item_id, result):
+    status, mark = SOLD_CHECK_OUTCOMES.get(result, (None, "unknown"))
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE listing_obs SET sold_check = ?, checked_at = ?, status = COALESCE(?, status)
+               WHERE watch_id = ? AND item_id = ? AND sold_check = 'pending'""",
+            (mark, int(time.time()), status, watch_id, item_id),
+        )
+
+
+def sold_check_stats(days=7):
+    """Скільки зниклих лотів перевірено за останні дні: {позначка: кількість}."""
+    since = int(time.time()) - days * 86400
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT sold_check, COUNT(*) AS c FROM listing_obs
+               WHERE sold_check IS NOT NULL AND gone_at >= ? GROUP BY sold_check""",
+            (since,),
+        ).fetchall()
+    return {r["sold_check"]: r["c"] for r in rows}
 
 
 def get_gone_prices(watch_id, cond_group, spec_group=None):
@@ -750,6 +822,19 @@ def get_gone_prices(watch_id, cond_group, spec_group=None):
         return [r["price"] for r in conn.execute(q, params).fetchall() if r["price"]]
 
 
+def get_sold_listings(watch_id, days=SOLD_LOOKBACK_DAYS):
+    """Продані (зниклі до кінця строку або підтверджені eBay) лоти товару, найновіші першими."""
+    since = int(time.time()) - days * 86400
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT item_id, cond_group, spec_group, price, created_at, first_seen, gone_at,
+                      title, url, sold_check
+               FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND price IS NOT NULL
+               ORDER BY gone_at DESC""",
+            (watch_id, since),
+        ).fetchall()]
+
+
 def get_current_listings(watch_id):
     """Активні оголошення, які бот бачив в останніх ринкових скануваннях."""
     since = int(time.time()) - 2 * MARKET_REFRESH_MINUTES * 60
@@ -761,9 +846,37 @@ def get_current_listings(watch_id):
         ).fetchall()]
 
 
+def record_price_history(watch_id, stats):
+    """Знімок типових цін груп за сьогодні (оновлюється протягом дня)."""
+    day = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    with get_conn() as conn:
+        for s in stats:
+            conn.execute(
+                """INSERT INTO price_history (watch_id, cond_group, spec_group, day, median_price, sale_price)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(watch_id, cond_group, spec_group, day) DO UPDATE SET
+                     median_price=excluded.median_price, sale_price=excluded.sale_price""",
+                (watch_id, s["cond_group"], s["spec_group"], day, s["median_price"], s.get("sale_price")),
+            )
+
+
+def get_price_history(watch_id):
+    """{(стан, конфігурація): [(день, типова ціна), ...]} від найстаріших."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT cond_group, spec_group, day, median_price FROM price_history
+               WHERE watch_id = ? ORDER BY day""", (watch_id,)).fetchall()
+    history = {}
+    for r in rows:
+        history.setdefault((r["cond_group"], r["spec_group"]), []).append((r["day"], r["median_price"]))
+    return history
+
+
 def cleanup_old_listing_obs():
     cutoff = int(time.time()) - LISTING_OBS_RETENTION_DAYS * 86400
     with get_conn() as conn:
+        old_day = datetime.fromtimestamp(time.time() - PRICE_HISTORY_DAYS * 86400, LOCAL_TZ).strftime("%Y-%m-%d")
+        conn.execute("DELETE FROM price_history WHERE day < ?", (old_day,))
         conn.execute("DELETE FROM item_specs WHERE fetched_at < ?", (cutoff,))
         return conn.execute("DELETE FROM listing_obs WHERE last_seen < ?", (cutoff,)).rowcount
 
@@ -973,7 +1086,7 @@ def update_discovery_obs(candidate, items, window_start):
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
                    ON CONFLICT(candidate, item_id) DO UPDATE SET
                      price = excluded.price, last_seen = excluded.last_seen, status = 'active',
-                     gone_at = NULL""",
+                     gone_at = NULL, sold_check = NULL""",
                 (candidate, it["item_id"], it["total_price"], it.get("spec_group"), it.get("cond_group"),
                  it.get("created_at"), now, now),
             )
@@ -984,7 +1097,7 @@ def update_discovery_obs(candidate, items, window_start):
                    AND created_at >= ?""", (candidate, window_start)).fetchall()
             for r in rows:
                 if r["item_id"] not in present:
-                    conn.execute("UPDATE discovery_obs SET status = 'gone', gone_at = ? "
+                    conn.execute("UPDATE discovery_obs SET status = 'gone', gone_at = ?, sold_check = 'pending' "
                                  "WHERE candidate = ? AND item_id = ?", (now, candidate, r["item_id"]))
                     gone += 1
         conn.execute("DELETE FROM discovery_obs WHERE last_seen < ?", (now - 30 * 86400,))
@@ -1002,6 +1115,40 @@ def discovery_gone_stats(candidate, days=7):
                              (candidate,)).fetchone()["f"]
     observed_days = (time.time() - first) / 86400 if first else 0
     return gone, min(observed_days, days)
+
+
+def get_discovery_sold(candidate, days=14):
+    """Продані (зниклі й не спростовані eBay) оголошення кандидата за `days` днів."""
+    since = int(time.time()) - days * 86400
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT item_id, price, spec_group, cond_group, created_at, first_seen, gone_at, sold_check
+               FROM discovery_obs WHERE candidate = ? AND status = 'gone' AND gone_at >= ?
+               AND price IS NOT NULL ORDER BY gone_at DESC""",
+            (candidate, since),
+        ).fetchall()]
+
+
+def get_pending_discovery_checks(limit):
+    since = int(time.time()) - SOLD_CHECK_MAX_AGE_DAYS * 86400
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT candidate, item_id FROM discovery_obs
+               WHERE sold_check = 'pending' AND gone_at >= ? ORDER BY gone_at DESC LIMIT ?""",
+            (since, limit),
+        ).fetchall()]
+
+
+def apply_discovery_check(candidate, item_id, result):
+    """Як apply_sold_check, але для «💡 Що перепродавати»: знятий чи ще активний лот
+    перестає вважатися проданим."""
+    status, mark = SOLD_CHECK_OUTCOMES.get(result, (None, "unknown"))
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE discovery_obs SET sold_check = ?, checked_at = ?, status = COALESCE(?, status)
+               WHERE candidate = ? AND item_id = ? AND sold_check = 'pending'""",
+            (mark, int(time.time()), status, candidate, item_id),
+        )
 
 
 def save_discovery_result(candidate, data):

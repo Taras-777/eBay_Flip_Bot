@@ -238,7 +238,7 @@ def test_hide_from_deal_notification(screen):
 def test_owner_menu_has_refresh_button(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: True)
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
-    assert labels == ["➕ Додати товар", "📦 Мої товари", "💡 Що перепродавати", "🔄 Оновити запити"]
+    assert labels == ["➕ Додати товар", "📦 Мої товари", "💡 Що перепродавати", "🔄 Оновити запити", "🔐 Акаунт eBay"]
 
 
 def test_regular_user_menu_has_no_owner_buttons(monkeypatch):

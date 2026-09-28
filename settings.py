@@ -96,7 +96,7 @@ SALE_PRICE_PERCENTILE = 25
 MARKET_REFRESH_MINUTES = 60
 
 
-MARKET_SCAN_PAGES = 2          # 2 × 200 найновіших оголошень
+MARKET_SCAN_PAGES = 5          # 5 × 200 = до 1000 найновіших оголошень у кожній категорії
 
 
 DEAL_SCAN_LIMIT = 200   # 200 найновіших за один запит (максимум eBay) — нове оголошення
@@ -115,6 +115,29 @@ SOLD_LOOKBACK_DAYS = 60
 
 
 MIN_SOLD_SAMPLE = 5
+
+
+# Перевірка «справді продано?» через Trading API (потрібен вхід в акаунт eBay
+# власника — «🔐 Акаунт eBay» в меню). RuName — «eBay Redirect URL name» з
+# developer.ebay.com → User Tokens; задається в .env або config.py як EBAY_RUNAME.
+# Спершу змінна оточення (.env на сервері), інакше — EBAY_RUNAME у config.py (зручно на ПК)
+EBAY_RUNAME = (os.getenv("EBAY_RUNAME") or getattr(config, "EBAY_RUNAME", "") or "").strip()
+TRADING_DAILY_BUDGET = 4000    # ліміт Trading API — 5000/добу, лишаємо запас
+SOLD_CHECK_BATCH = 100         # скільки зниклих оголошень перевіряти за один цикл
+SOLD_CHECK_MAX_AGE_DAYS = 5    # зниклі давніше не перевіряємо — лишаються як є
+
+
+# Продажі у сповіщеннях: за скільки днів рахувати «як продається» конфігурація
+SALES_WINDOW_DAYS = 14
+# Не сповіщати про конфігурацію, яка за SALES_WINDOW_DAYS жодного разу не продалась,
+# якщо загалом по товару за цей час продано щонайменше стільки (тобто дані є, а ця — не йде)
+SLOW_SELLER_MIN_WATCH_SALES = 10
+
+
+# Попередження про падіння цін: типова ціна групи за тиждень знизилась на стільки %
+PRICE_DROP_ALERT_PCT = 8
+PRICE_DROP_ALERT_EVERY_DAYS = 7   # не частіше одного попередження на групу
+PRICE_HISTORY_DAYS = 60
 
 
 LISTING_OBS_RETENTION_DAYS = 90

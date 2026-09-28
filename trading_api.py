@@ -1,0 +1,143 @@
+"""
+Перевірка «справді продано?» через Trading API (GetItem).
+
+Browse API завершених оголошень не показує — вони просто зникають з видачі.
+Trading API повертає й завершені оголошення (до 90 днів) зі статусом і
+кількістю проданих штук. Тож для кожного зниклого лота бот один раз питає:
+  * продано (QuantitySold ≥ 1)  → ціна йде в статистику продажів;
+  * знято без продажу           → не рахується;
+  * ще активне (випало з видачі) → не рахується.
+Потрібен вхід в акаунт eBay власника (ebay_user.py).
+"""
+
+import xml.etree.ElementTree as ET
+
+from settings import SOLD_CHECK_BATCH, TRADING_DAILY_BUDGET, log
+from db import (
+    apply_discovery_check,
+    apply_sold_check,
+    get_api_calls_today,
+    get_pending_discovery_checks,
+    get_pending_sold_checks,
+    record_api_call,
+)
+from ebay_api import _request_with_retries
+from ebay_user import UserAuthError, _token_cache, get_user_access_token, is_connected
+
+TRADING_URL = "https://api.ebay.com/ws/api.dll"
+SITE_ID_DE = "77"
+COMPATIBILITY_LEVEL = "1349"
+NS = {"e": "urn:ebay:apis:eBLBaseComponents"}
+
+NOT_FOUND_CODES = {"17", "21916618"}                 # оголошення не існує / недоступне
+TRANSIENT_CODES = {"10007", "518", "21919144"}       # внутрішня помилка eBay / ліміт запитів
+AUTH_ERROR_CODES = {"931", "932", "16110", "21916984", "21917053"}  # токен недійсний
+
+
+def legacy_item_id(item_id):
+    """«v1|298706741553|0» → «298706741553»."""
+    parts = str(item_id or "").split("|")
+    return parts[1] if len(parts) >= 2 else parts[0]
+
+
+def _text(node, path):
+    found = node.find(path, NS)
+    return found.text.strip() if found is not None and found.text else None
+
+
+def parse_get_item(xml_text):
+    """Відповідь GetItem → {'result': sold|unsold|active|not_found|unknown, ...}."""
+    root = ET.fromstring(xml_text)
+    codes = {c.text.strip() for c in root.findall("e:Errors/e:ErrorCode", NS) if c.text}
+    ack = _text(root, "e:Ack")
+    if ack == "Failure" or root.find("e:Item", NS) is None:
+        if codes & AUTH_ERROR_CODES:
+            raise UserAuthError("eBay не прийняв вхід в акаунт — увійди знову")
+        if codes & NOT_FOUND_CODES:
+            return {"result": "not_found"}
+        message = "; ".join(
+            f"{_text(e, 'e:ErrorCode')}: {_text(e, 'e:LongMessage') or _text(e, 'e:ShortMessage') or ''}".strip()
+            for e in root.findall("e:Errors", NS)
+        ) or ack
+        if not codes or codes & TRANSIENT_CODES:
+            # збій на боці eBay — лот лишається в черзі, перевіримо наступного разу
+            raise RuntimeError(f"Trading API: тимчасова помилка {message}")
+        # Помилка саме цього оголошення (напр. недоступне для перегляду) — повторювати
+        # марно: позначаємо «eBay не відповів», лишається оцінка за зникненням
+        return {"result": "unknown", "error": message}
+
+    item = root.find("e:Item", NS)
+    listing_status = _text(item, "e:SellingStatus/e:ListingStatus")
+    sold_text = _text(item, "e:SellingStatus/e:QuantitySold")
+    info = {"listing_status": listing_status, "quantity_sold": int(sold_text) if sold_text else None}
+    if listing_status == "Active":
+        info["result"] = "active"
+    elif sold_text is None:
+        info["result"] = "unknown"   # eBay не показав, скільки продано, — не вгадуємо
+    else:
+        info["result"] = "sold" if info["quantity_sold"] >= 1 else "unsold"
+    return info
+
+
+def get_item_status(item_id):
+    """Статус оголошення в eBay. Кидає UserAuthError, якщо вхід в акаунт недійсний."""
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+        f"<ItemID>{legacy_item_id(item_id)}</ItemID>"
+        "<OutputSelector>Item.ItemID</OutputSelector>"
+        "<OutputSelector>Item.SellingStatus</OutputSelector>"
+        "</GetItemRequest>"
+    )
+    resp = _request_with_retries(
+        "POST", TRADING_URL,
+        headers={
+            "X-EBAY-API-CALL-NAME": "GetItem",
+            "X-EBAY-API-SITEID": SITE_ID_DE,
+            "X-EBAY-API-COMPATIBILITY-LEVEL": COMPATIBILITY_LEVEL,
+            "X-EBAY-API-IAF-TOKEN": get_user_access_token(),
+            "Content-Type": "text/xml; charset=utf-8",
+        },
+        data=body.encode("utf-8"), timeout=20,
+    )
+    record_api_call("trading")
+    try:
+        return parse_get_item(resp.text)
+    except UserAuthError:
+        _token_cache.update(token=None, expires_at=0.0)  # наступного разу — свіжий токен
+        raise
+    except ET.ParseError:
+        raise RuntimeError(f"Trading API: незрозуміла відповідь (HTTP {resp.status_code})")
+
+
+def verify_disappeared(limit=SOLD_CHECK_BATCH):
+    """Перевіряє чергу зниклих лотів: спершу твоїх товарів, потім «💡 Що перепродавати».
+    Повертає кількість перевірених. Викликати з потоку (asyncio.to_thread)."""
+    if not is_connected():
+        return 0
+    left = min(limit, TRADING_DAILY_BUDGET - get_api_calls_today("trading"))
+    if left <= 0:
+        return 0
+    queue = [(apply_sold_check, (r["watch_id"], r["item_id"])) for r in get_pending_sold_checks(left)]
+    if len(queue) < left:
+        queue += [(apply_discovery_check, (r["candidate"], r["item_id"]))
+                  for r in get_pending_discovery_checks(left - len(queue))]
+    done, counts = 0, {}
+    for apply, (owner, item_id) in queue:
+        try:
+            info = get_item_status(item_id)
+        except UserAuthError as e:
+            log.warning("Перевірка продажів зупинена: %s", e)
+            break
+        except Exception as e:
+            log.warning("Не вдалося перевірити оголошення %s: %s", item_id, e)
+            continue
+        if info.get("error"):
+            log.info("eBay не віддав статус оголошення %s (%s) — рахую за зникненням", item_id, info["error"])
+        apply(owner, item_id, info["result"])
+        counts[info["result"]] = counts.get(info["result"], 0) + 1
+        done += 1
+    if done:
+        log.info("Перевірено зниклих оголошень: %s (%s)", done,
+                 ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    return done

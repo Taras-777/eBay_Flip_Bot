@@ -13,6 +13,8 @@ import time
 import uuid
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+
+from netstatus import mark_down, mark_up
 from urllib.parse import quote
 
 from settings import (
@@ -124,6 +126,7 @@ def _request_with_retries(method, url, **kwargs):
     for attempt in range(1, NETWORK_MAX_ATTEMPTS + 1):
         try:
             response = _http_session().request(method, url, **kwargs)
+            mark_up("eBay")  # відповідь є — мережа працює (після збою пише «відновлено»)
             if url == SEARCH_URL:
                 record_api_call("browse")
             elif url.startswith(TAXONOMY_BASE):
@@ -132,6 +135,7 @@ def _request_with_retries(method, url, **kwargs):
                 record_api_call("browse")   # getItem — теж Browse API, та сама квота
                 record_api_call("item")
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            mark_down("eBay")
             if attempt == NETWORK_MAX_ATTEMPTS:
                 log.error(
                     "Мережевий запит %s %s завершився після %s спроб: %s",
@@ -459,18 +463,19 @@ def browse_budget_left():
     return DAILY_BROWSE_BUDGET - get_api_calls_today("browse")
 
 
-def api_usage_line():
-    """Рядок для головного меню власника."""
+def api_usage_line(extra_line=""):
+    """Рядок для головного меню власника. extra_line — додатковий рядок одразу
+    під кількістю запитів (перевірки продажів)."""
+    extra = f"\n{extra_line}" if extra_line else ""
     data = _rate_limit_cache["data"]
     if data:
-        line = (f"📡 Запити до eBay сьогодні: <b>{data['count']}</b> / {data['limit']} "
-                f"(залишилось {data['remaining']}; бот використовує не більше ~{DAILY_BROWSE_BUDGET})")
+        line = f"📡 Запити до eBay сьогодні: <b>{data['count']}</b> / {data['limit']}" + extra
         if data["reset"]:
             reset_local = datetime.fromtimestamp(data["reset"], LOCAL_TZ).strftime("%H:%M")
             line += f"\n🔄 Ліміт скинеться о {reset_local}"
         updated = datetime.fromtimestamp(_rate_limit_cache["fetched_at"], LOCAL_TZ).strftime("%H:%M")
         return line + f"\n<i>дані eBay, оновлено о {updated}</i>"
-    return (f"📡 Запити до eBay сьогодні: <b>{get_api_calls_today()}</b>\n"
+    return (f"📡 Запити до eBay сьогодні: <b>{get_api_calls_today()}</b>{extra}\n"
             "<i>підрахунок бота; офіційні дані eBay ще не отримані</i>")
 
 

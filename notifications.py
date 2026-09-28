@@ -22,6 +22,10 @@ async def _send_single_deal(app, w, deal_id, it, stat):
     )
     spec_note = f" · 💾 {it['spec_group']}" if it["spec_group"] != "unspecified" else ""
     price_drop_note = "\n🔻 Продавець знизив ціну" if it.get("price_dropped") else ""
+    sales_line = f"{it['sales_note']}\n" if it.get("sales_note") else ""
+    # Якщо ціна продажу вже рахується за справжніми продажами — застереження зайве
+    estimate_note = ("" if "продан" in (stat.get("sale_source") or "")
+                     else "⚠️ Ціна продажу — оцінка за поточними оголошеннями.\n")
 
     text = (
         f"🔥 Вигідна пропозиція: {w['label']}{price_drop_note}\n\n"
@@ -29,10 +33,11 @@ async def _send_single_deal(app, w, deal_id, it, stat):
         f"💶 Ціна з доставкою: {it['total_price']:.0f}€ (купувати варто до ~{buy_limit:.0f}€)\n"
         f"📈 Продати за: ~{sale_price:.0f}€ ({stat['sale_source']})\n"
         f"📊 Типова ціна оголошень: ~{stat['median_price']:.0f}€\n"
+        f"{sales_line}"
         f"💰 Орієнтовний прибуток: ~{profit:.0f}€ "
         f"(після комісії eBay ~{EBAY_SELLING_FEES_PCT}% і доставки ~{RESALE_SHIPPING_EUR}€)\n"
         f"🏷️ Стан: {it.get('condition') or 'н/д'}{spec_note}{warning}{best_offer_note}\n"
-        f"⚠️ Ціна продажу — оцінка, а не підтверджений продаж.\n"
+        f"{estimate_note}"
         f"🔗 {it['url']}"
     )
     buttons = [
@@ -66,11 +71,27 @@ async def _send_grouped_deals(app, w, new_deals):
         lines.append(
             f"{n}. {it['title'][:120]}\n"
             f"💰 {it['total_price']:.0f}€ → продаж ~{sale_price:.0f}€, прибуток ~{profit:.0f}€"
-            f"{spec_note}{warning}{offer_mark}{drop_mark}\n🔗 {it['url']}"
+            f"{spec_note}{warning}{offer_mark}{drop_mark}\n"
+            + (f"{it['sales_note']}\n" if it.get("sales_note") else "")
+            + f"🔗 {it['url']}"
         )
     rows = list(reject_buttons)
     rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
     await notify(app, w["chat_id"], "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def _notify_price_drops(app, w, drops):
+    """📉 Типова ціна групи за тиждень помітно впала — попередження перед покупкою."""
+    lines = [f"📉 Ціни на «{w['label']}» падають\n"]
+    for cond, spec, old, new, pct in drops:
+        lines.append(f"• {_group_label(cond, spec)}: {old:.0f}€ → {new:.0f}€ за тиждень ({pct:.0f}%)")
+    lines.append("\nКупуй обережно: поки товар дійде і буде перепроданий, ціна може впасти ще. "
+                 "«Купувати до» бот уже знизив відповідно до нових цін.")
+    buttons = [[InlineKeyboardButton("📊 Відкрити товар", callback_data=f"watch_details:{w['id']}")]]
+    try:
+        await notify(app, w["chat_id"], "\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception as e:
+        log.warning("Не вдалося надіслати попередження про падіння цін для watch #%s: %s", w["id"], e)
 
 
 async def _notify_median_ready(app, w, new_stats):

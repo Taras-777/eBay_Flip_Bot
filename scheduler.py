@@ -17,6 +17,7 @@ from settings import (
     LOW_BUDGET_INTERVAL_MINUTES,
     MARKET_REFRESH_MINUTES,
     MAX_SPEC_LOOKUPS_PER_DEAL_SCAN,
+    SALES_WINDOW_DAYS,
     SEARCH_RESERVE,
     THREAD_POOL_SIZE,
     WATCH_CONCURRENCY,
@@ -29,6 +30,7 @@ from db import (
     cleanup_old_seen_items,
     get_market_stats,
     get_seen_items,
+    get_sold_listings,
     list_watches,
     watch_category_ids,
 )
@@ -42,7 +44,16 @@ from market import (
 )
 from panel import repost_panel
 from discovery import run_discovery
-from notifications import _notify_median_error, _notify_median_ready, _send_grouped_deals, _send_single_deal
+from trading_api import verify_disappeared
+from notifications import (
+    _notify_median_error,
+    _notify_median_ready,
+    _notify_price_drops,
+    _send_grouped_deals,
+    _send_single_deal,
+)
+from sales import is_slow_seller, price_drops, sales_note
+from netstatus import is_down, mark_down, mark_up
 
 
 async def check_all_watches(app: Application):
@@ -75,6 +86,9 @@ async def check_one_watch(app: Application, w: dict):
         items, stats, newly = await _recalculate_watch_medians(w)
         if newly:
             await _notify_median_ready(app, w, [stats[key] for key in newly])
+        drops = await asyncio.to_thread(price_drops, w["id"])
+        if drops:
+            await _notify_price_drops(app, w, drops)
     else:
         stats = {(r["cond_group"], r["spec_group"]): r for r in rows}
         def _deal_scan():
@@ -90,6 +104,7 @@ async def check_one_watch(app: Application, w: dict):
         return
 
     new_deals = []
+    sold = get_sold_listings(w["id"], SALES_WINDOW_DAYS)  # як продаються конфігурації
     seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
     seen_updates = []  # записуються одним пакетом наприкінці
     for it in items:
@@ -112,6 +127,13 @@ async def check_one_watch(app: Application, w: dict):
         if it["effective_price"] > max_buy_price(sale_price):
             seen_updates.append((it["item_id"], it["effective_price"], None))
             continue
+        # Дешево, але така конфігурація не продається (при живому ринку) — не сповіщаємо
+        if is_slow_seller(sold, it["cond_group"], it["spec_group"]):
+            log.info("watch #%s: %s — вигідна ціна, але %s не продається, пропускаю",
+                     w["id"], it["item_id"], it["spec_group"])
+            seen_updates.append((it["item_id"], it["effective_price"], None))
+            continue
+        it["sales_note"] = sales_note(sold, stat["cond_group"], stat["spec_group"])
         discount_pct = (sale_price - it["total_price"]) / sale_price * 100
 
         already_notified_price = seen["last_notified_price"] if seen else None
@@ -151,12 +173,37 @@ async def check_one_watch(app: Application, w: dict):
 _error_notice = {"last": 0.0}
 
 
+TELEGRAM_RECHECK_SECONDS = 5
+
+
+def _start_telegram_watch(app):
+    """Після мережевої помилки Telegram — стежимо, коли зв'язок повернеться."""
+    task = app.bot_data.get("telegram_watch_task")
+    if task is None or task.done():
+        app.bot_data["telegram_watch_task"] = asyncio.create_task(_wait_telegram_back(app))
+
+
+async def _wait_telegram_back(app):
+    while is_down("Telegram"):
+        await asyncio.sleep(TELEGRAM_RECHECK_SECONDS)
+        try:
+            await app.bot.get_me()
+        except (NetworkError, TimedOut):
+            continue
+        except Exception as e:
+            log.debug("Перевірка зв'язку з Telegram: %s", e)
+            continue
+        mark_up("Telegram")
+
+
 async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
     """Необроблені помилки: у лог повністю, власнику — коротке повідомлення.
     Тимчасові мережеві збої Telegram лише логуються."""
     err = context.error
     if isinstance(err, (NetworkError, TimedOut)):
         log.warning("Тимчасова мережева помилка Telegram: %s", err)
+        mark_down("Telegram")
+        _start_telegram_watch(context.application)
         return
     log.error("Помилка під час обробки оновлення", exc_info=err)
     if config.OWNER_TELEGRAM_ID and time.time() - _error_notice["last"] > ERROR_NOTICE_INTERVAL:
@@ -196,6 +243,12 @@ async def scheduler_loop(app: Application):
             task = app.bot_data.get("discovery_task")
             if task is None or task.done():
                 app.bot_data["discovery_task"] = asyncio.create_task(asyncio.to_thread(run_discovery))
+
+            # «Справді продано?» — перевірка зниклих оголошень через Trading API
+            # (лише коли власник підключив акаунт eBay; окремий ліміт, Browse не витрачає)
+            task = app.bot_data.get("sold_check_task")
+            if task is None or task.done():
+                app.bot_data["sold_check_task"] = asyncio.create_task(asyncio.to_thread(verify_disappeared))
 
             # Раз на добу прибираємо застарілі записи seen_items
             now = time.time()
@@ -240,7 +293,8 @@ async def post_init(app: Application):
 
 
 async def post_shutdown(app: Application):
-    task = app.bot_data.pop("scheduler_task", None)
-    if task:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    for key in ("scheduler_task", "telegram_watch_task"):
+        task = app.bot_data.pop(key, None)
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

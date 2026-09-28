@@ -82,8 +82,8 @@ def test_rate_limit_parsing_picks_daily_window(monkeypatch):
     data = ebay_api.fetch_browse_rate_limit()
     assert (data["limit"], data["remaining"], data["count"]) == (5000, 4910, 90)
     line = ebay_api.api_usage_line()
-    assert "<b>90</b> / 5000" in line and "залишилось 4910" in line
-    assert "бот використовує не більше" in line
+    assert "<b>90</b> / 5000" in line
+    assert "залишилось" not in line and "бот використовує" not in line
 
 
 def test_budget_uses_fresh_ebay_data(monkeypatch):

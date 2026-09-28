@@ -21,6 +21,8 @@ from settings import (
     MIN_PROFIT_EUR,
     MIN_SAMPLE_SIZE,
     MIN_SOLD_SAMPLE,
+    SEARCH_RESERVE,
+    SOLD_LOOKBACK_DAYS,
     LOCAL_TZ,
     is_owner,
     log,
@@ -40,7 +42,9 @@ from db import (
     get_learned_words,
     get_deal_stats,
     get_market_stats,
+    get_price_history,
     get_required_aspects,
+    get_sold_listings,
     get_user_row,
     get_watch,
     get_watch_categories,
@@ -57,6 +61,8 @@ from db import (
 from ebay_api import (
     _watch_search_kwargs,
     aspect_options_for_categories,
+    browse_budget_left,
+    fetch_browse_rate_limit,
     get_category_options,
     search_in_categories,
 )
@@ -64,6 +70,7 @@ from market import (
     _annotate_items,
     _apply_item_filters,
     _recalculate_watch_medians,
+    filter_outliers,
     max_buy_price,
     minimum_sample_size_for_query,
     suggest_min_price,
@@ -75,12 +82,13 @@ from panel import (
     build_main_menu,
     cancel_keyboard,
     main_menu_text,
-    refresh_usage_callback,
     show_main_menu,
     show_panel,
 )
 from access import _notify_owner_new_request, cmd_pending, cmd_users, require_access
 from notifications import _notify_median_error, _notify_median_problem
+from ebay_user import is_connected
+from sales import speed_text, summarize, weekly_change
 
 
 # ============================================================
@@ -482,7 +490,7 @@ async def addwatch_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_
     elif action == "users":
         await cmd_users(update, context)
     elif action == "refresh_usage":
-        await refresh_usage_callback(update, context)
+        await refresh_all_callback(update, context)
     elif action == "discover":
         await discover_callback(update, context)
     else:
@@ -613,11 +621,16 @@ def _watch_details_text(watch):
         return "\n".join(lines)
 
     lines.append("\n💰 <b>Купівля і продаж:</b>")
+    history = get_price_history(watch["id"])
     for s in sorted(stats, key=lambda s: (s["cond_group"], s["spec_group"] != "*", s["spec_group"])):
         sale_price = s["sale_price"] or s["median_price"]
         buy_limit = max_buy_price(sale_price)
         trend = ""
-        if s["prev_median_price"]:
+        weekly = weekly_change(history.get((s["cond_group"], s["spec_group"])))
+        if weekly and abs(weekly[0]) >= 1:
+            arrow = "📉" if weekly[0] < 0 else "📈"
+            trend = f" {arrow} {weekly[0]:+.0f}% за тиждень"
+        elif s["prev_median_price"]:
             if s["median_price"] < s["prev_median_price"] * 0.98:
                 trend = " ⬇️"
             elif s["median_price"] > s["prev_median_price"] * 1.02:
@@ -644,8 +657,9 @@ async def _show_watch_details(update, context, watch):
         [InlineKeyboardButton("🔍 Перевірити оголошення", callback_data=f"chkl:{watch_id}")],
         [
             InlineKeyboardButton("🧩 Усі конфігурації", callback_data=f"configs:{watch_id}"),
-            InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}"),
+            InlineKeyboardButton("📈 Продажі", callback_data=f"sales:{watch_id}"),
         ],
+        [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")],
         [
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
             InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
@@ -739,6 +753,92 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await show_panel(
         update, context, "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(rows + back_rows),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+def _ago(ts):
+    days = int((time.time() - ts) // 86400)
+    if days <= 0:
+        return "сьогодні"
+    if days == 1:
+        return "вчора"
+    return f"{plural(days, 'день', 'дні', 'днів')} тому"
+
+
+def _sales_text(watch, sold, show_account_hint=False):
+    """Статистика продажів товару за конфігураціями (з таблиці спостережень, без запитів до eBay)."""
+    title = f"📈 <b>{html.escape(watch['label'])}: продажі за {SOLD_LOOKBACK_DAYS} днів</b>"
+    if not sold:
+        text = (f"{title}\n\nПродажів ще не помічено. Бот вважає оголошення проданим, коли воно зникає "
+                "з eBay задовго до кінця строку (або eBay підтверджує продаж). Статистика "
+                "накопичується з кожним ринковим скануванням — зазирни через день-два.")
+        return text + ("\n\n💡 Підключи «🔐 Акаунт eBay» в меню — тоді бот перевірятиме кожен продаж через eBay."
+                       if show_account_hint else "")
+
+    week_ago = time.time() - 7 * 86400
+    confirmed = sum(1 for r in sold if r["sold_check"] == "sold")
+    week = sum(1 for r in sold if r["gone_at"] >= week_ago)
+    lines = [
+        title, "",
+        f"Продано: <b>{len(sold)}</b>" + (f" (✅ підтверджено eBay: {confirmed})" if confirmed else ""),
+        f"За останні 7 днів: <b>{week}</b> (~{week / 7:.1f} на день)",
+    ]
+
+    groups = {}
+    for r in sold:
+        groups.setdefault((r["cond_group"], r["spec_group"] or "unspecified"), []).append(r)
+    current_cond = None
+    for (cond, spec), rows in sorted(groups.items(), key=lambda kv: (kv[0][0], -len(kv[1]))):
+        if cond != current_cond:
+            current_cond = cond
+            lines.append(f"\n<b>{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())}</b>")
+        prices = [r["price"] for r in rows]
+        clean = filter_outliers(prices) or prices
+        spec_txt = "конфігурація не вказана" if spec == "unspecified" else spec
+        n_confirmed = sum(1 for r in rows if r["sold_check"] == "sold")
+        lines.append(
+            f"• <b>{html.escape(spec_txt)}</b> — {plural(len(rows), 'продаж', 'продажі', 'продажів')}"
+            + (f" (✅{n_confirmed})" if n_confirmed else "")
+            + (f"\n  💶 типова ціна <b>{statistics.median(clean):.0f}€</b>, {min(prices):.0f}–{max(prices):.0f}€"
+               if min(prices) != max(prices) else f"\n  💶 ціна <b>{prices[0]:.0f}€</b>")
+            + (f"\n  ⏱ продається {speed_text(summarize(rows)['median_days'])}"
+               if summarize(rows)["median_days"] is not None else "")
+            + f"\n  🕒 останній {_ago(rows[0]['gone_at'])}"
+        )
+
+    lines.append("\n<b>Останні продажі:</b>")
+    for r in sold[:8]:
+        date = datetime.fromtimestamp(r["gone_at"], LOCAL_TZ).strftime("%d.%m")
+        spec = "" if (r["spec_group"] or "unspecified") == "unspecified" else f" · {r['spec_group']}"
+        mark = "✅ " if r["sold_check"] == "sold" else ""
+        name = html.escape((r["title"] or "оголошення")[:45])
+        link = f'<a href="{html.escape(r["url"])}">{name}</a>' if r["url"] else name
+        lines.append(f"{mark}{date}{html.escape(spec)} · <b>{r['price']:.0f}€</b> — {link}")
+
+    lines.append("\n<i>Ціна — з доставкою, остання, яку бачив бот. ✅ — продаж підтвердив eBay; "
+                 "решта — оголошення зникли задовго до кінця строку (найімовірніше, куплені).</i>")
+    if show_account_hint:
+        lines.append("<i>💡 Підключи «🔐 Акаунт eBay» в меню — тоді бот відсіюватиме оголошення, "
+                     "які продавець просто зняв.</i>")
+    return "\n".join(lines)
+
+
+@require_access
+async def sales_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """sales:<id> — статистика продажів товару за конфігураціями."""
+    query_cb = update.callback_query
+    watch_id = int(query_cb.data.split(":")[1])
+    watch = get_watch(watch_id, update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Цей товар уже видалено.", show_alert=True)
+        return
+    await _ack_callback(update)
+    hint = is_owner(update.effective_user.id) and not is_connected()
+    await show_panel(
+        update, context, _sales_text(watch, get_sold_listings(watch_id), show_account_hint=hint),
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]]),
         parse_mode=ParseMode.HTML,
     )
 
@@ -1459,7 +1559,7 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "menu:list":
         await cmd_list(update, context)
     elif data == "menu:refresh_usage":
-        await refresh_usage_callback(update, context)
+        await refresh_all_callback(update, context)
     elif data == "menu:discover":
         await discover_callback(update, context)
     else:
@@ -1478,13 +1578,20 @@ def _recommendation_text(n, r):
         deals = f"🔥 ~{per_week:.0f} вигідних на тиждень, прибуток ~{r['deal_profit']}€ з кожної"
     else:
         deals = f"🔥 вигідні трапляються рідко (зараз {r['deals_now']}), прибуток ~{r['deal_profit']}€"
-    if r["sold_per_day"] is None:
-        speed = "⚡ швидкість продажу ще рахую (потрібно кілька днів)"
+    sold_week = r.get("sold_week") or 0
+    if sold_week:
+        confirmed = f" (✅{r['sold_confirmed']})" if r.get("sold_confirmed") else ""
+        speed = f", продаються {speed_text(r['sold_days'])}" if r.get("sold_days") is not None else ""
+        price = f" по ~{r['sold_median']}€" if r.get("sold_median") else ""
+        sold = f"🛒 продано за тиждень: {sold_week}{confirmed}{price}{speed}"
+    elif r["sold_per_day"] is None:
+        sold = "🛒 продажі ще рахую (потрібно кілька перевірок)"
     else:
-        speed = f"⚡ продається ~{r['sold_per_day']:g} на день"
+        sold = "🛒 за тиждень продажів не помічено"
+    sale_note = " (за продажами)" if r.get("sale_source") == "sold" else ""
     return (f"<b>{n}. {r['emoji']} {html.escape(r['name'])}</b>{spec}\n"
-            f"💶 типова ціна ~{r['median']}€ · купувати до ~{r['buy_limit']}€\n"
-            f"{deals}\n{speed}")
+            f"💶 типова ціна ~{r['median']}€ · купувати до ~{r['buy_limit']}€{sale_note}\n"
+            f"{deals}\n{sold}")
 
 
 @require_access
@@ -1504,12 +1611,13 @@ async def discover_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         updated = max(r["updated_at"] for r in recs)
         lines.append(f"<i>Оновлено: {datetime.fromtimestamp(updated, LOCAL_TZ).strftime('%d.%m %H:%M')}</i>")
         lines += [_recommendation_text(n, r) for n, r in enumerate(recs, 1)]
-        lines.append("<i>⚠️ Оцінка за оголошеннями eBay, а не за реальними продажами. "
+        lines.append("<i>Продажі — оголошення, які зникли з eBay задовго до кінця строку; ✅ — продаж "
+                     "підтвердив eBay. «За продажами» — ціна рахується за ними, інакше — за оголошеннями. "
                      "Натисни товар, щоб почати його відстежувати.</i>")
         buttons = [InlineKeyboardButton(f"➕ {r['name']}", callback_data=f"dadd:{i}") for i, r in enumerate(recs)]
         rows += [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     else:
-        lines.append("Аналіз ще не готовий: бот перевіряє популярні товари раз на 12 годин, "
+        lines.append("Аналіз ще не готовий: бот перевіряє популярні товари раз на 4 години, "
                      "перший результат з'явиться протягом кількох хвилин після запуску.")
     if is_owner(update.effective_user.id):
         rows.append([InlineKeyboardButton("🔄 Оновити аналіз", callback_data="drefresh")])
@@ -1520,10 +1628,10 @@ async def discover_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 @require_access
 async def discover_refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """drefresh — перерахувати рейтинг зараз (лише власник: ~25 запитів до eBay)."""
+    """drefresh — перерахувати рейтинг зараз (лише власник: ~90 запитів до eBay)."""
     if not is_owner(update.effective_user.id):
         return await discover_callback(update, context)
-    await show_panel(update, context, "💡 ⏳ Аналізую популярні товари на eBay… (до хвилини)")
+    await show_panel(update, context, "💡 ⏳ Аналізую ~90 популярних товарів на eBay… (1–2 хвилини)")
     try:
         await asyncio.to_thread(run_discovery, True)
     except Exception as e:
@@ -1692,6 +1800,61 @@ async def recalculate_median_callback(update: Update, context: ContextTypes.DEFA
         )
 
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
+
+
+async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """menu:refresh_usage («🔄 Оновити запити», лише власник): свіжі ціни з eBay для
+    всіх товарів власника + свіжі дані про ліміт запитів."""
+    if not is_owner(update.effective_user.id):
+        await _ack_callback(update)
+        await show_main_menu(update, context)
+        return
+    if context.bot_data.get("refresh_all_running"):
+        try:
+            await update.callback_query.answer("Уже оновлюю — зачекай кілька секунд.")
+        except Exception:
+            pass
+        return
+    await _ack_callback(update)
+    chat_id = update.effective_chat.id
+    watches = list_watches(chat_id=chat_id, active_only=True)
+    done, failed, skipped = [], [], []
+    context.bot_data["refresh_all_running"] = True
+    try:
+        for n, watch in enumerate(watches, 1):
+            if browse_budget_left() < SEARCH_RESERVE:
+                skipped = [w["label"] for w in watches[n - 1:]]
+                break
+            await show_panel(
+                update, context,
+                f"🔄 Оновлюю ціни з eBay… ({n}/{len(watches)})\n\n⏳ <b>{html.escape(watch['label'])}</b>",
+                parse_mode=ParseMode.HTML,
+            )
+            try:
+                _, stats, _ = await _recalculate_watch_medians(watch, replace_existing=True)
+                (done if stats else failed).append(watch["label"])
+            except Exception as e:
+                log.warning("Не вдалося оновити ціни для watch #%s: %s", watch["id"], e)
+                failed.append(watch["label"])
+        try:
+            await asyncio.to_thread(fetch_browse_rate_limit)
+        except Exception as e:
+            log.warning("Не вдалося оновити дані про ліміт eBay: %s", e)
+    finally:
+        context.bot_data["refresh_all_running"] = False
+
+    notes = []
+    if done:
+        notes.append(f"✅ Ціни оновлено: {plural(len(done), 'товар', 'товари', 'товарів')}")
+    if failed:
+        notes.append("⚠️ Не вдалося порахувати: " + html.escape(", ".join(failed)))
+    if skipped:
+        notes.append("⏸ Замало запитів до eBay на сьогодні, не оновлено: " + html.escape(", ".join(skipped)))
+    if not watches:
+        notes.append("Товарів ще немає — оновлено лише дані про запити.")
+    user_id = update.effective_user.id
+    await show_panel(update, context, main_menu_text(user_id) + "\n\n" + "\n".join(notes),
+                     reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
 
 
 @require_access

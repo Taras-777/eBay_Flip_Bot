@@ -3,24 +3,28 @@
 яких ти ще не відстежуєш, і складає рейтинг найперспективніших.
 
 Раз на DISCOVERY_INTERVAL_HOURS для кожного кандидата — один запит до eBay
-(200 найновіших оголошень). З них рахується:
+(200 найновіших оголошень). З них і зі спостережень за зниклими оголошеннями
+(продані; з підключеним «🔐 Акаунт eBay» — підтверджені eBay) рахується:
   * типова ціна і реалістична ціна продажу (як для звичайних товарів);
   * скільки оголошень зараз дешевші за «купувати до» і який прибуток вони дають
     (після комісії eBay і доставки), і як часто такі з'являються;
-  * швидкість продажу — скільки оголошень на добу зникає (ймовірно, куплені);
-    з'являється після кількох днів спостережень.
+  * продажі — скільки продано за тиждень, за якою ціною і як швидко;
+    з'являються після кількох перевірок. Коли продажів достатньо, ціна продажу
+    рахується за ними, а не за оголошеннями.
 
 Список кандидатів — CANDIDATES нижче, його можна доповнювати.
 """
 
+import re
 import statistics
 import time
 from collections import Counter
 
-from settings import DEFAULT_CONDITION_IDS, SEARCH_RESERVE, log
-from textparse import _search_tokens, extract_spec_key, is_accessory_category
+from settings import DEFAULT_CONDITION_IDS, MIN_SOLD_SAMPLE, SEARCH_RESERVE, log
+from textparse import _search_tokens, _title_matches_search, extract_spec_key, is_accessory_category
 from db import (
     discovery_gone_stats,
+    get_discovery_sold,
     get_discovery_results,
     get_meta,
     list_watches,
@@ -30,38 +34,130 @@ from db import (
 )
 from ebay_api import browse_budget_left, search_active_items
 from market import estimate_resale_profit, filter_outliers, max_buy_price, percentile
+from sales import summarize
 
-DISCOVERY_INTERVAL_HOURS = 12
+DISCOVERY_INTERVAL_HOURS = 4     # ~90 товарів × 6 разів = ~550 запитів на добу
+DISCOVERY_SOLD_DAYS = 7
 DISCOVERY_MIN_SAMPLE = 10         # менше оголошень — оцінка ненадійна
 DISCOVERY_EXCLUDE = "broken defekt teile parts kaputt"
 
 # (емодзі, назва, пошуковий запит, мінімальна ціна — щоб eBay не віддавав аксесуари)
+# Популярні на eBay.de товари для перепродажу: ходова електроніка, яку часто
+# продають вживаною і дешевше за ринок. Список можна доповнювати.
 CANDIDATES = [
+    # Консолі та VR
     ("🎮", "PlayStation 5 Slim", "PlayStation 5 Slim", 250),
     ("🎮", "PlayStation 5 Pro", "PlayStation 5 Pro", 450),
+    ("🎮", "PlayStation Portal", "PlayStation Portal", 120),
+    ("🥽", "PlayStation VR2", "PlayStation VR2", 200),
     ("🎮", "Xbox Series X", "Xbox Series X", 200),
+    ("🎮", "Xbox Series S", "Xbox Series S", 120),
     ("🎮", "Nintendo Switch OLED", "Nintendo Switch OLED", 150),
     ("🎮", "Nintendo Switch 2", "Nintendo Switch 2", 250),
+    ("🎮", "Nintendo Switch Lite", "Nintendo Switch Lite", 80),
     ("🎮", "Steam Deck OLED", "Steam Deck OLED", 300),
+    ("🎮", "ASUS ROG Ally", "ROG Ally", 250),
+    ("🎮", "Lenovo Legion Go", "Legion Go", 300),
     ("🥽", "Meta Quest 3", "Meta Quest 3", 250),
+    ("🥽", "Meta Quest 3S", "Meta Quest 3S", 170),
+    # Смартфони
+    ("📱", "iPhone 13", "iPhone 13", 200),
+    ("📱", "iPhone 13 Pro", "iPhone 13 Pro", 280),
+    ("📱", "iPhone 14", "iPhone 14", 250),
+    ("📱", "iPhone 14 Pro", "iPhone 14 Pro", 350),
     ("📱", "iPhone 15", "iPhone 15", 350),
     ("📱", "iPhone 15 Pro", "iPhone 15 Pro", 450),
+    ("📱", "iPhone 15 Pro Max", "iPhone 15 Pro Max", 550),
     ("📱", "iPhone 16", "iPhone 16", 450),
     ("📱", "iPhone 16 Pro", "iPhone 16 Pro", 550),
+    ("📱", "iPhone 16 Pro Max", "iPhone 16 Pro Max", 650),
+    ("📱", "iPhone 17 Pro", "iPhone 17 Pro", 750),
+    ("📱", "Samsung Galaxy S23", "Samsung Galaxy S23", 220),
     ("📱", "Samsung Galaxy S24", "Samsung Galaxy S24", 300),
-    ("🎧", "AirPods Pro 2", "AirPods Pro 2", 90),
-    ("🎧", "Sony WH-1000XM5", "Sony WH-1000XM5", 120),
-    ("⌚", "Apple Watch Series 9", "Apple Watch Series 9", 150),
-    ("⌚", "Garmin Fenix 7", "Garmin Fenix 7", 200),
+    ("📱", "Samsung Galaxy S24 Ultra", "Samsung Galaxy S24 Ultra", 500),
+    ("📱", "Samsung Galaxy S25", "Samsung Galaxy S25", 400),
+    ("📱", "Samsung Galaxy S25 Ultra", "Samsung Galaxy S25 Ultra", 650),
+    ("📱", "Samsung Galaxy Z Flip6", "Galaxy Z Flip6", 350),
+    ("📱", "Google Pixel 8 Pro", "Pixel 8 Pro", 280),
+    ("📱", "Google Pixel 9 Pro", "Pixel 9 Pro", 450),
+    # Планшети й ноутбуки
+    ("📲", "iPad Air M2", "iPad Air M2", 350),
+    ("📲", "iPad Pro M4", "iPad Pro M4", 650),
+    ("📲", "iPad mini 7", "iPad mini 7", 300),
+    ("📲", "Samsung Galaxy Tab S9", "Galaxy Tab S9", 300),
+    ("💻", "MacBook Air M1", "MacBook Air M1", 350),
     ("💻", "MacBook Air M2", "MacBook Air M2", 500),
     ("💻", "MacBook Air M3", "MacBook Air M3", 650),
-    ("📲", "iPad Air M2", "iPad Air M2", 350),
+    ("💻", "MacBook Pro M3", "MacBook Pro M3", 900),
+    ("💻", "MacBook Pro M4", "MacBook Pro M4", 1100),
+    ("🖥", "Mac mini M4", "Mac mini M4", 400),
+    # Комп'ютерні комплектуючі
+    ("🖥", "RTX 4060", "RTX 4060", 180),
     ("🖥", "RTX 4070", "RTX 4070", 350),
-    ("🚁", "DJI Mini 4 Pro", "DJI Mini 4 Pro", 400),
-    ("📷", "GoPro Hero 12", "GoPro Hero 12", 150),
+    ("🖥", "RTX 4070 Super", "RTX 4070 Super", 420),
+    ("🖥", "RTX 4080", "RTX 4080", 700),
+    ("🖥", "RTX 4090", "RTX 4090", 1200),
+    ("🖥", "RTX 5070", "RTX 5070", 400),
+    ("🖥", "RX 7800 XT", "RX 7800 XT", 300),
+    ("🖥", "Ryzen 7 7800X3D", "Ryzen 7 7800X3D", 220),
+    # Аудіо
+    ("🎧", "AirPods Pro 2", "AirPods Pro 2", 90),
+    ("🎧", "AirPods Max", "AirPods Max", 250),
+    ("🎧", "Sony WH-1000XM5", "Sony WH-1000XM5", 120),
+    ("🎧", "Sony WH-1000XM4", "Sony WH-1000XM4", 90),
+    ("🎧", "Bose QuietComfort Ultra", "Bose QuietComfort Ultra", 150),
+    ("🔊", "Sonos Era 100", "Sonos Era 100", 120),
+    ("🔊", "Sonos Arc", "Sonos Arc", 400),
+    # Годинники
+    ("⌚", "Apple Watch Series 9", "Apple Watch Series 9", 150),
+    ("⌚", "Apple Watch Series 10", "Apple Watch Series 10", 200),
+    ("⌚", "Apple Watch Ultra 2", "Apple Watch Ultra 2", 400),
+    ("⌚", "Samsung Galaxy Watch 6", "Galaxy Watch 6", 90),
+    ("⌚", "Garmin Fenix 7", "Garmin Fenix 7", 200),
+    ("⌚", "Garmin Fenix 8", "Garmin Fenix 8", 450),
+    ("⌚", "Garmin Forerunner 965", "Garmin Forerunner 965", 250),
+    # Фото, відео, дрони
+    ("📷", "Sony A7 III", "Sony A7 III", 700),
+    ("📷", "Sony A7 IV", "Sony A7 IV", 1200),
+    ("📷", "Sony ZV-E10", "Sony ZV-E10", 350),
+    ("📷", "Fujifilm X100VI", "Fujifilm X100VI", 1100),
+    ("📷", "Fujifilm X-T5", "Fujifilm X-T5", 900),
     ("📷", "Canon EOS R50", "Canon EOS R50", 400),
+    ("📷", "Canon EOS R6", "Canon EOS R6", 1000),
+    ("📷", "GoPro Hero 12", "GoPro Hero 12", 150),
+    ("📷", "GoPro Hero 13", "GoPro Hero 13", 200),
+    ("📷", "Insta360 X4", "Insta360 X4", 250),
+    ("📷", "DJI Osmo Pocket 3", "DJI Osmo Pocket 3", 280),
+    ("🚁", "DJI Mini 3 Pro", "DJI Mini 3 Pro", 350),
+    ("🚁", "DJI Mini 4 Pro", "DJI Mini 4 Pro", 400),
+    ("🚁", "DJI Avata 2", "DJI Avata 2", 350),
+    # Побутова техніка
     ("🧹", "Dyson V15", "Dyson V15", 250),
+    ("🧹", "Dyson V12", "Dyson V12", 200),
+    ("💇", "Dyson Airwrap", "Dyson Airwrap", 250),
+    ("💇", "Dyson Supersonic", "Dyson Supersonic", 150),
+    ("🤖", "Roborock S8", "Roborock S8", 250),
+    ("🍲", "Thermomix TM6", "Thermomix TM6", 600),
+    ("☕", "De'Longhi Magnifica Evo", "Magnifica Evo", 200),
+    ("📖", "Kindle Paperwhite", "Kindle Paperwhite", 60),
 ]
+
+
+# Варіанти моделі, які рахуються окремо (Galaxy S24 ≠ S24 Ultra, RTX 4070 ≠ 4070 Ti).
+# «super» перевіряється лише після номера моделі: «super Zustand» — це не RTX Super.
+EXTRA_VARIANT_TERMS = {"ultra", "ti", "fe"}
+SUPER_MODEL = re.compile(r"\b\d{4}\s?super\b", re.IGNORECASE)
+
+
+def _same_model(title, query):
+    """Оголошення саме цієї моделі (не аксесуар і не сусідній варіант)."""
+    if not _title_matches_search(title, query, DISCOVERY_EXCLUDE):
+        return False
+    title_tokens, query_tokens = _search_tokens(title), _search_tokens(query)
+    for term in EXTRA_VARIANT_TERMS:
+        if (term in title_tokens) != (term in query_tokens):
+            return False
+    return not (SUPER_MODEL.search(title) and "super" not in query_tokens)
 
 
 def _already_tracked(chat_id=None):
@@ -77,6 +173,7 @@ def analyze_candidate(emoji, name, query, floor):
     )
     items = [it for it in items
              if it["cond_group"] != "parts"
+             and _same_model(it["title"], query)
              and not any(is_accessory_category(n) for n in it.get("category_names") or [])]
     for it in items:
         it["spec_group"] = extract_spec_key(it["title"])
@@ -95,6 +192,19 @@ def analyze_candidate(emoji, name, query, floor):
 
     median = statistics.median(prices)
     sale = percentile(prices, 25)
+    sale_source = "listings"
+
+    # Продажі: спершу тієї ж конфігурації, якщо їх замало — усього стану
+    sold_all = [r for r in get_discovery_sold(name, DISCOVERY_SOLD_DAYS) if r["cond_group"] != "parts"]
+    cond = "used" if any(it["cond_group"] == "used" for it in items) else None
+    sold = [r for r in sold_all if (cond is None or r["cond_group"] == cond)]
+    same_spec = [r for r in sold if r["spec_group"] == spec]
+    if len(same_spec) >= 3:
+        sold = same_spec
+    sold_prices = filter_outliers([r["price"] for r in sold]) if sold else []
+    if len(sold_prices) >= MIN_SOLD_SAMPLE:
+        sale = min(statistics.median(sold_prices), median)
+        sale_source = "sold"
     buy_limit = max_buy_price(sale)
     # Вигідні — дешевші за «купувати до», але не підозріло дешеві (менше половини ціни)
     raw = [it["total_price"] for it in sample]
@@ -113,6 +223,11 @@ def analyze_candidate(emoji, name, query, floor):
         # скільки вигідних оголошень з'являється за тиждень (частка вигідних × нові за добу × 7)
         "deals_per_week": round(deal_share * new_per_day * 7, 1),
         "sold_per_day": sold_per_day, "new_per_day": new_per_day,
+        "sale_source": sale_source,
+        "sold_week": len(sold),
+        "sold_confirmed": sum(1 for r in sold if r["sold_check"] == "sold"),
+        "sold_median": round(statistics.median(sold_prices)) if sold_prices else None,
+        "sold_days": round(summarize(sold)["median_days"], 1) if sold and summarize(sold)["median_days"] is not None else None,
     }
 
 
@@ -151,7 +266,7 @@ def run_discovery(force=False):
     return done
 
 
-def top_recommendations(chat_id=None, limit=8):
+def top_recommendations(chat_id=None, limit=10):
     """Найкращі кандидати, яких користувач ще не відстежує, від найперспективнішого."""
     tracked = _already_tracked(chat_id)
     results = [r for r in get_discovery_results()

@@ -46,6 +46,7 @@ from db import (
     get_watch_categories,
     save_cached_spec,
     update_listing_observations,
+    record_price_history,
     upsert_market_stats,
     watch_category_ids,
 )
@@ -357,5 +358,6 @@ async def _recalculate_watch_medians(w: dict, replace_existing=False):
     for (cond, spec), s in stats.items():
         upsert_market_stats(w["id"], cond, spec, s["median_price"], s["sample_size"],
                             s["sale_price"], s["sale_source"])
+    record_price_history(w["id"], stats.values())
     newly = [key for key in stats if key not in existing_keys]
     return items, stats, newly

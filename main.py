@@ -17,7 +17,15 @@ import settings
 from settings import log
 from version import get_version
 from db import init_db
-from panel import menu_home_callback, refresh_usage_callback
+from panel import menu_home_callback
+from account import (
+    EBAY_CODE,
+    ebay_account_cancel,
+    ebay_account_code,
+    ebay_account_disconnect,
+    ebay_account_interrupt,
+    ebay_account_start,
+)
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats
 from handlers import (
     ASK_ASPECT,
@@ -40,6 +48,8 @@ from handlers import (
     addwatch_min_price_choice,
     addwatch_start,
     all_configs_callback,
+    sales_callback,
+    refresh_all_callback,
     change_category_callback,
     cmd_list,
     cmd_menu,
@@ -166,11 +176,30 @@ def main():
         ],
     )
 
+    account_conv = ConversationHandler(
+        name="account_conv",
+        persistent=True,
+        allow_reentry=True,
+        entry_points=[CallbackQueryHandler(ebay_account_start, pattern="^(menu:ebay_account|eacc:connect)$")],
+        states={
+            EBAY_CODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, ebay_account_code),
+                CallbackQueryHandler(ebay_account_interrupt, pattern="^menu:"),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", ebay_account_cancel),
+            CallbackQueryHandler(ebay_account_interrupt, pattern="^menu:"),
+        ],
+    )
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(addwatch_conv)
     app.add_handler(edit_conv)
     app.add_handler(check_conv)
+    app.add_handler(account_conv)
+    app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("stats", cmd_stats))
 
@@ -190,7 +219,7 @@ def main():
     app.add_handler(CallbackQueryHandler(unlearn_word_callback, pattern="^unlw:"))
     # Кнопки головного меню (коли жоден діалог не активний)
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))
-    app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
+    app.add_handler(CallbackQueryHandler(refresh_all_callback, pattern="^menu:refresh_usage$"))
     app.add_handler(CallbackQueryHandler(discover_callback, pattern="^menu:discover$"))
     app.add_handler(CallbackQueryHandler(discover_add_callback, pattern="^dadd:"))
     app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))
@@ -203,6 +232,7 @@ def main():
     app.add_handler(CallbackQueryHandler(view_listings_callback, pattern="^view_listings:"))
     app.add_handler(CallbackQueryHandler(change_category_callback, pattern="^chcat:"))
     app.add_handler(CallbackQueryHandler(all_configs_callback, pattern="^configs:"))
+    app.add_handler(CallbackQueryHandler(sales_callback, pattern="^sales:"))
     app.add_handler(CallbackQueryHandler(edit_menu_callback, pattern="^editw:"))
     app.add_handler(CallbackQueryHandler(config_listings_callback, pattern="^cfgl:"))
     app.add_handler(CallbackQueryHandler(required_aspect_callback, pattern="^reqasp:"))

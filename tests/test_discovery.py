@@ -46,7 +46,7 @@ def test_too_few_listings_gives_no_result(fake_ebay, one_candidate):
 def test_run_discovery_respects_interval(fake_ebay, one_candidate):
     fake_ebay.listings = SWITCH
     assert discovery.run_discovery() == 1
-    assert discovery.run_discovery() == 0            # ще не минуло 12 годин
+    assert discovery.run_discovery() == 0            # ще не минуло DISCOVERY_INTERVAL_HOURS
     assert discovery.run_discovery(force=True) == 1  # примусово — можна
 
 
@@ -121,3 +121,84 @@ def test_discover_screen_without_data(monkeypatch):
     ctx.user_data = {}
     asyncio.run(handlers.discover_callback(_update("menu:discover"), ctx))
     assert "Аналіз ще не готовий" in shown[-1][0]
+
+
+# ---------- продажі в «💡 Що перепродавати» ----------
+
+def seed_discovery_sales(candidate, prices, spec="64GB", confirmed=0):
+    now = int(time.time())
+    with db.get_conn() as conn:
+        for i, p in enumerate(prices):
+            conn.execute(
+                """INSERT INTO discovery_obs (candidate, item_id, price, spec_group, cond_group, created_at,
+                                              first_seen, last_seen, status, gone_at, sold_check)
+                   VALUES (?, ?, ?, ?, 'used', ?, ?, ?, 'gone', ?, ?)""",
+                (candidate, f"sold{i}", p, spec, now - 3 * 86400, now - 3 * 86400, now - 86400, now - 86400,
+                 "sold" if i < confirmed else None),
+            )
+
+
+def test_sold_items_drive_sale_price(fake_ebay, one_candidate):
+    fake_ebay.listings = SWITCH
+    before = discovery.analyze_candidate("🎮", "Nintendo Switch OLED", "Nintendo Switch OLED", 150)
+    assert before["sale_source"] == "listings" and before["sold_week"] == 0
+
+    seed_discovery_sales("Nintendo Switch OLED", [240, 245, 250, 255, 260], confirmed=3)
+    r = discovery.analyze_candidate("🎮", "Nintendo Switch OLED", "Nintendo Switch OLED", 150)
+    assert r["sale_source"] == "sold" and r["sold_week"] == 5 and r["sold_confirmed"] == 3
+    assert r["sold_median"] == 250 and r["sold_days"] == 2.0
+    assert r["buy_limit"] < before["buy_limit"]  # продають дешевше, ніж просять в оголошеннях
+
+
+def test_unsold_listing_not_counted(fake_ebay, one_candidate):
+    seed_discovery_sales("Nintendo Switch OLED", [240, 245])
+    db.apply_discovery_check("Nintendo Switch OLED", "sold0", "unsold")  # pending не було — нічого не змінить
+    with db.get_conn() as conn:
+        conn.execute("UPDATE discovery_obs SET sold_check = 'pending' WHERE item_id = 'sold0'")
+    db.apply_discovery_check("Nintendo Switch OLED", "sold0", "unsold")
+    assert [r["item_id"] for r in db.get_discovery_sold("Nintendo Switch OLED")] == ["sold1"]
+
+
+def test_discovery_listings_are_verified(fake_ebay, one_candidate, monkeypatch):
+    import trading_api
+    fake_ebay.listings = SWITCH
+    discovery.run_discovery(force=True)
+    fake_ebay.listings = [it for it in SWITCH if it["itemId"] not in ("x10", "x11")]
+    discovery.run_discovery(force=True)
+    assert len(db.get_pending_discovery_checks(10)) == 2
+    monkeypatch.setattr(trading_api, "is_connected", lambda: True)
+    monkeypatch.setattr(trading_api, "get_item_status",
+                        lambda item_id: {"result": "sold" if item_id == "x10" else "unsold"})
+    assert trading_api.verify_disappeared() == 2
+    sold = db.get_discovery_sold("Nintendo Switch OLED")
+    assert [(r["item_id"], r["sold_check"]) for r in sold] == [("x10", "sold")]
+
+
+def test_recommendation_text_shows_sales():
+    r = {"emoji": "🎮", "name": "Switch", "spec": "64GB", "median": 280, "buy_limit": 190,
+         "deals_per_week": 3, "deals_now": 1, "deal_profit": 40, "sold_per_day": 1.5,
+         "sold_week": 11, "sold_confirmed": 8, "sold_median": 255, "sold_days": 2.4, "sale_source": "sold"}
+    text = handlers._recommendation_text(1, r)
+    assert "🛒 продано за тиждень: 11 (✅8) по ~255€, продаються за ~2 дні" in text
+    assert "(за продажами)" in text
+    r.update(sold_week=0, sold_per_day=None, sale_source="listings")
+    assert "продажі ще рахую" in handlers._recommendation_text(1, r)
+
+
+@pytest.mark.parametrize("title,query,ok", [
+    ("Samsung Galaxy S24 Ultra 256GB", "Samsung Galaxy S24", False),
+    ("Samsung Galaxy S24 128GB super Zustand", "Samsung Galaxy S24", True),
+    ("MSI GeForce RTX 4070 Super 12GB", "RTX 4070", False),
+    ("MSI RTX 4070 SUPER 12GB", "RTX 4070 Super", True),
+    ("Gigabyte RTX 4070 Ti 12GB", "RTX 4070", False),
+    ("Apple iPhone 15 Pro 256GB", "iPhone 15", False),
+    ("Hülle für iPhone 15", "iPhone 15", False),
+    ("Apple iPhone 15 128GB Schwarz", "iPhone 15", True),
+])
+def test_candidate_takes_only_its_own_model(title, query, ok):
+    assert discovery._same_model(title, query) is ok
+
+
+def test_candidate_list_is_big_and_unique():
+    names = [name for _, name, _, _ in discovery.CANDIDATES]
+    assert len(names) >= 80 and len(names) == len(set(names))
