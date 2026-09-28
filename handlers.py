@@ -21,6 +21,7 @@ from settings import (
     MIN_PROFIT_EUR,
     MIN_SAMPLE_SIZE,
     MIN_SOLD_SAMPLE,
+    SALES_WINDOW_DAYS,
     SEARCH_RESERVE,
     SOLD_LOOKBACK_DAYS,
     LOCAL_TZ,
@@ -32,6 +33,7 @@ from learning import hide_item, learned_words_note, reject_and_learn, unlearn_wo
 from checker import CheckError, check_listing
 from discovery import run_discovery, top_recommendations
 from db import (
+    delete_listing_obs_by_ids,
     add_watch,
     encode_required_aspects,
     find_duplicate_watch,
@@ -39,6 +41,9 @@ from db import (
     get_deal,
     get_auto_min_price,
     get_deal_owner_chat_id,
+    get_inbox_deals,
+    mark_deals_seen,
+    clear_inbox_deals,
     get_learned_words,
     get_deal_stats,
     get_market_stats,
@@ -70,6 +75,8 @@ from market import (
     _annotate_items,
     _apply_item_filters,
     _recalculate_watch_medians,
+    estimate_resale_profit,
+    refresh_sale_prices,
     filter_outliers,
     max_buy_price,
     minimum_sample_size_for_query,
@@ -88,7 +95,7 @@ from panel import (
 from access import _notify_owner_new_request, cmd_pending, cmd_users, require_access
 from notifications import _notify_median_error, _notify_median_problem
 from ebay_user import is_connected
-from sales import speed_text, summarize, weekly_change
+from sales import sales_note, speed_text, summarize, weekly_change
 
 
 # ============================================================
@@ -520,28 +527,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             return
 
-    text = (
-        "👋 Привіт! Я слідкую за цінами на eBay і сповіщаю, коли з'являється вигідна пропозиція.\n\n"
-        "Усе відбувається через кнопки меню нижче. Команди теж працюють:\n\n"
-        "/menu — головне меню\n"
-        "/addwatch — додати товар\n"
-        "/list — мої товари\n"
-        "/stats — статистика: куплено/пропущено\n"
-        "/cancel — скасувати поточну дію"
-    )
-    if is_owner(user.id):
-        text += (
-            "\n\n👑 Керування доступом (лише власник)\n"
-            "/pending — запити, що очікують рішення\n"
-            "/users — усі користувачі з доступом\n"
-            "/userstats <id> — статистика конкретного користувача\n"
-            "/revoke <id> — забрати доступ\n"
-            "/approve <id> — дати доступ"
-        )
-    # ReplyKeyboardRemove прибирає стару системну клавіатуру знизу
-    # екрана, яку Telegram міг закешувати від попередньої версії бота
-    await update.message.reply_text(text, reply_markup=ReplyKeyboardRemove())
-
     context.user_data.pop("panel_message_id", None)
     await show_main_menu(update, context)
 
@@ -766,7 +751,10 @@ def _ago(ts):
     return f"{plural(days, 'день', 'дні', 'днів')} тому"
 
 
-def _sales_text(watch, sold, show_account_hint=False):
+SALES_PER_PAGE = 8
+
+
+def _sales_text(watch, sold, show_account_hint=False, page=0):
     """Статистика продажів товару за конфігураціями (з таблиці спостережень, без запитів до eBay)."""
     title = f"📈 <b>{html.escape(watch['label'])}: продажі за {SOLD_LOOKBACK_DAYS} днів</b>"
     if not sold:
@@ -807,40 +795,100 @@ def _sales_text(watch, sold, show_account_hint=False):
             + f"\n  🕒 останній {_ago(rows[0]['gone_at'])}"
         )
 
-    lines.append("\n<b>Останні продажі:</b>")
-    for r in sold[:8]:
+    pages = max(1, -(-len(sold) // SALES_PER_PAGE))
+    page = min(page, pages - 1)
+    lines.append("\n<b>Останні продажі</b>" + (f" (стор. {page + 1}/{pages})" if pages > 1 else "") + ":")
+    first = page * SALES_PER_PAGE
+    for n, r in enumerate(sold[first:first + SALES_PER_PAGE], first + 1):
         date = datetime.fromtimestamp(r["gone_at"], LOCAL_TZ).strftime("%d.%m")
         spec = "" if (r["spec_group"] or "unspecified") == "unspecified" else f" · {r['spec_group']}"
-        mark = "✅ " if r["sold_check"] == "sold" else ""
+        mark = {"sold": "✅ ", "pending": "⏳ "}.get(r["sold_check"], "")
         name = html.escape((r["title"] or "оголошення")[:45])
         link = f'<a href="{html.escape(r["url"])}">{name}</a>' if r["url"] else name
-        lines.append(f"{mark}{date}{html.escape(spec)} · <b>{r['price']:.0f}€</b> — {link}")
+        lines.append(f"{n}. {mark}{date}{html.escape(spec)} · <b>{r['price']:.0f}€</b> — {link}")
 
     lines.append("\n<i>Ціна — з доставкою, остання, яку бачив бот. ✅ — продаж підтвердив eBay; "
-                 "решта — оголошення зникли задовго до кінця строку (найімовірніше, куплені).</i>")
+                 "⏳ — ще в черзі на перевірку; без позначки — eBay не відповів, оцінка за "
+                 "зникненням (оголошення зникло задовго до кінця строку). "
+                 "Чужий товар у списку — натисни ❌ з його номером, і він більше не впливатиме на ціни.</i>")
     if show_account_hint:
         lines.append("<i>💡 Підключи «🔐 Акаунт eBay» в меню — тоді бот відсіюватиме оголошення, "
                      "які продавець просто зняв.</i>")
     return "\n".join(lines)
 
 
+def _sales_keyboard(watch_id, sold, page, extra_rows=()):
+    pages = max(1, -(-len(sold) // SALES_PER_PAGE))
+    page = min(page, pages - 1)
+    first = page * SALES_PER_PAGE
+    buttons = [InlineKeyboardButton(f"❌ {n}", callback_data=f"srej:{watch_id}:{page}:{r['item_id']}")
+               for n, r in enumerate(sold[first:first + SALES_PER_PAGE], first + 1)]
+    rows = list(extra_rows) + [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ Новіші", callback_data=f"sales:{watch_id}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("Старіші ▶️", callback_data=f"sales:{watch_id}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def _show_sales(update, context, watch, page=0, note="", extra_rows=()):
+    sold = get_sold_listings(watch["id"])
+    hint = is_owner(update.effective_user.id) and not is_connected()
+    text = _sales_text(watch, sold, show_account_hint=hint, page=page)
+    if note:
+        text = f"{note}\n\n{text}"
+    await show_panel(update, context, text, reply_markup=_sales_keyboard(watch["id"], sold, page, extra_rows),
+                     parse_mode=ParseMode.HTML)
+
+
 @require_access
 async def sales_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """sales:<id> — статистика продажів товару за конфігураціями."""
+    """sales:<id>[:<сторінка>] — статистика продажів товару за конфігураціями."""
     query_cb = update.callback_query
-    watch_id = int(query_cb.data.split(":")[1])
-    watch = get_watch(watch_id, update.effective_chat.id)
+    parts = query_cb.data.split(":")
+    watch = get_watch(int(parts[1]), update.effective_chat.id)
     if watch is None:
         await query_cb.answer("Цей товар уже видалено.", show_alert=True)
         return
     await _ack_callback(update)
-    hint = is_owner(update.effective_user.id) and not is_connected()
-    await show_panel(
-        update, context, _sales_text(watch, get_sold_listings(watch_id), show_account_hint=hint),
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]]),
-        parse_mode=ParseMode.HTML,
-    )
+    await _show_sales(update, context, watch, page=int(parts[2]) if len(parts) > 2 else 0)
+
+
+@require_access
+async def sales_reject_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """srej:<watch_id>:<сторінка>:<item_id> — прибрати чужий лот зі статистики продажів."""
+    query_cb = update.callback_query
+    _, watch_id, page, item_id = query_cb.data.split(":", 3)
+    watch = get_watch(int(watch_id), update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Цей товар уже видалено.", show_alert=True)
+        return
+    row = next((r for r in get_sold_listings(watch["id"]) if r["item_id"] == item_id), None)
+    if row is None:
+        await query_cb.answer("Цього продажу вже немає в списку.")
+        return await _show_sales(update, context, watch, int(page))
+    # «Не той товар»: більше не враховується ні в продажах, ні в цінах, ні в пошуку;
+    # якщо в таких назвах повторюються слова — бот їх вивчить (як ❌ Інший товар)
+    words = await asyncio.to_thread(reject_and_learn, watch, item_id, row["title"])
+    if words:
+        # Продажі з щойно вивченими словами теж чужі — прибираємо й їх
+        word_set = set(words)
+        stale = [r["item_id"] for r in get_sold_listings(watch["id"])
+                 if _search_tokens(r.get("title") or "") & word_set]
+        delete_listing_obs_by_ids(watch["id"], stale)
+    await asyncio.to_thread(refresh_sale_prices, watch["id"])
+    await query_cb.answer("❌ Прибрано — на ціни більше не впливає")
+    note = f"❌ Прибрано: {html.escape((row['title'] or '')[:60])}"
+    extra = []
+    if words:
+        note += "\n" + html.escape(learned_words_note(words))
+        extra = [[InlineKeyboardButton(f"↩️ Не відсіювати «{w}»", callback_data=f"unlw:{watch['id']}:{w}")]
+                 for w in words]
+    await _show_sales(update, context, watch, int(page), note=note, extra_rows=extra)
 
 
 @require_access
@@ -1565,6 +1613,130 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END
+
+
+# ============================================================
+# «🔥 ВИГІДНІ ПРОПОЗИЦІЇ» — усі знахідки в одному місці замість потоку повідомлень
+# ============================================================
+
+DEALS_PER_PAGE = 5
+
+
+def _when(ts):
+    moment = datetime.fromtimestamp(ts, LOCAL_TZ)
+    days = (datetime.now(LOCAL_TZ).date() - moment.date()).days
+    if days == 0:
+        return f"сьогодні о {moment:%H:%M}"
+    if days == 1:
+        return f"вчора о {moment:%H:%M}"
+    return f"{moment:%d.%m} о {moment:%H:%M}"
+
+
+def _deal_card(n, d, sold=None):
+    sale = d["median_price"]
+    note = sales_note(sold, d["cond_group"], d["spec_group"]) if sold and d.get("cond_group") else ""
+    _, profit = estimate_resale_profit(sale, d["total_price"])
+    new = "🆕 " if d["seen_at"] is None else ""
+    offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
+    warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""
+    return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · {_when(d['created_at'])}\n"
+            f"{html.escape(d['title'][:90])}\n"
+            f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток ~<b>{profit:.0f}€</b>{offer}{warn}\n"
+            + (f"{html.escape(note)}\n" if note else "") +
+            f'<a href="{html.escape(d["url"])}">🔗 Відкрити на eBay</a>')
+
+
+async def _render_deals(update, context, page=0, note=""):
+    chat_id = update.effective_chat.id
+    deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
+    if not deals and page > 0:
+        page = max(0, (total - 1) // DEALS_PER_PAGE)
+        deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
+    lines = [f"🔥 <b>Вигідні пропозиції</b> ({total})"]
+    if note:
+        lines.append(note)
+    rows = []
+    if not deals:
+        lines.append("Поки нових немає. Щойно бот знайде вигідну пропозицію — прийде одне коротке "
+                     "сповіщення, а сама пропозиція з'явиться тут.")
+    sold_by_watch = {}
+    for i, d in enumerate(deals, 1 + page * DEALS_PER_PAGE):
+        if d["watch_id"] not in sold_by_watch:
+            sold_by_watch[d["watch_id"]] = get_sold_listings(d["watch_id"], SALES_WINDOW_DAYS)
+        lines.append(_deal_card(i, d, sold_by_watch[d["watch_id"]]))
+        rows.append([
+            InlineKeyboardButton(f"✅ {i} Куплено", callback_data=f"dact:buy:{d['id']}:{page}"),
+            InlineKeyboardButton(f"🙈 {i}", callback_data=f"dact:hide:{d['id']}:{page}"),
+            InlineKeyboardButton(f"❌ {i} Інший товар", callback_data=f"dact:rej:{d['id']}:{page}"),
+        ])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️ Новіші", callback_data=f"deals:{page - 1}"))
+    if (page + 1) * DEALS_PER_PAGE < total:
+        nav.append(InlineKeyboardButton("Старіші ▶️", callback_data=f"deals:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    if total:
+        rows.append([InlineKeyboardButton("🧹 Очистити список", callback_data="dclear")])
+    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    if deals:
+        lines.append("<i>🙈 — сховати це оголошення; ❌ Інший товар — не той товар, бот запам'ятає.</i>")
+    await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+    mark_deals_seen([d["id"] for d in deals])
+    # Сповіщення «нова пропозиція» вже не потрібне — прибираємо його з чату
+    notice = context.bot_data.get("deal_notice", {}).pop(chat_id, None)
+    if notice and notice.get("message_id"):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=notice["message_id"])
+        except Exception:
+            pass
+
+
+@require_access
+async def deals_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """deals:<сторінка> — список вигідних пропозицій."""
+    await _ack_callback(update)
+    try:
+        page = int(update.callback_query.data.split(":")[1])
+    except (IndexError, ValueError):
+        page = 0
+    await _render_deals(update, context, page)
+
+
+@require_access
+async def deal_inbox_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """dact:<buy|hide|rej>:<deal_id>:<сторінка>"""
+    query_cb = update.callback_query
+    _, action, deal_id, page = query_cb.data.split(":")
+    deal = get_deal(int(deal_id))
+    watch = get_watch(deal["watch_id"], update.effective_chat.id) if deal else None
+    if watch is None:
+        await query_cb.answer("Цієї пропозиції вже немає.", show_alert=True)
+        return await _render_deals(update, context, int(page))
+    note, words = "", []
+    if action == "buy":
+        set_deal_status(deal["id"], "bought")
+        await query_cb.answer("✅ Позначено як куплене")
+        note = f"✅ «{html.escape(deal['title'][:50])}» — куплено"
+    elif action == "hide":
+        await asyncio.to_thread(hide_item, watch, deal["item_id"], deal["title"])
+        set_deal_status(deal["id"], "skipped")
+        await query_cb.answer("🙈 Сховано")
+    else:
+        words = await asyncio.to_thread(reject_and_learn, watch, deal["item_id"], deal["title"])
+        set_deal_status(deal["id"], "skipped")
+        await query_cb.answer("❌ Прибрано — більше не враховую це оголошення")
+        if words:
+            note = html.escape(learned_words_note(words))
+    await _render_deals(update, context, int(page), note=note)
+
+
+@require_access
+async def deals_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _ack_callback(update)
+    clear_inbox_deals(update.effective_chat.id)
+    await _render_deals(update, context, 0, note="🧹 Список очищено")
 
 
 # ============================================================

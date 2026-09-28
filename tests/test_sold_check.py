@@ -390,3 +390,71 @@ def test_trading_count_from_ebay(monkeypatch):
     assert ebay_api.fetch_trading_rate_limit("TOKEN") == 300
     db.record_api_call("trading")                      # на цій копії бота — лише 1
     assert ebay_api.trading_calls_today() == (300, True)  # а eBay бачить запити з ПК і сервера разом
+
+
+def test_old_gone_listings_are_queued_on_start():
+    """Лоти, що зникли до появи перевірки продажів, стають у чергу після перезапуску."""
+    with db.get_conn() as conn:
+        conn.execute("""INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
+                        first_seen, last_seen, status, gone_at) VALUES (1, 'old', 'used', '500GB', 90, 1, 1, 'gone', ?)""",
+                     (int(time.time()) - 86400,))
+    db.init_db()
+    assert [r["item_id"] for r in db.get_pending_sold_checks(10)] == ["old"]
+
+
+def test_sales_screen_marks_pending():
+    import handlers
+    wid = db.add_watch(1, "PS4", "PS4", "", "", 15)
+    now = int(time.time())
+    with db.get_conn() as conn:
+        for item, check in (("a", "sold"), ("b", "pending"), ("c", "unknown")):
+            conn.execute("""INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price, first_seen,
+                            last_seen, status, gone_at, sold_check, title) VALUES (?, ?, 'used', '500GB', 90, 1, 1,
+                            'gone', ?, ?, ?)""", (wid, item, now, check, f"PS4 {item}"))
+    text = handlers._sales_text(db.get_watch(wid, 1), db.get_sold_listings(wid))
+    assert "✅ " in text and "⏳ " in text and "ще в черзі" in text
+
+
+# ---------- прибрати чужий товар зі статистики продажів ----------
+
+def test_remove_wrong_item_from_sales(monkeypatch):
+    import access
+    import handlers
+    w = sales_watch()
+    for i, price in enumerate([600, 610, 620, 630, 640]):
+        add_sale(w["id"], f"ok{i}", price, "256GB")
+    add_sale(w["id"], "case", 25, "256GB")          # чохол затесався в продажі
+    db.upsert_market_stats(w["id"], "used", "256GB", 650, 20, sale_price=300, sale_source="за 6 проданими")
+    shown = []
+
+    async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
+        shown.append((text, [b.callback_data for r in reply_markup.inline_keyboard for b in r]))
+
+    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    monkeypatch.setattr(access, "is_owner", lambda uid: True)
+    monkeypatch.setattr(handlers, "is_connected", lambda: True)
+
+    upd = make_update(f"sales:{w['id']}")
+    asyncio.run(handlers.sales_callback(upd, MagicMock()))
+    assert f"srej:{w['id']}:0:case" in shown[-1][1] and "Продано: <b>6</b>" in shown[-1][0]
+
+    upd = make_update(f"srej:{w['id']}:0:case")
+    asyncio.run(handlers.sales_reject_callback(upd, MagicMock()))
+    text = shown[-1][0]
+    assert "❌ Прибрано" in text and "Продано: <b>5</b>" in text
+    assert "case" in db.get_rejected_ids(w["id"])                     # і в пошуку більше не з'явиться
+    stat = next(s for s in db.get_market_stats(w["id"]) if s["spec_group"] == "256GB")
+    assert stat["sale_price"] == 620 and stat["sale_source"] == "за 5 проданими"  # ціну перераховано одразу
+
+
+def test_sales_pagination():
+    import handlers
+    w = sales_watch()
+    for i in range(10):
+        add_sale(w["id"], f"s{i}", 600 + i, "256GB")
+    sold = db.get_sold_listings(w["id"])
+    text = handlers._sales_text(w, sold, page=1)
+    assert "(стор. 2/2)" in text and "9. " in text and "\n1. " not in text
+    kb = handlers._sales_keyboard(w["id"], sold, 1)
+    labels = [b.text for r in kb.inline_keyboard for b in r]
+    assert "❌ 9" in labels and "◀️ Новіші" in labels and "❌ 1" not in labels

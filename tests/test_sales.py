@@ -108,7 +108,7 @@ def watch_with_market(fake_ebay):
 
 
 def deal_messages(app):
-    return [m for m in app.bot.messages if "Вигідна пропозиція" in m]
+    return [m for m in app.bot.messages if "вигідн" in m.lower()]
 
 
 def test_deal_notification_shows_sales(fake_ebay):
@@ -117,8 +117,11 @@ def test_deal_notification_shows_sales(fake_ebay):
     fake_ebay.listings = [listing("deal", "Sony PlayStation 5 Slim 1TB Konsole", 250)] + consoles()
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
-    deals = deal_messages(app)
-    assert len(deals) == 1 and "🛒 Такі ж: 4 продажі за 14 днів" in deals[0] and "за ~2 дні" in deals[0]
+    assert len(deal_messages(app)) == 1
+    import handlers
+    deals, _ = db.get_inbox_deals(1)
+    card = handlers._deal_card(1, deals[0], db.get_sold_listings(wid, 14))
+    assert "🛒 Такі ж: 4 продажі за 14 днів" in card and "за ~2 дні" in card
 
 
 def test_slow_configuration_is_not_notified(fake_ebay):
@@ -183,3 +186,81 @@ def test_main_menu_shows_when_prices_were_updated(monkeypatch):
     with db.get_conn() as conn:
         conn.execute("UPDATE market_stats SET updated_at = updated_at - 86400")
     assert "💰 Ціни товарів оновлено: вчора о " in panel.main_menu_text(1)
+
+
+# ---------- «🔥 Вигідні пропозиції» ----------
+
+def _inbox_setup(n=3):
+    wid = db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 15)
+    ids = [db.add_deal(wid, f"v1|{i}|0", f"iPhone 16 Pro 256GB #{i}", 500 + i, "EUR", 620, 20,
+                       f"https://www.ebay.de/itm/{i}", False, cond_group="used", spec_group="256GB")
+           for i in range(n)]
+    return wid, ids
+
+
+def _screen(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    import access
+    import handlers
+    shown = []
+
+    async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
+        shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r]))
+
+    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    monkeypatch.setattr(access, "is_owner", lambda uid: True)
+
+    def press(data):
+        upd = MagicMock()
+        upd.effective_chat.id = upd.effective_user.id = 1
+        upd.callback_query.data = data
+        upd.callback_query.answer = AsyncMock()
+        ctx = MagicMock()
+        ctx.bot_data = {}
+        return upd, ctx
+    return handlers, shown, press
+
+
+def test_menu_badge_and_inbox_marks_seen(monkeypatch):
+    import panel
+    _inbox_setup(3)
+    labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert "🔥 Вигідні пропозиції · 🆕 3" in labels
+
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("deals:0")
+    asyncio.run(handlers.deals_callback(upd, ctx))
+    text, buttons = shown[-1]
+    assert "Вигідні пропозиції</b> (3)" in text and text.count("🆕") == 3
+    assert "✅ 1 Куплено" in buttons and "🧹 Очистити список" in buttons
+    assert db.count_unseen_deals(1) == 0
+    labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert "🔥 Вигідні пропозиції" in labels   # лічильник зник
+
+
+def test_inbox_actions(monkeypatch):
+    wid, ids = _inbox_setup(3)
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"dact:buy:{ids[0]}:0")
+    asyncio.run(handlers.deal_inbox_action_callback(upd, ctx))
+    assert db.get_deal(ids[0])["status"] == "bought" and "(2)" in shown[-1][0]
+
+    upd, ctx = press(f"dact:hide:{ids[1]}:0")
+    asyncio.run(handlers.deal_inbox_action_callback(upd, ctx))
+    assert db.get_deal(ids[1])["status"] == "skipped"
+    assert "v1|1|0" in db.get_rejected_ids(wid)
+
+    upd, ctx = press("dclear")
+    asyncio.run(handlers.deals_clear_callback(upd, ctx))
+    assert db.get_inbox_deals(1)[1] == 0 and "Поки нових немає" in shown[-1][0]
+
+
+def test_inbox_pagination(monkeypatch):
+    _inbox_setup(7)
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("deals:0")
+    asyncio.run(handlers.deals_callback(upd, ctx))
+    assert "Старіші ▶️" in shown[-1][1] and "5. " in shown[-1][0]
+    upd, ctx = press("deals:1")
+    asyncio.run(handlers.deals_callback(upd, ctx))
+    assert "◀️ Новіші" in shown[-1][1] and "7. " in shown[-1][0]

@@ -13,7 +13,7 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import get_last_prices_update, list_users
+from db import count_unseen_deals, get_last_prices_update, list_users
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, trading_calls_today
 from version import get_version
@@ -40,6 +40,7 @@ NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
 MENU_LABELS = {
+    "deals": "🔥 Вигідні пропозиції",
     "addwatch": "➕ Додати товар",
     "discover": "💡 Що перепродавати",
     "list": "📦 Мої товари",
@@ -104,7 +105,10 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
     def btn(action):
         return InlineKeyboardButton(MENU_LABELS[action], callback_data=f"menu:{action}")
 
+    unseen = count_unseen_deals(user_id)
+    deals_label = MENU_LABELS["deals"] + (f" · 🆕 {unseen}" if unseen else "")
     rows = [
+        [InlineKeyboardButton(deals_label, callback_data="deals:0")],
         [btn("addwatch")],
         [btn("list")],
         [btn("discover")],
@@ -204,6 +208,10 @@ async def repost_panel(app, chat_id):
     old_id = user_data.get("panel_message_id")
     if not state or not old_id:
         return
+    if state.get("main_menu"):
+        # Головне меню — свіжий текст і кнопки (напр. новий лічильник «🔥 Вигідні пропозиції»)
+        state = dict(state, text=main_menu_text(chat_id), markup=build_main_menu(chat_id))
+        user_data["panel_state"] = state
     try:
         msg = await app.bot.send_message(
             chat_id=chat_id, text=state["text"],
@@ -229,6 +237,7 @@ async def notify(app, chat_id, text, reply_markup=None, parse_mode=None):
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await show_panel(update, context, main_menu_text(user_id), reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
+    context.user_data["panel_state"]["main_menu"] = True  # при перенесенні — перемалювати (лічильник 🔥)
 
 
 async def menu_home_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

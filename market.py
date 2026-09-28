@@ -36,6 +36,7 @@ from textparse import (
     spec_required_by_default,
 )
 from db import (
+    get_current_listings,
     delete_market_stats_except,
     get_api_calls_today,
     get_cached_specs,
@@ -47,6 +48,7 @@ from db import (
     save_cached_spec,
     update_listing_observations,
     record_price_history,
+    update_sale_price,
     upsert_market_stats,
     watch_category_ids,
 )
@@ -338,6 +340,29 @@ def _compute_group_stats(watch_id, items):
             "sale_source": source, "sample_size": len(clean),
         }
     return stats
+
+
+def refresh_sale_prices(watch_id):
+    """Перераховує «продати за» з уже збережених даних (без запитів до eBay) —
+    напр. після того, як користувач прибрав чужий лот зі статистики продажів."""
+    active = {}
+    for r in get_current_listings(watch_id):
+        active.setdefault(r["cond_group"], []).append(r)
+    for s in get_market_stats(watch_id):
+        cond, spec = s["cond_group"], s["spec_group"]
+        gone = filter_outliers(get_gone_prices(watch_id, cond, None if spec == "*" else spec))
+        if len(gone) >= MIN_SOLD_SAMPLE:
+            sale = min(statistics.median(gone), s["median_price"])
+            source = f"за {plural(len(gone), 'проданим', 'проданими', 'проданими')}"
+        elif "продан" in (s["sale_source"] or ""):
+            prices = filter_outliers([r["price"] for r in active.get(cond, [])
+                                      if spec == "*" or r["spec_group"] == spec])
+            if len(prices) < MIN_SAMPLE_SIZE:
+                continue
+            sale, source = percentile(prices, SALE_PRICE_PERCENTILE), "за поточними оголошеннями"
+        else:
+            continue
+        update_sale_price(watch_id, cond, spec, sale, source)
 
 
 async def _recalculate_watch_medians(w: dict, replace_existing=False):

@@ -48,9 +48,8 @@ from trading_api import verify_disappeared
 from notifications import (
     _notify_median_error,
     _notify_median_ready,
+    _notify_new_deals,
     _notify_price_drops,
-    _send_grouped_deals,
-    _send_single_deal,
 )
 from sales import is_slow_seller, price_drops, sales_note
 from netstatus import is_down, mark_down, mark_up
@@ -69,6 +68,10 @@ async def check_all_watches(app: Application):
                 await _notify_median_error(app, w, e)
 
     await asyncio.gather(*(check(w) for w in watches))
+
+    # Нові вигідні пропозиції — одне сповіщення на чат за весь цикл перевірки
+    for chat_id, found in app.bot_data.pop("new_deals_by_chat", {}).items():
+        await _notify_new_deals(app, chat_id, found)
 
     # Сповіщення з'явились над панеллю — переносимо панель униз, по разу на чат
     chats = app.bot_data.pop("chats_to_repost_panel", set())
@@ -153,6 +156,8 @@ async def check_one_watch(app: Application, w: dict):
             url=it["url"],
             suspicious=it["suspicious"],
             has_best_offer=it["has_best_offer"],
+            cond_group=stat["cond_group"],
+            spec_group=stat["spec_group"],
         )
         seen_updates.append((it["item_id"], it["effective_price"], it["effective_price"]))
         new_deals.append((deal_id, it, stat))
@@ -162,12 +167,9 @@ async def check_one_watch(app: Application, w: dict):
     if not new_deals:
         return
 
-    MAX_INDIVIDUAL_DEALS = 5
-    if len(new_deals) <= MAX_INDIVIDUAL_DEALS:
-        for deal_id, it, stat in new_deals:
-            await _send_single_deal(app, w, deal_id, it, stat)
-    else:
-        await _send_grouped_deals(app, w, new_deals)
+    # Самі пропозиції — у «🔥 Вигідні пропозиції»; сповіщення — одне на цикл (check_all_watches)
+    app.bot_data.setdefault("new_deals_by_chat", {}).setdefault(w["chat_id"], []).extend(
+        (deal_id, it, stat, w) for deal_id, it, stat in new_deals)
 
 
 _error_notice = {"last": 0.0}
@@ -282,14 +284,7 @@ async def post_init(app: Application):
         ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE, thread_name_prefix="bot"))
     app.bot_data["scheduler_task"] = asyncio.create_task(scheduler_loop(app))
     # Список команд, що випадає над клавіатурою в Telegram
-    await app.bot.set_my_commands([
-        ("start", "Головне меню та довідка"),
-        ("menu", "Показати меню"),
-        ("addwatch", "➕ Додати товар"),
-        ("list", "📦 Мої товари"),
-        ("stats", "📊 Моя статистика"),
-        ("cancel", "Скасувати поточну дію"),
-    ])
+    await app.bot.set_my_commands([("menu", "📋 Головне меню")])
 
 
 async def post_shutdown(app: Application):

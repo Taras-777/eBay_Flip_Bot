@@ -49,6 +49,10 @@ from handlers import (
     addwatch_start,
     all_configs_callback,
     sales_callback,
+    sales_reject_callback,
+    deals_callback,
+    deal_inbox_action_callback,
+    deals_clear_callback,
     refresh_all_callback,
     change_category_callback,
     cmd_list,
@@ -233,6 +237,10 @@ def main():
     app.add_handler(CallbackQueryHandler(change_category_callback, pattern="^chcat:"))
     app.add_handler(CallbackQueryHandler(all_configs_callback, pattern="^configs:"))
     app.add_handler(CallbackQueryHandler(sales_callback, pattern="^sales:"))
+    app.add_handler(CallbackQueryHandler(sales_reject_callback, pattern="^srej:"))
+    app.add_handler(CallbackQueryHandler(deals_callback, pattern="^deals:"))
+    app.add_handler(CallbackQueryHandler(deal_inbox_action_callback, pattern="^dact:"))
+    app.add_handler(CallbackQueryHandler(deals_clear_callback, pattern="^dclear$"))
     app.add_handler(CallbackQueryHandler(edit_menu_callback, pattern="^editw:"))
     app.add_handler(CallbackQueryHandler(config_listings_callback, pattern="^cfgl:"))
     app.add_handler(CallbackQueryHandler(required_aspect_callback, pattern="^reqasp:"))

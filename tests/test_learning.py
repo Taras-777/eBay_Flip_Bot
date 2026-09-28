@@ -70,7 +70,7 @@ def test_rejected_item_never_becomes_a_deal(fake_ebay):
     fake_ebay.listings = [listing("cheap", "Sony PlayStation 5 Slim 1TB Konsole", 250)] + consoles
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
-    assert not [m for m in app.bot.messages if "Вигідна пропозиція" in m]
+    assert not [m for m in app.bot.messages if "вигідн" in m.lower()]
 
 
 def test_hidden_item_is_filtered_but_words_not_learned():

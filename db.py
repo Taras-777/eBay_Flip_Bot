@@ -203,7 +203,10 @@ CREATE TABLE IF NOT EXISTS deals (
     suspicious INTEGER NOT NULL DEFAULT 0,
     has_best_offer INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'new',
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    seen_at INTEGER,       -- коли користувач побачив у «🔥 Вигідні пропозиції» (NULL — нова)
+    cond_group TEXT,       -- група статистики (стан, конфігурація), за якою пропозиція вигідна
+    spec_group TEXT
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -285,10 +288,25 @@ def init_db():
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
 
+        deal_cols = {r["name"] for r in conn.execute("PRAGMA table_info(deals)").fetchall()}
+        if deal_cols and "seen_at" not in deal_cols:
+            conn.execute("ALTER TABLE deals ADD COLUMN seen_at INTEGER")
+            conn.execute("UPDATE deals SET seen_at = created_at")  # старі — вже бачені в чаті
+        for col in ("cond_group", "spec_group"):
+            if deal_cols and col not in deal_cols:
+                conn.execute(f"ALTER TABLE deals ADD COLUMN {col} TEXT")
+
         disc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(discovery_obs)").fetchall()}
         for col, ddl in [("sold_check", "TEXT"), ("checked_at", "INTEGER")]:
             if disc_cols and col not in disc_cols:
                 conn.execute(f"ALTER TABLE discovery_obs ADD COLUMN {col} {ddl}")
+
+        # Лоти, що зникли ще до появи перевірки продажів (sold_check порожній), —
+        # теж у чергу: eBay пам'ятає завершені оголошення до 90 днів
+        conn.execute("UPDATE listing_obs SET sold_check = 'pending' "
+                     "WHERE status = 'gone' AND sold_check IS NULL AND gone_at IS NOT NULL")
+        conn.execute("UPDATE discovery_obs SET sold_check = 'pending' "
+                     "WHERE status = 'gone' AND sold_check IS NULL AND gone_at IS NOT NULL")
 
         rej_cols = {r["name"] for r in conn.execute("PRAGMA table_info(rejected_items)").fetchall()}
         if rej_cols and "reason" not in rej_cols:
@@ -565,6 +583,16 @@ def get_last_prices_update(chat_id):
             (chat_id,),
         ).fetchone()
     return row["t"] if row and row["t"] else None
+
+
+def update_sale_price(watch_id, cond_group, spec_group, sale_price, sale_source):
+    """Лише ціна продажу групи (без зсуву «попередньої» типової ціни)."""
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE market_stats SET sale_price = ?, sale_source = ?
+               WHERE watch_id = ? AND cond_group = ? AND spec_group = ?""",
+            (sale_price, sale_source, watch_id, cond_group, spec_group),
+        )
 
 
 def get_auto_min_price(watch_id, pct=None):
@@ -965,14 +993,16 @@ def find_threshold_suggestion(query: str):
 
 # ---------- deals ----------
 
-def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious, has_best_offer=False):
+def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
+             has_best_offer=False, cond_group=None, spec_group=None):
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO deals
-               (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious, has_best_offer, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)""",
+               (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
+                has_best_offer, status, created_at, cond_group, spec_group)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?)""",
             (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url,
-             int(suspicious), int(has_best_offer), int(time.time())),
+             int(suspicious), int(has_best_offer), int(time.time()), cond_group, spec_group),
         )
         return cur.lastrowid
 
@@ -996,6 +1026,56 @@ def get_deal_owner_chat_id(deal_id):
             (deal_id,),
         ).fetchone()
         return row["chat_id"] if row else None
+
+
+DEALS_INBOX_DAYS = 7   # скільки днів пропозиція висить у «🔥 Вигідні пропозиції»
+
+
+def get_inbox_deals(chat_id, limit=5, offset=0):
+    """Актуальні вигідні пропозиції користувача (ще без рішення), найновіші першими."""
+    since = int(time.time()) - DEALS_INBOX_DAYS * 86400
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT d.*, w.label AS watch_label FROM deals d JOIN watches w ON w.id = d.watch_id
+               WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ?
+               ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?""",
+            (chat_id, since, limit, offset),
+        ).fetchall()
+        total = conn.execute(
+            """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
+               WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ?""",
+            (chat_id, since),
+        ).fetchone()["c"]
+    return [dict(r) for r in rows], total
+
+
+def count_unseen_deals(chat_id):
+    since = int(time.time()) - DEALS_INBOX_DAYS * 86400
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
+               WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.seen_at IS NULL
+               AND d.created_at >= ?""",
+            (chat_id, since),
+        ).fetchone()["c"]
+
+
+def mark_deals_seen(deal_ids):
+    if not deal_ids:
+        return
+    with get_conn() as conn:
+        conn.executemany("UPDATE deals SET seen_at = ? WHERE id = ? AND seen_at IS NULL",
+                         [(int(time.time()), i) for i in deal_ids])
+
+
+def clear_inbox_deals(chat_id):
+    """«🧹 Очистити список» — усі актуальні пропозиції позначаються як пропущені."""
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE deals SET status = 'skipped', seen_at = COALESCE(seen_at, ?)
+               WHERE status = 'new' AND watch_id IN (SELECT id FROM watches WHERE chat_id = ?)""",
+            (int(time.time()), chat_id),
+        )
 
 
 def get_deal_stats(chat_id):
