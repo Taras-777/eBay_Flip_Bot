@@ -263,7 +263,45 @@ def fetch_browse_rate_limit():
         "reset": _parse_ebay_ts(daily.get("reset")),
     }
     _rate_limit_cache.update(data=data, fetched_at=time.time())
+    try:
+        fetch_trading_rate_limit(token)
+    except Exception as e:
+        log.debug("Не вдалося отримати ліміти Trading API: %s", e)
     return data
+
+
+_trading_limit_cache = {"count": None, "fetched_at": 0.0}
+
+
+def fetch_trading_rate_limit(token=None):
+    """Скільки запитів Trading API (перевірки продажів) зроблено сьогодні — за даними
+    eBay, тобто з УСІХ копій бота з цими ключами (ПК + сервер). None — eBay не віддав."""
+    resp = _request_with_retries(
+        "GET", ANALYTICS_RATE_LIMIT_URL,
+        headers={"Authorization": "Bearer " + (token or _get_access_token())},
+        params={"api_context": "tradingapi", "api_name": "TradingAPI"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        return None
+    counts = []
+    for api in resp.json().get("rateLimits") or []:
+        for resource in api.get("resources") or []:
+            for rate in resource.get("rates") or []:
+                if int(rate.get("timeWindow") or 0) == 86400:
+                    limit, remaining = int(rate.get("limit") or 0), int(rate.get("remaining") or 0)
+                    counts.append(int(rate["count"]) if rate.get("count") is not None else max(limit - remaining, 0))
+    if not counts:
+        return None
+    _trading_limit_cache.update(count=max(counts), fetched_at=time.time())
+    return _trading_limit_cache["count"]
+
+
+def trading_calls_today():
+    """Запити Trading API сьогодні: дані eBay (свіжіші за 30 хв), інакше — власний лічильник."""
+    if _trading_limit_cache["count"] is not None and time.time() - _trading_limit_cache["fetched_at"] < 30 * 60:
+        return max(_trading_limit_cache["count"], get_api_calls_today("trading")), True
+    return get_api_calls_today("trading"), False
 
 
 def fetch_item_aspects(item_id):

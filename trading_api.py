@@ -16,12 +16,11 @@ from settings import SOLD_CHECK_BATCH, TRADING_DAILY_BUDGET, log
 from db import (
     apply_discovery_check,
     apply_sold_check,
-    get_api_calls_today,
     get_pending_discovery_checks,
     get_pending_sold_checks,
     record_api_call,
 )
-from ebay_api import _request_with_retries
+from ebay_api import _request_with_retries, trading_calls_today
 from ebay_user import UserAuthError, _token_cache, get_user_access_token, is_connected
 
 TRADING_URL = "https://api.ebay.com/ws/api.dll"
@@ -115,7 +114,7 @@ def verify_disappeared(limit=SOLD_CHECK_BATCH):
     Повертає кількість перевірених. Викликати з потоку (asyncio.to_thread)."""
     if not is_connected():
         return 0
-    left = min(limit, TRADING_DAILY_BUDGET - get_api_calls_today("trading"))
+    left = min(limit, TRADING_DAILY_BUDGET - trading_calls_today()[0])
     if left <= 0:
         return 0
     queue = [(apply_sold_check, (r["watch_id"], r["item_id"])) for r in get_pending_sold_checks(left)]

@@ -171,3 +171,15 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
     assert any("(1/2)" in t for t in shown)
     assert "✅ Ціни оновлено: 1 товар" in shown[-1] and "Не вдалося порахувати: iPhone" in shown[-1]
     assert ctx.bot_data["refresh_all_running"] is False
+
+
+def test_main_menu_shows_when_prices_were_updated(monkeypatch):
+    import panel
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    assert "Ціни товарів оновлено" not in panel.main_menu_text(1)   # ще не рахувались
+    db.upsert_market_stats(wid, "used", "*", 450, 20, sale_price=420, sale_source="x")
+    assert "💰 Ціни товарів оновлено: сьогодні о " in panel.main_menu_text(1)
+    assert "Ціни товарів оновлено" not in panel.main_menu_text(2)   # чужі товари не рахуються
+    with db.get_conn() as conn:
+        conn.execute("UPDATE market_stats SET updated_at = updated_at - 86400")
+    assert "💰 Ціни товарів оновлено: вчора о " in panel.main_menu_text(1)

@@ -4,6 +4,7 @@
 """
 
 import asyncio
+from datetime import datetime
 
 import config
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
@@ -11,10 +12,10 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-from settings import TRADING_DAILY_BUDGET, is_owner, log
-from db import get_api_calls_today, list_users
+from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
+from db import get_last_prices_update, list_users
 from ebay_user import is_connected
-from ebay_api import api_usage_line, fetch_browse_rate_limit
+from ebay_api import api_usage_line, fetch_browse_rate_limit, trading_calls_today
 from version import get_version
 
 
@@ -55,23 +56,46 @@ MAIN_MENU_TEXT = "📋 <b>Головне меню</b> — обери дію:"
 
 def sold_checks_line():
     """Рядок про запити Trading API (перевірки продажів) — коли акаунт eBay підключено
-    або сьогодні вже були перевірки."""
-    count = get_api_calls_today("trading")
+    або сьогодні вже були перевірки. Число — за даними eBay (усі копії бота разом)."""
+    count, _ = trading_calls_today()
     if not count and not is_connected():
         return ""
     return f"🧾 Перевірки продажів сьогодні: <b>{count}</b> / {TRADING_DAILY_BUDGET}"
 
 
+def prices_updated_line(user_id):
+    """«💰 Ціни оновлено о 16:33» — коли востаннє рахувались ціни товарів користувача."""
+    ts = get_last_prices_update(user_id)
+    if not ts:
+        return ""
+    moment = datetime.fromtimestamp(ts, LOCAL_TZ)
+    today = datetime.now(LOCAL_TZ).date()
+    if moment.date() == today:
+        when = f"сьогодні о {moment:%H:%M}"
+    elif (today - moment.date()).days == 1:
+        when = f"вчора о {moment:%H:%M}"
+    else:
+        when = f"{moment:%d.%m} о {moment:%H:%M}"
+    return f"💰 Ціни товарів оновлено: {when}"
+
+
 def main_menu_text(user_id=None):
     """Текст головного меню; власник додатково бачить використання eBay API.
-    Внизу — версія бота (змінюється сама після кожного оновлення коду)."""
+    Внизу — коли оновлювались ціни й версія бота (змінюється сама після оновлення коду)."""
     footer = f"\n\n<i>🏷 Версія {get_version()}</i>"
+    prices = ""
+    if user_id is not None:
+        try:
+            line = prices_updated_line(user_id)
+            prices = f"\n\n{line}" if line else ""
+        except Exception as e:
+            log.debug("Не вдалося визначити час оновлення цін: %s", e)
     if user_id is not None and is_owner(user_id):
         try:
-            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line(sold_checks_line())}{footer}"
+            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line(sold_checks_line())}{prices}{footer}"
         except Exception as e:
             log.debug("Не вдалося сформувати рядок використання API: %s", e)
-    return MAIN_MENU_TEXT + footer
+    return MAIN_MENU_TEXT + prices + footer
 
 
 def build_main_menu(user_id: int) -> InlineKeyboardMarkup:

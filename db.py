@@ -556,6 +556,17 @@ def upsert_market_stats(watch_id, cond_group, spec_group, median_price, sample_s
         )
 
 
+def get_last_prices_update(chat_id):
+    """Коли востаннє оновлювались ринкові ціни товарів цього чату (timestamp або None)."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT MAX(ms.updated_at) AS t FROM market_stats ms
+               JOIN watches w ON w.id = ms.watch_id WHERE w.chat_id = ? AND w.active = 1""",
+            (chat_id,),
+        ).fetchone()
+    return row["t"] if row and row["t"] else None
+
+
 def get_auto_min_price(watch_id, pct=None):
     """
     Автоматична мінімальна ціна для пошуку, якщо користувач свою не задав:

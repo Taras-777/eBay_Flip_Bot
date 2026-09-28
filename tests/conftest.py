@@ -31,6 +31,7 @@ def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DB_PATH", str(tmp_path / "test.sqlite3"))
     db.init_db()
     ebay_api._rate_limit_cache.update(data=None, fetched_at=0)
+    ebay_api._trading_limit_cache.update(count=None, fetched_at=0)
     yield
 
 

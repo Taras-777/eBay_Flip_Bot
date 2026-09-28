@@ -148,7 +148,7 @@ def test_verify_stops_on_auth_error(monkeypatch):
 def test_verify_respects_daily_budget(monkeypatch):
     make_gone(1, "a", 400)
     monkeypatch.setattr(trading_api, "is_connected", lambda: True)
-    monkeypatch.setattr(trading_api, "get_api_calls_today", lambda api: settings.TRADING_DAILY_BUDGET)
+    monkeypatch.setattr(trading_api, "trading_calls_today", lambda: (settings.TRADING_DAILY_BUDGET, True))
     monkeypatch.setattr(trading_api, "get_item_status", lambda item_id: pytest.fail("ліміт вичерпано"))
     assert trading_api.verify_disappeared() == 0
 
@@ -378,3 +378,15 @@ def test_login_script(monkeypatch, capsys):
     ebay_login.main()
     out = capsys.readouterr().out
     assert got == ["v^1.1#abc"] and "auth.ebay.com/oauth2/authorize" in out and "✅ Акаунт eBay підключено" in out
+
+
+def test_trading_count_from_ebay(monkeypatch):
+    import ebay_api
+    payload = {"rateLimits": [{"apiContext": "tradingapi", "resources": [
+        {"name": "TradingAPI", "rates": [{"timeWindow": 86400, "limit": 5000, "remaining": 4700, "count": 300}]},
+        {"name": "GetItem", "rates": [{"timeWindow": 86400, "limit": 5000, "remaining": 4850, "count": 150}]},
+    ]}]}
+    monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(payload))
+    assert ebay_api.fetch_trading_rate_limit("TOKEN") == 300
+    db.record_api_call("trading")                      # на цій копії бота — лише 1
+    assert ebay_api.trading_calls_today() == (300, True)  # а eBay бачить запити з ПК і сервера разом
