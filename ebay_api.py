@@ -63,7 +63,7 @@ SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 ITEM_URL = "https://api.ebay.com/buy/browse/v1/item/"
 
 
-NETWORK_MAX_ATTEMPTS = 4
+NETWORK_MAX_ATTEMPTS = 3  # 1 запит + максимум 2 повтори — вимога eBay (Application Growth Check)
 
 
 NETWORK_BACKOFF_SECONDS = 1.0
