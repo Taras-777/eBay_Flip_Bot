@@ -48,6 +48,9 @@ from handlers import (
     config_listings_callback,
     deal_action_callback,
     delwatch_ask_callback,
+    discover_add_callback,
+    discover_callback,
+    discover_refresh_callback,
     delwatch_yes_callback,
     edit_cancel,
     edit_interrupt,
@@ -188,6 +191,9 @@ def main():
     # Кнопки головного меню (коли жоден діалог не активний)
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))
     app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
+    app.add_handler(CallbackQueryHandler(discover_callback, pattern="^menu:discover$"))
+    app.add_handler(CallbackQueryHandler(discover_add_callback, pattern="^dadd:"))
+    app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))
     app.add_handler(CallbackQueryHandler(cmd_list, pattern="^menu:list$"))
     app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^menu:stats$"))
     app.add_handler(CallbackQueryHandler(watch_details_callback, pattern="^watch_details:"))

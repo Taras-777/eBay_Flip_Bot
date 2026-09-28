@@ -76,6 +76,28 @@ CREATE TABLE IF NOT EXISTS category_aspects (
     fetched_at INTEGER NOT NULL
 );
 
+-- «💡 Що перепродавати»: оголошення популярних товарів, яких ще ніхто не
+-- відстежує (щоб рахувати, як швидко вони зникають), і готові результати
+CREATE TABLE IF NOT EXISTS discovery_obs (
+    candidate TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    price REAL,
+    spec_group TEXT,
+    cond_group TEXT,
+    created_at INTEGER,
+    first_seen INTEGER,
+    last_seen INTEGER,
+    status TEXT DEFAULT 'active',
+    gone_at INTEGER,
+    PRIMARY KEY (candidate, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS discovery_results (
+    candidate TEXT PRIMARY KEY,
+    data_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 -- Службові значення бота (напр. номер версії коду)
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
@@ -931,3 +953,68 @@ def set_meta(key, value):
             "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, str(value)),
         )
+
+
+# ---------- «💡 Що перепродавати» ----------
+
+def update_discovery_obs(candidate, items, window_start):
+    """
+    Зберігає поточні оголошення кандидата і позначає «зниклими» ті, що мали б
+    бути у видачі (створені після найстарішого оголошення поточної видачі),
+    але їх немає — найімовірніше, їх купили. Повертає кількість нових зниклих.
+    """
+    now = int(time.time())
+    present = {it["item_id"] for it in items}
+    with get_conn() as conn:
+        for it in items:
+            conn.execute(
+                """INSERT INTO discovery_obs (candidate, item_id, price, spec_group, cond_group,
+                                              created_at, first_seen, last_seen, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                   ON CONFLICT(candidate, item_id) DO UPDATE SET
+                     price = excluded.price, last_seen = excluded.last_seen, status = 'active',
+                     gone_at = NULL""",
+                (candidate, it["item_id"], it["total_price"], it.get("spec_group"), it.get("cond_group"),
+                 it.get("created_at"), now, now),
+            )
+        gone = 0
+        if window_start:
+            rows = conn.execute(
+                """SELECT item_id FROM discovery_obs WHERE candidate = ? AND status = 'active'
+                   AND created_at >= ?""", (candidate, window_start)).fetchall()
+            for r in rows:
+                if r["item_id"] not in present:
+                    conn.execute("UPDATE discovery_obs SET status = 'gone', gone_at = ? "
+                                 "WHERE candidate = ? AND item_id = ?", (now, candidate, r["item_id"]))
+                    gone += 1
+        conn.execute("DELETE FROM discovery_obs WHERE last_seen < ?", (now - 30 * 86400,))
+        return gone
+
+
+def discovery_gone_stats(candidate, days=7):
+    """(скільки оголошень зникло за `days` днів, скільки днів уже спостерігаємо)."""
+    since = int(time.time()) - days * 86400
+    with get_conn() as conn:
+        gone = conn.execute(
+            "SELECT COUNT(*) AS c FROM discovery_obs WHERE candidate = ? AND status = 'gone' AND gone_at >= ?",
+            (candidate, since)).fetchone()["c"]
+        first = conn.execute("SELECT MIN(first_seen) AS f FROM discovery_obs WHERE candidate = ?",
+                             (candidate,)).fetchone()["f"]
+    observed_days = (time.time() - first) / 86400 if first else 0
+    return gone, min(observed_days, days)
+
+
+def save_discovery_result(candidate, data):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO discovery_results (candidate, data_json, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(candidate) DO UPDATE SET data_json = excluded.data_json,
+                                                    updated_at = excluded.updated_at""",
+            (candidate, json.dumps(data, ensure_ascii=False), int(time.time())),
+        )
+
+
+def get_discovery_results():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT data_json, updated_at FROM discovery_results").fetchall()
+    return [dict(json.loads(r["data_json"]), updated_at=r["updated_at"]) for r in rows]

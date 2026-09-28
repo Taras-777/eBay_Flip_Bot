@@ -35,6 +35,7 @@ async def _ack_callback(update: Update):
 
 MENU_LABELS = {
     "addwatch": "➕ Додати товар",
+    "discover": "💡 Що перепродавати",
     "list": "📦 Мої товари",
     "stats": "📊 Статистика",
     "pending": "⏳ Запити на доступ",
@@ -67,6 +68,7 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
     rows = [
         [btn("addwatch")],
         [btn("list")],
+        [btn("discover")],
     ]
     if is_owner(user_id):
         owner_row = []

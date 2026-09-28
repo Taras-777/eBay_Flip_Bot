@@ -21,12 +21,14 @@ from settings import (
     MIN_PROFIT_EUR,
     MIN_SAMPLE_SIZE,
     MIN_SOLD_SAMPLE,
+    LOCAL_TZ,
     is_owner,
     log,
 )
 from textparse import CONDITION_LABELS, _group_label, _search_tokens, category_label, is_accessory_category, plural
 from learning import hide_item, learned_words_note, reject_and_learn, unlearn_word
 from checker import CheckError, check_listing
+from discovery import run_discovery, top_recommendations
 from db import (
     add_watch,
     encode_required_aspects,
@@ -481,6 +483,8 @@ async def addwatch_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_
         await cmd_users(update, context)
     elif action == "refresh_usage":
         await refresh_usage_callback(update, context)
+    elif action == "discover":
+        await discover_callback(update, context)
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END
@@ -1456,9 +1460,106 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_list(update, context)
     elif data == "menu:refresh_usage":
         await refresh_usage_callback(update, context)
+    elif data == "menu:discover":
+        await discover_callback(update, context)
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END
+
+
+# ============================================================
+# «💡 ЩО ПЕРЕПРОДАВАТИ»
+# ============================================================
+
+def _recommendation_text(n, r):
+    spec = f" ({html.escape(r['spec'])})" if r.get("spec") else ""
+    per_week = r["deals_per_week"]
+    if per_week >= 1:
+        deals = f"🔥 ~{per_week:.0f} вигідних на тиждень, прибуток ~{r['deal_profit']}€ з кожної"
+    else:
+        deals = f"🔥 вигідні трапляються рідко (зараз {r['deals_now']}), прибуток ~{r['deal_profit']}€"
+    if r["sold_per_day"] is None:
+        speed = "⚡ швидкість продажу ще рахую (потрібно кілька днів)"
+    else:
+        speed = f"⚡ продається ~{r['sold_per_day']:g} на день"
+    return (f"<b>{n}. {r['emoji']} {html.escape(r['name'])}</b>{spec}\n"
+            f"💶 типова ціна ~{r['median']}€ · купувати до ~{r['buy_limit']}€\n"
+            f"{deals}\n{speed}")
+
+
+@require_access
+async def discover_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, note=""):
+    """menu:discover — рейтинг товарів, які варто перепродавати."""
+    recs = top_recommendations(update.effective_chat.id)
+    context.user_data["discover_recs"] = [
+        {"name": r["name"], "query": r["query"], "floor": r["floor"]} for r in recs
+    ]
+    lines = ["💡 <b>Що варто перепродавати</b>",
+             "<i>Бот сам аналізує популярні товари на eBay.de, яких ти ще не відстежуєш, "
+             "і ставить угорі ті, на яких найреальніше заробити.</i>"]
+    if note:
+        lines.append(note)
+    rows = []
+    if recs:
+        updated = max(r["updated_at"] for r in recs)
+        lines.append(f"<i>Оновлено: {datetime.fromtimestamp(updated, LOCAL_TZ).strftime('%d.%m %H:%M')}</i>")
+        lines += [_recommendation_text(n, r) for n, r in enumerate(recs, 1)]
+        lines.append("<i>⚠️ Оцінка за оголошеннями eBay, а не за реальними продажами. "
+                     "Натисни товар, щоб почати його відстежувати.</i>")
+        buttons = [InlineKeyboardButton(f"➕ {r['name']}", callback_data=f"dadd:{i}") for i, r in enumerate(recs)]
+        rows += [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    else:
+        lines.append("Аналіз ще не готовий: бот перевіряє популярні товари раз на 12 годин, "
+                     "перший результат з'явиться протягом кількох хвилин після запуску.")
+    if is_owner(update.effective_user.id):
+        rows.append([InlineKeyboardButton("🔄 Оновити аналіз", callback_data="drefresh")])
+    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+
+
+@require_access
+async def discover_refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """drefresh — перерахувати рейтинг зараз (лише власник: ~25 запитів до eBay)."""
+    if not is_owner(update.effective_user.id):
+        return await discover_callback(update, context)
+    await show_panel(update, context, "💡 ⏳ Аналізую популярні товари на eBay… (до хвилини)")
+    try:
+        await asyncio.to_thread(run_discovery, True)
+    except Exception as e:
+        log.exception("Не вдалося оновити «Що перепродавати»: %s", e)
+    await discover_callback(update, context)
+
+
+@require_access
+async def discover_add_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """dadd:<індекс> — почати відстежувати рекомендований товар."""
+    query_cb = update.callback_query
+    recs = context.user_data.get("discover_recs") or []
+    try:
+        rec = recs[int(query_cb.data.split(":")[1])]
+    except (ValueError, IndexError):
+        await query_cb.answer("Список застарів — відкрий «💡 Що перепродавати» знову.", show_alert=True)
+        return
+    chat_id = update.effective_chat.id
+    existing = find_duplicate_watch(chat_id, rec["query"])
+    if existing:
+        await _show_watch_details(update, context, existing)
+        return
+    wid = add_watch(
+        chat_id=chat_id, label=rec["name"], query=rec["query"],
+        exclude="broken defekt teile parts kaputt", condition_ids=DEFAULT_CONDITION_IDS,
+        discount_threshold_pct=DEFAULT_DISCOUNT_THRESHOLD_PCT, categories=[],
+        min_price=rec["floor"], require_spec=None, required_aspect=None,
+    )
+    watch = get_watch(wid, chat_id)
+    await show_panel(update, context, f"✅ «{html.escape(rec['name'])}» додано.\n\n⏳ Рахую ціни на eBay…",
+                     parse_mode=ParseMode.HTML)
+    try:
+        await _recalculate_watch_medians(watch, replace_existing=True)
+    except Exception as e:
+        log.warning("Не вдалося одразу порахувати ціни для «%s»: %s", rec["name"], e)
+    await _show_watch_details(update, context, get_watch(wid, chat_id))
 
 
 # ============================================================
@@ -1535,6 +1636,8 @@ async def check_listing_interrupt(update: Update, context: ContextTypes.DEFAULT_
         await watch_details_callback(update, context)
     elif data == "menu:list":
         await cmd_list(update, context)
+    elif data == "menu:discover":
+        await discover_callback(update, context)
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END

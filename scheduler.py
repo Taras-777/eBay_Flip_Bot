@@ -41,6 +41,7 @@ from market import (
     max_buy_price,
 )
 from panel import repost_panel
+from discovery import run_discovery
 from notifications import _notify_median_error, _notify_median_ready, _send_grouped_deals, _send_single_deal
 
 
@@ -190,6 +191,11 @@ async def scheduler_loop(app: Application):
                 await asyncio.to_thread(fetch_browse_rate_limit)
             except Exception as e:
                 log.debug("Не вдалося отримати ліміти eBay API: %s", e)
+
+            # «💡 Що перепродавати» — окремою задачею, щоб не затримувати перевірку товарів
+            task = app.bot_data.get("discovery_task")
+            if task is None or task.done():
+                app.bot_data["discovery_task"] = asyncio.create_task(asyncio.to_thread(run_discovery))
 
             # Раз на добу прибираємо застарілі записи seen_items
             now = time.time()
