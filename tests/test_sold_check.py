@@ -364,3 +364,17 @@ def test_main_menu_shows_sold_checks(monkeypatch):
     assert lines[i] == "📡 Запити до eBay сьогодні: <b>1520</b> / 5000"
     assert lines[i + 1] == "🧾 Перевірки продажів сьогодні: <b>1</b> / 4000"
     assert lines[i + 2].startswith("🔄 Ліміт скинеться о")
+
+
+def test_login_script(monkeypatch, capsys):
+    import ebay_login
+    monkeypatch.setattr(ebay_login, "is_configured", lambda: True)
+    monkeypatch.setattr(ebay_user, "EBAY_RUNAME", "RU")
+    got = []
+    monkeypatch.setattr(ebay_login, "exchange_code", lambda code: got.append(code))
+    answers = iter(["не те", "https://auth2.ebay.com/x?isAuthSuccessful=true&code=v%5E1.1%23abc&expires_in=299"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(ebay_login.sys, "argv", ["ebay_login.py"])
+    ebay_login.main()
+    out = capsys.readouterr().out
+    assert got == ["v^1.1#abc"] and "auth.ebay.com/oauth2/authorize" in out and "✅ Акаунт eBay підключено" in out
