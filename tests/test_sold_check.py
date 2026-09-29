@@ -362,7 +362,7 @@ def test_main_menu_shows_sold_checks(monkeypatch):
     lines = panel.main_menu_text(1).splitlines()
     i = next(n for n, l in enumerate(lines) if l.startswith("📡"))
     assert lines[i] == "📡 Запити до eBay сьогодні: <b>1520</b> / 5000"
-    assert lines[i + 1] == "🧾 Перевірки продажів сьогодні: <b>1</b> / 4000"
+    assert lines[i + 1] == "🧾 Перевірки продажів сьогодні: <b>1</b> / 4000 (✅ продано: <b>0</b>)"
     assert lines[i + 2].startswith("🔄 Ліміт скинеться о")
 
 
@@ -458,3 +458,33 @@ def test_sales_pagination():
     kb = handlers._sales_keyboard(w["id"], sold, 1)
     labels = [b.text for r in kb.inline_keyboard for b in r]
     assert "❌ 9" in labels and "◀️ Новіші" in labels and "❌ 1" not in labels
+
+
+def test_watch_card_shows_tracking_summary(monkeypatch):
+    import handlers
+    w = sales_watch()
+    add_sale(w["id"], "s1", 600, "256GB", confirmed=True)
+    add_sale(w["id"], "s2", 610, "256GB")
+    make_gone(w["id"], "p1", 590)                      # чекає перевірки
+    make_gone(w["id"], "u1", 580)
+    db.apply_sold_check(w["id"], "u1", "unsold")        # знято без продажу
+    db.update_listing_observations(w["id"], [obs_item(f"a{i}", 500) for i in range(3)])  # 3 активні
+    summary = db.watch_obs_summary(w["id"])
+    assert summary["sold"] == 3 and summary["confirmed"] == 1 and summary["pending"] == 1
+    assert summary["withdrawn"] == 1 and summary["active"] >= 3
+    text = handlers._watch_details_text(db.get_watch(w["id"], 1))
+    assert "📋 Відстежую оголошень зараз" in text and "🛒 Продано за 60 днів: <b>3</b>" in text
+    assert "⏳ У черзі на перевірку «продано?»: <b>1</b>" in text and "🚫 Зникли без продажу" in text
+
+
+def test_menu_counts_sold_today():
+    import panel
+    make_gone(1, "x1", 500)
+    make_gone(1, "x2", 510)
+    db.apply_sold_check(1, "x1", "sold")
+    db.apply_sold_check(1, "x2", "unsold")
+    db.record_api_call("trading")
+    db.record_api_call("trading")
+    assert db.sold_confirmed_today() == 1
+    db.set_meta("ebay_user_refresh_token", "R")
+    assert panel.sold_checks_line() == "🧾 Перевірки продажів сьогодні: <b>2</b> / 4000 (✅ продано: <b>1</b>)"

@@ -52,6 +52,7 @@ from db import (
     upsert_market_stats,
     watch_category_ids,
 )
+from shared_market import MANUAL_CACHE_SECONDS, MARKET_CACHE_SECONDS, market_page, own_filter
 from ebay_api import (
     _watch_search_kwargs,
     browse_budget_left,
@@ -269,7 +270,7 @@ def _stat_for_item(stats, it):
     return stats.get((it["cond_group"], it["spec_group"])) or stats.get((it["cond_group"], "*"))
 
 
-def _fetch_market_items(w):
+def _fetch_market_items(w, max_age=MARKET_CACHE_SECONDS):
     """
     До MARKET_SCAN_PAGES × 200 найновіших оголошень у КОЖНІЙ категорії товару.
     Повертає (відфільтровані лоти, вікно для трекера, id усіх знайдених лотів).
@@ -280,9 +281,8 @@ def _fetch_market_items(w):
     for cid in (watch_category_ids(w) or [None]):
         cat_created = []
         for page in range(MARKET_SCAN_PAGES):
-            batch = search_active_items(
-                limit=200, offset=page * 200, fresh=True, category_id=cid, **_watch_search_kwargs(w),
-            )
+            # Спільна сторінка: той самий товар інших користувачів eBay повторно не сканує
+            batch = market_page(w, cid, page * 200, max_age=max_age)
             if not batch:
                 break
             for it in batch:
@@ -294,6 +294,7 @@ def _fetch_market_items(w):
         if cat_created:
             window_starts.append(min(cat_created))
     window_start = max(window_starts) if window_starts else None
+    items = own_filter(w, items)   # особисті фільтри (стан, мін. ціна, виключені слова)
     _annotate_items(items, max_lookups=MAX_SPEC_LOOKUPS_PER_MARKET_SCAN, watch=w)
     return _apply_item_filters(w, items), window_start, seen_ids
 
@@ -371,7 +372,8 @@ async def _recalculate_watch_medians(w: dict, replace_existing=False):
     за лотами (трекер зниклих) → статистика груп. Повертає
     (items, stats, newly_computed_keys).
     """
-    items, window_start, present_ids = await asyncio.to_thread(_fetch_market_items, w)
+    max_age = MANUAL_CACHE_SECONDS if replace_existing else MARKET_CACHE_SECONDS
+    items, window_start, present_ids = await asyncio.to_thread(_fetch_market_items, w, max_age)
     if not items:
         return [], {}, []
 

@@ -11,7 +11,7 @@ import os
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODULES = ["settings", "netstatus", "version", "textparse", "db", "learning", "checker", "discovery", "ebay_api", "ebay_user", "trading_api", "market", "sales", "panel", "account", "access",
+MODULES = ["settings", "netstatus", "version", "textparse", "db", "learning", "checker", "discovery", "ebay_api", "ebay_user", "trading_api", "market", "shared_market", "sales", "panel", "account", "access",
            "notifications", "handlers", "scheduler", "main"]
 
 

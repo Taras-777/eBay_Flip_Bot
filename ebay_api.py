@@ -697,6 +697,7 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "url": it.get("itemWebUrl"),
                 "category_names": [c.get("categoryName") or "" for c in it.get("categories") or []],
                 "condition": it.get("condition"),
+                "condition_id": str(it.get("conditionId") or ""),
                 "cond_group": cond_group,
                 "created_at": _parse_ebay_ts(it.get("itemCreationDate")),
                 "end_at": _parse_ebay_ts(it.get("itemEndDate")),

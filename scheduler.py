@@ -52,6 +52,7 @@ from notifications import (
     _notify_price_drops,
 )
 from sales import is_slow_seller, price_drops, sales_note
+from shared_market import deal_scan
 from netstatus import is_down, mark_down, mark_up
 
 
@@ -95,9 +96,8 @@ async def check_one_watch(app: Application, w: dict):
     else:
         stats = {(r["cond_group"], r["spec_group"]): r for r in rows}
         def _deal_scan():
-            found = search_in_categories(
-                watch_category_ids(w), limit=DEAL_SCAN_LIMIT, fresh=True, **_watch_search_kwargs(w),
-            )
+            # Спільний пошук: той самий товар інших користувачів — один запит на всіх
+            found = deal_scan(w, DEAL_SCAN_LIMIT)
             _annotate_items(found, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=w)
             return _apply_item_filters(w, found)
 

@@ -376,6 +376,23 @@ def set_user_status(user_id, status):
         )
 
 
+def delete_user(user_id):
+    """Повністю прибирає користувача: запис доступу видаляється (він зможе надіслати
+    новий запит), його товари перестають відстежуватись (не витрачають ліміт eBay)."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT chat_id FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        if row:
+            watch_ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM watches WHERE chat_id = ? AND active = 1", (row["chat_id"],)).fetchall()]
+            conn.execute("UPDATE watches SET active = 0 WHERE chat_id = ?", (row["chat_id"],))
+            for wid in watch_ids:
+                conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (wid,))
+                conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (wid,))
+                conn.execute("DELETE FROM seen_items WHERE watch_id = ?", (wid,))
+        conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        return dict(row) if row else None
+
+
 def list_users(status=None):
     q = "SELECT * FROM users"
     params = []
@@ -815,6 +832,16 @@ SOLD_CHECK_OUTCOMES = {
 }
 
 
+def sold_confirmed_today():
+    """Скільки перевірок сьогодні (доба UTC, як і лічильник запитів) показали «продано»:
+    твої товари + «💡 Що перепродавати»."""
+    start = int(datetime.strptime(_utc_day(), "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+    with get_conn() as conn:
+        return sum(conn.execute(
+            f"SELECT COUNT(*) AS c FROM {table} WHERE sold_check = 'sold' AND checked_at >= ?", (start,)
+        ).fetchone()["c"] for table in ("listing_obs", "discovery_obs"))
+
+
 def get_pending_sold_checks(limit):
     """Зниклі лоти, які ще треба перевірити через Trading API (найсвіжіші першими)."""
     since = int(time.time()) - SOLD_CHECK_MAX_AGE_DAYS * 86400
@@ -872,6 +899,76 @@ def get_sold_listings(watch_id, days=SOLD_LOOKBACK_DAYS):
                ORDER BY gone_at DESC""",
             (watch_id, since),
         ).fetchall()]
+
+
+def watch_obs_summary(watch_id, days=SOLD_LOOKBACK_DAYS):
+    """Скільки оголошень бот відстежує по товару, скільки з них продано (за `days` днів),
+    скільки чекає перевірки «продано?» і скільки знято без продажу."""
+    since = int(time.time()) - days * 86400
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT
+                 SUM(status = 'active') AS active,
+                 SUM(status = 'gone' AND gone_at >= :since) AS sold,
+                 SUM(status = 'gone' AND gone_at >= :since AND sold_check = 'sold') AS confirmed,
+                 SUM(sold_check = 'pending') AS pending,
+                 SUM(sold_check IN ('unsold', 'active') AND gone_at >= :since) AS withdrawn
+               FROM listing_obs WHERE watch_id = :wid""",
+            {"since": since, "wid": watch_id},
+        ).fetchone()
+    return {k: int(row[k] or 0) for k in ("active", "sold", "confirmed", "pending", "withdrawn")}
+
+
+def copy_listing_history(src_watch_ids, dst_watch_id, allowed_groups=None, exclude_tokens=(), min_price=0):
+    """Копіює спостереження (активні й продані лоти) з товарів-«сусідів» новому товару,
+    з урахуванням його фільтрів. Повертає кількість скопійованих."""
+    from textparse import _search_tokens
+    if not src_watch_ids:
+        return 0
+    exclude = set(exclude_tokens or ())
+    marks = ",".join("?" * len(src_watch_ids))
+    with get_conn() as conn:
+        rejected = {r["item_id"] for r in conn.execute(
+            "SELECT item_id FROM rejected_items WHERE watch_id = ?", (dst_watch_id,)).fetchall()}
+        rows = conn.execute(
+            f"""SELECT * FROM listing_obs WHERE watch_id IN ({marks})
+                ORDER BY COALESCE(sold_check = 'sold', 0) DESC, last_seen DESC""",
+            list(src_watch_ids),
+        ).fetchall()
+        copied = 0
+        for r in rows:
+            r = dict(r)
+            if r["item_id"] in rejected:
+                continue
+            if allowed_groups and r["cond_group"] not in allowed_groups:
+                continue
+            if exclude and _search_tokens(r.get("title") or "") & exclude:
+                continue
+            if min_price and (r["price"] or 0) < min_price:
+                continue
+            r["watch_id"] = dst_watch_id
+            cols = list(r)
+            cur = conn.execute(
+                f"INSERT OR IGNORE INTO listing_obs ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                [r[c] for c in cols],
+            )
+            copied += cur.rowcount
+    return copied
+
+
+def known_sold_check(item_id):
+    """Результат перевірки «продано?», якщо цей лот уже перевіряли в іншому товарі
+    чи в «Що перепродавати», — щоб не питати eBay двічі."""
+    with get_conn() as conn:
+        for table in ("listing_obs", "discovery_obs"):
+            row = conn.execute(
+                f"""SELECT sold_check FROM {table} WHERE item_id = ?
+                    AND sold_check IN ('sold', 'unsold', 'active') LIMIT 1""",
+                (item_id,),
+            ).fetchone()
+            if row:
+                return row["sold_check"]
+    return None
 
 
 def get_current_listings(watch_id):

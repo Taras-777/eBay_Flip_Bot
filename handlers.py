@@ -50,6 +50,7 @@ from db import (
     get_price_history,
     get_required_aspects,
     get_sold_listings,
+    watch_obs_summary,
     get_user_row,
     get_watch,
     get_watch_categories,
@@ -96,6 +97,7 @@ from panel import (
 from access import _notify_owner_new_request, cmd_pending, cmd_users, require_access
 from notifications import _notify_median_error, _notify_median_problem
 from ebay_user import is_connected
+from shared_market import attach_shared_history, find_shared_watch, shared_categories
 from sales import sales_note, speed_text, summarize, weekly_change
 
 
@@ -118,6 +120,7 @@ NEW_WATCH_KEYS = (
     "new_watch_categories", "new_watch_category_selected",
     "new_watch_category_options", "new_watch_min_price", "suggested_min_price",
     "new_watch_aspect_options", "new_watch_aspect_selected", "new_watch_required_aspect", "new_watch_require_spec",
+    "new_watch_shared_from",
 )
 
 
@@ -216,6 +219,47 @@ async def addwatch_got_query(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not _ebay_configured():
         return await _finalize_watch(update, context)
 
+    # Той самий товар уже відстежує інший користувач — пропонуємо спільні дані ринку
+    shared = find_shared_watch(query, exclude_chat_id=chat_id)
+    if shared:
+        obs = watch_obs_summary(shared["id"])
+        cats = ", ".join(category_label(c["name"]) for c in shared_categories(shared)) or "усі категорії"
+        context.user_data["new_watch_shared_from"] = shared["id"]
+        await show_panel(
+            update, context,
+            f"💡 <b>«{html.escape(query)}» уже аналізується ботом</b>\n\n"
+            f"📋 відстежується оголошень: {obs['active']}\n"
+            f"🛒 помічено продажів: {obs['sold']}\n"
+            f"🗂️ категорії: {html.escape(cats)}\n\n"
+            "Підключитися до готових даних? Ціни й продажі з'являться одразу, а eBay не "
+            "скануватиметься двічі. Стан, мінімальну ціну й характеристики налаштуєш під себе, "
+            "а сховані оголошення й пропозиції в тебе будуть свої.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Підключитися", callback_data="shr:yes")],
+                [InlineKeyboardButton("⚙️ Ні, оберу категорії сам", callback_data="shr:no")],
+                [InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")],
+            ]),
+            parse_mode=ParseMode.HTML,
+        )
+        return ASK_CATEGORY
+    return await _ask_categories(update, context)
+
+
+async def addwatch_shared_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """shr:yes — ті самі категорії, що в уже відстежуваного товару; shr:no — звичайний вибір."""
+    await _ack_callback(update)
+    shared_id = context.user_data.pop("new_watch_shared_from", None)
+    shared = next((w for w in list_watches(active_only=True) if w["id"] == shared_id), None)
+    if update.callback_query.data == "shr:yes" and shared:
+        context.user_data["new_watch_categories"] = shared_categories(shared)
+        if not context.user_data["new_watch_categories"]:
+            return await _propose_min_price(update, context)
+        return await _propose_aspects(update, context)
+    return await _ask_categories(update, context)
+
+
+async def _ask_categories(update, context):
+    query = context.user_data["new_watch_query"]
     await show_panel(
         update, context,
         f"🔎 «{html.escape(query)}»\n\nШукаю, в яких категоріях eBay є такі товари…",
@@ -435,7 +479,7 @@ async def _finalize_watch(update, context):
     _clear_new_watch(context)
     chat_id = update.effective_chat.id
 
-    add_watch(
+    wid = add_watch(
         chat_id=chat_id,
         label=query,
         query=query,
@@ -449,6 +493,14 @@ async def _finalize_watch(update, context):
     )
 
     extras = []
+    try:
+        copied = await asyncio.to_thread(attach_shared_history, get_watch(wid, chat_id))
+    except Exception as e:
+        log.warning("Не вдалося підключити спільні дані ринку для watch #%s: %s", wid, e)
+        copied = 0
+    if copied:
+        extras.append(f"📊 Підключено готові дані ринку: {plural(copied, 'оголошення', 'оголошення', 'оголошень')} "
+                      f"(продажів: {watch_obs_summary(wid)['sold']}) — ціни порахуються за кілька хвилин")
     if category_name:
         extras.append(f"🗂️ Категорії: {html.escape(category_name)}")
     if min_price:
@@ -600,6 +652,17 @@ def _watch_details_text(watch):
          + ("так" if watch_requires_spec(watch) else "ні")
          + (" (авто)" if watch.get("require_spec") is None else "")),
     ]
+    obs = watch_obs_summary(watch["id"])
+    if obs["active"] or obs["sold"] or obs["pending"]:
+        sold_line = f"🛒 Продано за {SOLD_LOOKBACK_DAYS} днів: <b>{obs['sold']}</b>"
+        if obs["confirmed"]:
+            sold_line += f" (✅ підтверджено eBay: {obs['confirmed']})"
+        lines += ["", "👁 <b>Спостереження:</b>",
+                  f"📋 Відстежую оголошень зараз: <b>{obs['active']}</b>", sold_line]
+        if obs["pending"]:
+            lines.append(f"⏳ У черзі на перевірку «продано?»: <b>{obs['pending']}</b>")
+        if obs["withdrawn"]:
+            lines.append(f"🚫 Зникли без продажу (не враховуються): {obs['withdrawn']}")
     learned = sorted(w for w, st in get_learned_words(watch["id"]).items() if st == "excluded")
     if learned:
         lines.append(f"🧠 Відсіюю за вивченими словами: {html.escape(', '.join(learned))}")
@@ -1840,6 +1903,10 @@ async def discover_add_callback(update: Update, context: ContextTypes.DEFAULT_TY
     watch = get_watch(wid, chat_id)
     await show_panel(update, context, f"✅ «{html.escape(rec['name'])}» додано.\n\n⏳ Рахую ціни на eBay…",
                      parse_mode=ParseMode.HTML)
+    try:
+        await asyncio.to_thread(attach_shared_history, watch)
+    except Exception as e:
+        log.warning("Не вдалося підключити спільні дані ринку для «%s»: %s", rec["name"], e)
     try:
         await _recalculate_watch_medians(watch, replace_existing=True)
     except Exception as e:

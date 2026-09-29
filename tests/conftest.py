@@ -32,6 +32,8 @@ def temp_db(tmp_path, monkeypatch):
     db.init_db()
     ebay_api._rate_limit_cache.update(data=None, fetched_at=0)
     ebay_api._trading_limit_cache.update(count=None, fetched_at=0)
+    import shared_market
+    shared_market._cache.clear()
     yield
 
 

@@ -26,7 +26,7 @@ from account import (
     ebay_account_interrupt,
     ebay_account_start,
 )
-from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats
+from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from handlers import (
     ASK_ASPECT,
     ASK_CATEGORY,
@@ -42,6 +42,7 @@ from handlers import (
     check_listing_start,
     check_listing_text,
     addwatch_category_choice,
+    addwatch_shared_choice,
     addwatch_custom_min_price,
     addwatch_got_query,
     addwatch_menu_interrupt,
@@ -125,6 +126,7 @@ def main():
             ],
             ASK_CATEGORY: [
                 CallbackQueryHandler(addwatch_category_choice, pattern="^cat:"),
+                CallbackQueryHandler(addwatch_shared_choice, pattern="^shr:"),
                 menu_interrupt,
             ],
             ASK_ASPECT: [
@@ -216,6 +218,7 @@ def main():
 
     app.add_handler(CallbackQueryHandler(deal_action_callback, pattern="^(buy|skip):"))
     app.add_handler(CallbackQueryHandler(access_decision_callback, pattern="^access:"))
+    app.add_handler(CallbackQueryHandler(delete_user_callback, pattern="^udel(ok)?:"))
     # «🚫 Не той товар», «🙈 Сховати» і скасування вивчених слів
     app.add_handler(CallbackQueryHandler(reject_deal_callback, pattern="^(rejd|hided):"))
     app.add_handler(CallbackQueryHandler(reject_listing_callback, pattern="^(rejl|hidel):"))

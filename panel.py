@@ -13,7 +13,7 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import count_unseen_deals, get_last_prices_update, list_users
+from db import count_unseen_deals, get_last_prices_update, list_users, sold_confirmed_today
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, trading_calls_today
 from version import get_version
@@ -62,7 +62,9 @@ def sold_checks_line():
     count, _ = trading_calls_today()
     if not count and not is_connected():
         return ""
-    return f"🧾 Перевірки продажів сьогодні: <b>{count}</b> / {TRADING_DAILY_BUDGET}"
+    line = f"🧾 Перевірки продажів сьогодні: <b>{count}</b> / {TRADING_DAILY_BUDGET}"
+    sold = sold_confirmed_today()
+    return line + (f" (✅ продано: <b>{sold}</b>)" if count else "")
 
 
 def prices_updated_line(user_id):

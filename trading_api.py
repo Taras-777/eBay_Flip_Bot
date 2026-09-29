@@ -18,6 +18,7 @@ from db import (
     apply_sold_check,
     get_pending_discovery_checks,
     get_pending_sold_checks,
+    known_sold_check,
     record_api_call,
 )
 from ebay_api import _request_with_retries, trading_calls_today
@@ -123,6 +124,13 @@ def verify_disappeared(limit=SOLD_CHECK_BATCH):
                   for r in get_pending_discovery_checks(left - len(queue))]
     done, counts = 0, {}
     for apply, (owner, item_id) in queue:
+        known = known_sold_check(item_id)
+        if known:
+            # Цей лот уже перевіряли для іншого товару (спільний ринок) — eBay не питаємо
+            apply(owner, item_id, known)
+            counts[known] = counts.get(known, 0) + 1
+            done += 1
+            continue
         try:
             info = get_item_status(item_id)
         except UserAuthError as e:

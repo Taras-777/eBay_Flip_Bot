@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 
 from settings import is_owner, log
 from db import (
+    delete_user,
     get_deal_stats,
     get_user_row,
     list_users,
@@ -155,19 +156,68 @@ async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-@owner_only
-async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def _user_name(u):
+    return u["username"] and f"@{u['username']}" or u["first_name"] or str(u["user_id"])
+
+
+async def _show_users(update, context, note=""):
     users = list_users(status="approved")
     if not users:
-        await show_panel(update, context, "Ще немає жодного схваленого користувача.", reply_markup=back_to_menu_keyboard())
+        text = (note + "\n\n" if note else "") + "Схвалених користувачів немає."
+        await show_panel(update, context, text, reply_markup=back_to_menu_keyboard())
         return
-    lines = ["👥 Користувачі з доступом:\n"]
+    lines = ([note, ""] if note else []) + ["👥 Користувачі з доступом:\n"]
+    rows = []
     for u in users:
-        name = u["username"] and f"@{u['username']}" or u["first_name"] or str(u["user_id"])
         watch_count = len(list_watches(chat_id=u["chat_id"]))
-        lines.append(f"👤 {name} — ID {u['user_id']} · 📦 {plural(watch_count, 'товар', 'товари', 'товарів')}")
+        lines.append(f"👤 {_user_name(u)} — ID {u['user_id']} · 📦 {plural(watch_count, 'товар', 'товари', 'товарів')}")
+        rows.append([InlineKeyboardButton(f"🗑 Видалити {_user_name(u)}"[:60], callback_data=f"udel:{u['user_id']}")])
     lines.append("\nДеталі по користувачу: /userstats <id>")
-    await show_panel(update, context, "\n".join(lines), reply_markup=back_to_menu_keyboard())
+    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+
+
+@owner_only
+async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _show_users(update, context)
+
+
+@owner_only
+async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """udel:<id> — підтвердження; udelok:<id> — видалити."""
+    action, user_id = update.callback_query.data.split(":")
+    row = get_user_row(int(user_id))
+    if row is None:
+        return await _show_users(update, context, note="Цього користувача вже немає.")
+    name = _user_name(row)
+    if action == "udel":
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Так, видалити", callback_data=f"udelok:{user_id}"),
+            InlineKeyboardButton("❌ Ні", callback_data="menu:users"),
+        ]])
+        await show_panel(
+            update, context,
+            f"🗑 Видалити користувача {name}?\n\n"
+            "• доступ до бота закриється, його товари перестануть відстежуватись;\n"
+            "• він зможе надіслати новий запит — і ти знову вирішиш, схвалити чи ні.",
+            reply_markup=keyboard,
+        )
+        return
+    delete_user(int(user_id))
+    try:
+        await context.bot.send_message(
+            chat_id=row["chat_id"],
+            text="🔒 Власник бота закрив тобі доступ. Якщо потрібно — напиши /start, щоб надіслати новий запит.",
+        )
+    except Exception as e:
+        log.warning("Не вдалося сповістити користувача %s: %s", user_id, e)
+    if list_users(status="approved"):
+        await _show_users(update, context, note=f"🗑 {name} видалено.")
+    else:
+        from panel import build_main_menu, main_menu_text  # головне меню — вже без «👥 Користувачі»
+        await show_panel(update, context, f"🗑 {name} видалено.\n\n" + main_menu_text(update.effective_user.id),
+                         reply_markup=build_main_menu(update.effective_user.id), parse_mode="HTML")
+        context.user_data["panel_state"]["main_menu"] = True
 
 
 @owner_only
