@@ -496,9 +496,21 @@ def browse_budget_left():
     інші копії бота з тими ж ключами); якщо вони застарі — з власного лічильника.
     """
     data = _rate_limit_cache["data"]
+    if data and data.get("reset") and time.time() >= data["reset"]:
+        # Ліміт eBay уже скинувся, а свіжих даних ще немає — не чекаємо: беремо половину
+        # бюджету, доки наступний запит getRateLimits не покаже точну цифру
+        return DAILY_BROWSE_BUDGET // 2
     if data and time.time() - _rate_limit_cache["fetched_at"] < 30 * 60:
         return data["remaining"] - max(data["limit"] - DAILY_BROWSE_BUDGET, 0)
     return DAILY_BROWSE_BUDGET - get_api_calls_today("browse")
+
+
+def seconds_until_reset():
+    """Скільки секунд до скидання денного ліміту eBay (None — невідомо)."""
+    data = _rate_limit_cache["data"]
+    if not data or not data.get("reset"):
+        return None
+    return data["reset"] - time.time()
 
 
 def api_usage_line(extra_line=""):
@@ -509,8 +521,13 @@ def api_usage_line(extra_line=""):
     if data:
         line = f"📡 Запити до eBay сьогодні: <b>{data['count']}</b> / {data['limit']}" + extra
         if data["reset"]:
-            reset_local = datetime.fromtimestamp(data["reset"], LOCAL_TZ).strftime("%H:%M")
-            line += f"\n🔄 Ліміт скинеться о {reset_local}"
+            reset_at = datetime.fromtimestamp(data["reset"], LOCAL_TZ)
+            days = (reset_at.date() - datetime.now(LOCAL_TZ).date()).days
+            if time.time() >= data["reset"]:
+                line += "\n🔄 Ліміт щойно скинувся — оновлюю дані eBay"
+            else:
+                day = "сьогодні" if days <= 0 else "завтра" if days == 1 else reset_at.strftime("%d.%m")
+                line += f"\n🔄 Ліміт скинеться {day} о {reset_at:%H:%M}"
         updated = datetime.fromtimestamp(_rate_limit_cache["fetched_at"], LOCAL_TZ).strftime("%H:%M")
         return line + f"\n<i>дані eBay, оновлено о {updated}</i>"
     return (f"📡 Запити до eBay сьогодні: <b>{get_api_calls_today()}</b>{extra}\n"

@@ -363,7 +363,7 @@ def test_main_menu_shows_sold_checks(monkeypatch):
     i = next(n for n, l in enumerate(lines) if l.startswith("📡"))
     assert lines[i] == "📡 Запити до eBay сьогодні: <b>1520</b> / 5000"
     assert lines[i + 1] == "🧾 Перевірки продажів сьогодні: <b>1</b> / 4000 (✅ продано: <b>0</b>)"
-    assert lines[i + 2].startswith("🔄 Ліміт скинеться о")
+    assert lines[i + 2].startswith("🔄 Ліміт скинеться сьогодні о") or lines[i + 2].startswith("🔄 Ліміт скинеться завтра о")
 
 
 def test_login_script(monkeypatch, capsys):

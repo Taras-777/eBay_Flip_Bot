@@ -34,7 +34,7 @@ from db import (
     list_watches,
     watch_category_ids,
 )
-from ebay_api import _watch_search_kwargs, browse_budget_left, fetch_browse_rate_limit, search_in_categories
+from ebay_api import _watch_search_kwargs, browse_budget_left, fetch_browse_rate_limit, search_in_categories, seconds_until_reset
 from market import (
     _annotate_items,
     _apply_item_filters,
@@ -269,7 +269,11 @@ async def scheduler_loop(app: Application):
             left = browse_budget_left()
             interval = CHECK_INTERVAL_MINUTES if left >= SEARCH_RESERVE else LOW_BUDGET_INTERVAL_MINUTES
             if interval != CHECK_INTERVAL_MINUTES:
-                log.info("Бюджет eBay майже вичерпано (лишилось %s) — наступна перевірка через %s хв",
+                # Прокинутись одразу після скидання ліміту eBay, а не чекати повні 30 хв
+                until_reset = seconds_until_reset()
+                if until_reset is not None and 0 < until_reset + 60 < interval * 60:
+                    interval = (until_reset + 60) / 60
+                log.info("Бюджет eBay майже вичерпано (лишилось %s) — наступна перевірка через %.0f хв",
                          left, interval)
             await asyncio.sleep(interval * 60)
     except asyncio.CancelledError:

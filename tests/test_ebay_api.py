@@ -103,3 +103,19 @@ def test_category_names_are_kept(fake_ebay):
                                   categories=[{"categoryId": "139971", "categoryName": "Konsolen"}])]
     found = ebay_api.search_active_items("PlayStation 5")
     assert found[0]["category_names"] == ["Konsolen"]
+
+
+def test_budget_after_reset_does_not_wait_for_stale_data():
+    """Ліміт eBay уже скинувся, а в кеші — вчорашні 5440/5000: бот не має стояти до наступного оновлення."""
+    ebay_api._rate_limit_cache.update(
+        data={"limit": 5000, "remaining": 0, "count": 5440, "reset": time.time() - 60}, fetched_at=time.time())
+    assert ebay_api.browse_budget_left() > 0
+    assert "Ліміт щойно скинувся" in ebay_api.api_usage_line()
+
+
+def test_reset_line_says_today_or_tomorrow():
+    ebay_api._rate_limit_cache.update(
+        data={"limit": 5000, "remaining": 100, "count": 4900, "reset": time.time() + 3600}, fetched_at=time.time())
+    line = ebay_api.api_usage_line()
+    assert "Ліміт скинеться сьогодні о" in line or "Ліміт скинеться завтра о" in line
+    assert 3500 < ebay_api.seconds_until_reset() <= 3600
