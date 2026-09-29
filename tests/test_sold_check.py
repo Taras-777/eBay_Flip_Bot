@@ -488,3 +488,15 @@ def test_menu_counts_sold_today():
     assert db.sold_confirmed_today() == 1
     db.set_meta("ebay_user_refresh_token", "R")
     assert panel.sold_checks_line() == "🧾 Перевірки продажів сьогодні: <b>2</b> / 4000 (✅ продано: <b>1</b>)"
+
+
+def test_pending_not_counted_when_verification_on():
+    """Лот з ⏳ (ще не перевірений eBay) не впливає на ціни, доки eBay не підтвердить продаж."""
+    make_gone(1, "p", 606)                           # зник, чекає перевірки
+    assert db.get_gone_prices(1, "used") == [606]    # без входу в eBay — рахуємо за зникненням
+    db.set_meta("ebay_user_refresh_token", "R")      # перевірка увімкнена
+    assert db.get_gone_prices(1, "used") == []
+    assert db.get_sold_listings(1) == [] and db.watch_obs_summary(1)["sold"] == 0
+    assert db.watch_obs_summary(1)["pending"] == 1
+    db.apply_sold_check(1, "p", "active")            # eBay: ще продається
+    assert db.get_sold_listings(1) == [] and db.watch_obs_summary(1)["pending"] == 0

@@ -139,6 +139,15 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     PRIMARY KEY (watch_id, item_id)
 );
 
+-- Підсумок останнього ринкового сканування кожного товару (для головного меню)
+CREATE TABLE IF NOT EXISTS scan_stats (
+    watch_id INTEGER PRIMARY KEY,
+    scanned_at INTEGER NOT NULL,
+    fetched INTEGER NOT NULL,      -- скільки оголошень віддав eBay
+    kept INTEGER NOT NULL,         -- скільки пройшли фільтри товару
+    new_count INTEGER NOT NULL     -- скільки з них бот побачив уперше (додав у базу)
+);
+
 -- Типова ціна кожної групи по днях — для попереджень про падіння цін
 CREATE TABLE IF NOT EXISTS price_history (
     watch_id INTEGER NOT NULL,
@@ -461,6 +470,7 @@ def remove_watch(watch_id, chat_id):
         conn.execute("DELETE FROM seen_items WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM price_history WHERE watch_id = ?", (watch_id,))
+        conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
 def reset_watch_market(watch_id):
@@ -470,6 +480,7 @@ def reset_watch_market(watch_id):
         conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM price_history WHERE watch_id = ?", (watch_id,))
+        conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
 def update_threshold(watch_id, chat_id, new_pct):
@@ -775,6 +786,9 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
         window_start = min(created) if created else None
 
     with get_conn() as conn:
+        known = {r["item_id"] for r in conn.execute(
+            "SELECT item_id FROM listing_obs WHERE watch_id = ?", (watch_id,)).fetchall()}
+        new_count = sum(1 for it in items if it.get("item_id") and it["item_id"] not in known)
         for it in items:
             if not it.get("item_id"):
                 continue
@@ -794,7 +808,7 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
             )
 
         if window_start is None:
-            return
+            return new_count
         rows = conn.execute(
             """SELECT item_id, miss_count, end_at, first_seen, created_at FROM listing_obs
                WHERE watch_id = ? AND status = 'active' AND created_at IS NOT NULL AND created_at >= ?""",
@@ -819,6 +833,7 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                    WHERE watch_id = ? AND item_id = ?""",
                 (misses, status, status, now, status, watch_id, r["item_id"]),
             )
+    return new_count
 
 
 # Результат перевірки Trading API → (новий статус лота, позначка перевірки).
@@ -876,10 +891,17 @@ def sold_check_stats(days=7):
     return {r["sold_check"]: r["c"] for r in rows}
 
 
+def _sold_filter():
+    """Коли перевірка продажів через eBay увімкнена (є вхід в акаунт), лоти з ⏳
+    ще не є продажами — у статистику йдуть лише після відповіді eBay."""
+    return " AND COALESCE(sold_check, '') != 'pending'" if get_meta("ebay_user_refresh_token") else ""
+
+
 def get_gone_prices(watch_id, cond_group, spec_group=None):
     """Ціни лотів, які зникли з видачі за останні SOLD_LOOKBACK_DAYS днів."""
     since = int(time.time()) - SOLD_LOOKBACK_DAYS * 86400
-    q = "SELECT price FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND cond_group = ?"
+    q = ("SELECT price FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND cond_group = ?"
+         + _sold_filter())
     params = [watch_id, since, cond_group]
     if spec_group is not None:
         q += " AND spec_group = ?"
@@ -889,14 +911,15 @@ def get_gone_prices(watch_id, cond_group, spec_group=None):
 
 
 def get_sold_listings(watch_id, days=SOLD_LOOKBACK_DAYS):
-    """Продані (зниклі до кінця строку або підтверджені eBay) лоти товару, найновіші першими."""
+    """Продані (зниклі до кінця строку або підтверджені eBay) лоти товару, найновіші першими.
+    Лоти, що ще чекають перевірки eBay (⏳), не враховуються, якщо перевірка увімкнена."""
     since = int(time.time()) - days * 86400
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT item_id, cond_group, spec_group, price, created_at, first_seen, gone_at,
                       title, url, sold_check
-               FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND price IS NOT NULL
-               ORDER BY gone_at DESC""",
+               FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND price IS NOT NULL"""
+            + _sold_filter() + " ORDER BY gone_at DESC",
             (watch_id, since),
         ).fetchall()]
 
@@ -909,12 +932,12 @@ def watch_obs_summary(watch_id, days=SOLD_LOOKBACK_DAYS):
         row = conn.execute(
             """SELECT
                  SUM(status = 'active') AS active,
-                 SUM(status = 'gone' AND gone_at >= :since) AS sold,
+                 SUM(status = 'gone' AND gone_at >= :since AND (:verify = 0 OR COALESCE(sold_check, '') != 'pending')) AS sold,
                  SUM(status = 'gone' AND gone_at >= :since AND sold_check = 'sold') AS confirmed,
                  SUM(sold_check = 'pending') AS pending,
                  SUM(sold_check IN ('unsold', 'active') AND gone_at >= :since) AS withdrawn
                FROM listing_obs WHERE watch_id = :wid""",
-            {"since": since, "wid": watch_id},
+            {"since": since, "wid": watch_id, "verify": 1 if get_meta("ebay_user_refresh_token") else 0},
         ).fetchone()
     return {k: int(row[k] or 0) for k in ("active", "sold", "confirmed", "pending", "withdrawn")}
 
@@ -980,6 +1003,31 @@ def get_current_listings(watch_id):
                WHERE watch_id = ? AND status = 'active' AND last_seen >= ? AND price IS NOT NULL""",
             (watch_id, since),
         ).fetchall()]
+
+
+def record_scan_stats(watch_id, fetched, kept, new_count):
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO scan_stats (watch_id, scanned_at, fetched, kept, new_count) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(watch_id) DO UPDATE SET scanned_at = excluded.scanned_at,
+                 fetched = excluded.fetched, kept = excluded.kept, new_count = excluded.new_count""",
+            (watch_id, int(time.time()), fetched, kept, new_count),
+        )
+
+
+def get_scan_summary(chat_id):
+    """Підсумок останніх ринкових сканувань усіх активних товарів чату."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS watches, SUM(s.fetched) AS fetched, SUM(s.kept) AS kept,
+                      SUM(s.new_count) AS new_count, MAX(s.scanned_at) AS last
+               FROM scan_stats s JOIN watches w ON w.id = s.watch_id
+               WHERE w.chat_id = ? AND w.active = 1""",
+            (chat_id,),
+        ).fetchone()
+    if not row or not row["watches"]:
+        return None
+    return {k: int(row[k] or 0) for k in ("watches", "fetched", "kept", "new_count", "last")}
 
 
 def record_price_history(watch_id, stats):
@@ -1297,8 +1345,8 @@ def discovery_gone_stats(candidate, days=7):
     since = int(time.time()) - days * 86400
     with get_conn() as conn:
         gone = conn.execute(
-            "SELECT COUNT(*) AS c FROM discovery_obs WHERE candidate = ? AND status = 'gone' AND gone_at >= ?",
-            (candidate, since)).fetchone()["c"]
+            "SELECT COUNT(*) AS c FROM discovery_obs WHERE candidate = ? AND status = 'gone' AND gone_at >= ?"
+            + _sold_filter(), (candidate, since)).fetchone()["c"]
         first = conn.execute("SELECT MIN(first_seen) AS f FROM discovery_obs WHERE candidate = ?",
                              (candidate,)).fetchone()["f"]
     observed_days = (time.time() - first) / 86400 if first else 0
@@ -1312,7 +1360,7 @@ def get_discovery_sold(candidate, days=14):
         return [dict(r) for r in conn.execute(
             """SELECT item_id, price, spec_group, cond_group, created_at, first_seen, gone_at, sold_check
                FROM discovery_obs WHERE candidate = ? AND status = 'gone' AND gone_at >= ?
-               AND price IS NOT NULL ORDER BY gone_at DESC""",
+               AND price IS NOT NULL""" + _sold_filter() + " ORDER BY gone_at DESC",
             (candidate, since),
         ).fetchall()]
 

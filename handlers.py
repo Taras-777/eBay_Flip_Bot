@@ -905,6 +905,10 @@ async def _show_sales(update, context, watch, page=0, note="", extra_rows=()):
     sold = get_sold_listings(watch["id"])
     hint = is_owner(update.effective_user.id) and not is_connected()
     text = _sales_text(watch, sold, show_account_hint=hint, page=page)
+    pending = watch_obs_summary(watch["id"])["pending"] if is_connected() else 0
+    if pending:
+        text += (f"\n\n⏳ Ще перевіряються через eBay: <b>{pending}</b> — у статистику потраплять, "
+                 "лише коли eBay підтвердить продаж.")
     if note:
         text = f"{note}\n\n{text}"
     await show_panel(update, context, text, reply_markup=_sales_keyboard(watch["id"], sold, page, extra_rows),
