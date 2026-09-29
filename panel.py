@@ -13,7 +13,7 @@ from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import count_unseen_deals, get_min_profit, get_last_prices_update, get_scan_summary, list_users, sold_confirmed_today
+from db import count_unseen_deals, get_last_prices_update, get_scan_summary, list_users, sold_confirmed_today
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, trading_calls_today
 from version import get_version
@@ -120,7 +120,6 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         [btn("addwatch")],
         [btn("list")],
         [btn("discover")],
-        [InlineKeyboardButton(f"⚙️ Мін. прибуток: {get_min_profit(user_id):.0f}€", callback_data="mprof:show")],
     ]
     if is_owner(user_id):
         owner_row = []

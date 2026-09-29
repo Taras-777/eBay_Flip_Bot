@@ -261,10 +261,10 @@ def test_inbox_pagination(monkeypatch):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
-    assert "Старіші ▶️" in shown[-1][1] and "5. " in shown[-1][0]
+    assert "Далі ▶️" in shown[-1][1] and "5. " in shown[-1][0]
     upd, ctx = press("deals:1")
     asyncio.run(handlers.deals_callback(upd, ctx))
-    assert "◀️ Новіші" in shown[-1][1] and "7. " in shown[-1][0]
+    assert "◀️ Назад" in shown[-1][1] and "7. " in shown[-1][0]
 
 
 def test_menu_shows_last_scan_summary(fake_ebay):
@@ -316,3 +316,17 @@ def test_best_offer_does_not_make_loss_a_deal(fake_ebay):
                                   buyingOptions=["FIXED_PRICE", "BEST_OFFER"])] + consoles()
     asyncio.run(scheduler.check_all_watches(app))
     assert db.get_inbox_deals(1)[1] == 0
+
+
+def test_inbox_sorted_by_profit_and_has_min_profit_button(monkeypatch):
+    wid = db.add_watch(1, "iPhone", "iPhone", "", "", 15)
+    for price in (420, 300, 380):                      # прибуток 66, 186, 106
+        db.add_deal(wid, f"v1|{price}|0", f"iPhone {price}", price, "EUR", 580, 20, "u", False)
+    assert [d["total_price"] for d in db.get_inbox_deals(1)[0]] == [300, 380, 420]
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("deals:0")
+    asyncio.run(handlers.deals_callback(upd, ctx))
+    assert "⚙️ Мін. прибуток: 50€" in shown[-1][1] and "найвигідніші вгорі" in shown[-1][0]
+    upd, ctx = press("mprof:show")
+    asyncio.run(handlers.min_profit_callback(upd, ctx))
+    assert "◀️ До пропозицій" in shown[-1][1]

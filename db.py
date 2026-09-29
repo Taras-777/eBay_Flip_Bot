@@ -1196,7 +1196,7 @@ def _profit_sql():
 
 def get_inbox_deals(chat_id, limit=5, offset=0):
     """Актуальні вигідні пропозиції користувача (ще без рішення, з прибутком не нижче
-    його мінімального), найновіші першими. Повертає (сторінка, загальна кількість)."""
+    його мінімального), від найбільшого прибутку. Повертає (сторінка, загальна кількість)."""
     since = int(time.time()) - DEALS_INBOX_DAYS * 86400
     where = ("w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ? AND "
              + _profit_sql() + " >= ?")
@@ -1204,7 +1204,7 @@ def get_inbox_deals(chat_id, limit=5, offset=0):
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT d.*, w.label AS watch_label FROM deals d JOIN watches w ON w.id = d.watch_id WHERE "
-            + where + " ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?",
+            + where + " ORDER BY " + _profit_sql() + " DESC, d.created_at DESC LIMIT ? OFFSET ?",
             params + (limit, offset),
         ).fetchall()
         total = conn.execute(

@@ -1709,7 +1709,7 @@ async def min_profit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}€", callback_data=f"mprof:{v}")
                for v in MIN_PROFIT_CHOICES]
     rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
-    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    rows.append([InlineKeyboardButton("◀️ До пропозицій", callback_data="deals:0")])
     await show_panel(
         update, context,
         f"{note}⚙️ <b>Мінімальний прибуток</b>: зараз <b>{current:.0f}€</b>\n\n"
@@ -1758,7 +1758,8 @@ async def _render_deals(update, context, page=0, note=""):
     if not deals and page > 0:
         page = max(0, (total - 1) // DEALS_PER_PAGE)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
-    lines = [f"🔥 <b>Вигідні пропозиції</b> ({total})"]
+    lines = [f"🔥 <b>Вигідні пропозиції</b> ({total}) · прибуток від {get_min_profit(chat_id):.0f}€, "
+             "найвигідніші вгорі"]
     if note:
         lines.append(note)
     rows = []
@@ -1777,11 +1778,12 @@ async def _render_deals(update, context, page=0, note=""):
         ])
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Новіші", callback_data=f"deals:{page - 1}"))
+        nav.append(InlineKeyboardButton("◀️ Назад", callback_data=f"deals:{page - 1}"))
     if (page + 1) * DEALS_PER_PAGE < total:
-        nav.append(InlineKeyboardButton("Старіші ▶️", callback_data=f"deals:{page + 1}"))
+        nav.append(InlineKeyboardButton("Далі ▶️", callback_data=f"deals:{page + 1}"))
     if nav:
         rows.append(nav)
+    rows.append([InlineKeyboardButton(f"⚙️ Мін. прибуток: {get_min_profit(chat_id):.0f}€", callback_data="mprof:show")])
     if total:
         rows.append([InlineKeyboardButton("🧹 Очистити список", callback_data="dclear")])
     rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
