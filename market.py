@@ -48,6 +48,7 @@ from db import (
     save_cached_spec,
     update_listing_observations,
     record_price_history,
+    record_scan_stats,
     update_sale_price,
     upsert_market_stats,
     watch_category_ids,
@@ -88,14 +89,14 @@ def percentile(values, pct):
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
-def max_buy_price(sale_price):
+def max_buy_price(sale_price, min_profit=None):
     """
-    Найвища ціна купівлі (з доставкою), за якої перепродаж ще дає
-    щонайменше MIN_PROFIT_EUR чистого прибутку:
-    ціна продажу − комісія eBay − доставка покупцю − MIN_PROFIT_EUR.
+    Найвища ціна купівлі (з доставкою), за якої перепродаж ще дає щонайменше
+    min_profit (за замовчуванням MIN_PROFIT_EUR) чистого прибутку:
+    ціна продажу − комісія eBay − доставка покупцю − мінімальний прибуток.
     """
     net_sale = sale_price * (1 - EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
-    return net_sale - MIN_PROFIT_EUR
+    return net_sale - (MIN_PROFIT_EUR if min_profit is None else min_profit)
 
 
 def estimate_resale_profit(sale_price, purchase_price):
@@ -377,7 +378,8 @@ async def _recalculate_watch_medians(w: dict, replace_existing=False):
     if not items:
         return [], {}, []
 
-    await asyncio.to_thread(update_listing_observations, w["id"], items, window_start, present_ids)
+    new_count = await asyncio.to_thread(update_listing_observations, w["id"], items, window_start, present_ids)
+    record_scan_stats(w["id"], len(present_ids or ()), len(items), new_count or 0)
     existing_keys = {(s["cond_group"], s["spec_group"]) for s in get_market_stats(w["id"])}
     stats = _compute_group_stats(w["id"], items)
 

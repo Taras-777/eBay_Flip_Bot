@@ -1176,20 +1176,39 @@ def get_deal_owner_chat_id(deal_id):
 DEALS_INBOX_DAYS = 7   # скільки днів пропозиція висить у «🔥 Вигідні пропозиції»
 
 
+def get_min_profit(chat_id):
+    """Мінімальний прибуток користувача (€), з якого пропозиція вважається вигідною."""
+    try:
+        return float(get_meta(f"min_profit:{chat_id}") or settings.MIN_PROFIT_EUR)
+    except ValueError:
+        return float(settings.MIN_PROFIT_EUR)
+
+
+def set_min_profit(chat_id, value):
+    set_meta(f"min_profit:{chat_id}", value)
+
+
+def _profit_sql():
+    """Орієнтовний прибуток пропозиції (як estimate_resale_profit) — для фільтра в SQL."""
+    return (f"(d.median_price * (1 - {float(settings.EBAY_SELLING_FEES_PCT)} / 100.0) "
+            f"- {float(settings.RESALE_SHIPPING_EUR)} - d.total_price)")
+
+
 def get_inbox_deals(chat_id, limit=5, offset=0):
-    """Актуальні вигідні пропозиції користувача (ще без рішення), найновіші першими."""
+    """Актуальні вигідні пропозиції користувача (ще без рішення, з прибутком не нижче
+    його мінімального), найновіші першими. Повертає (сторінка, загальна кількість)."""
     since = int(time.time()) - DEALS_INBOX_DAYS * 86400
+    where = ("w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ? AND "
+             + _profit_sql() + " >= ?")
+    params = (chat_id, since, get_min_profit(chat_id))
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT d.*, w.label AS watch_label FROM deals d JOIN watches w ON w.id = d.watch_id
-               WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ?
-               ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?""",
-            (chat_id, since, limit, offset),
+            "SELECT d.*, w.label AS watch_label FROM deals d JOIN watches w ON w.id = d.watch_id WHERE "
+            + where + " ORDER BY d.created_at DESC, d.id DESC LIMIT ? OFFSET ?",
+            params + (limit, offset),
         ).fetchall()
         total = conn.execute(
-            """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
-               WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ?""",
-            (chat_id, since),
+            "SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id WHERE " + where, params,
         ).fetchone()["c"]
     return [dict(r) for r in rows], total
 
@@ -1200,8 +1219,8 @@ def count_unseen_deals(chat_id):
         return conn.execute(
             """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
                WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.seen_at IS NULL
-               AND d.created_at >= ?""",
-            (chat_id, since),
+               AND d.created_at >= ? AND """ + _profit_sql() + " >= ?",
+            (chat_id, since, get_min_profit(chat_id)),
         ).fetchone()["c"]
 
 

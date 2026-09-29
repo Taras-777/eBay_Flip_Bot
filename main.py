@@ -52,6 +52,7 @@ from handlers import (
     sales_callback,
     sales_reject_callback,
     deals_callback,
+    min_profit_callback,
     deal_inbox_action_callback,
     deals_clear_callback,
     refresh_all_callback,
@@ -243,6 +244,7 @@ def main():
     app.add_handler(CallbackQueryHandler(sales_callback, pattern="^sales:"))
     app.add_handler(CallbackQueryHandler(sales_reject_callback, pattern="^srej:"))
     app.add_handler(CallbackQueryHandler(deals_callback, pattern="^deals:"))
+    app.add_handler(CallbackQueryHandler(min_profit_callback, pattern="^mprof:"))
     app.add_handler(CallbackQueryHandler(deal_inbox_action_callback, pattern="^dact:"))
     app.add_handler(CallbackQueryHandler(deals_clear_callback, pattern="^dclear$"))
     app.add_handler(CallbackQueryHandler(edit_menu_callback, pattern="^editw:"))

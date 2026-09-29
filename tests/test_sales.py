@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 import db
 import sales
+import market
 import scheduler
 from conftest import listing
 from test_scheduler import consoles, make_app
@@ -192,7 +193,7 @@ def test_main_menu_shows_when_prices_were_updated(monkeypatch):
 
 def _inbox_setup(n=3):
     wid = db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 15)
-    ids = [db.add_deal(wid, f"v1|{i}|0", f"iPhone 16 Pro 256GB #{i}", 500 + i, "EUR", 620, 20,
+    ids = [db.add_deal(wid, f"v1|{i}|0", f"iPhone 16 Pro 256GB #{i}", 400 + i, "EUR", 620, 20,
                        f"https://www.ebay.de/itm/{i}", False, cond_group="used", spec_group="256GB")
            for i in range(n)]
     return wid, ids
@@ -264,3 +265,54 @@ def test_inbox_pagination(monkeypatch):
     upd, ctx = press("deals:1")
     asyncio.run(handlers.deals_callback(upd, ctx))
     assert "◀️ Новіші" in shown[-1][1] and "7. " in shown[-1][0]
+
+
+def test_menu_shows_last_scan_summary(fake_ebay):
+    import panel
+    fake_ebay.listings = consoles()
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    app = make_app()
+    asyncio.run(scheduler.check_all_watches(app))          # перше сканування — усе нове
+    summary = db.get_scan_summary(1)
+    assert summary["fetched"] == 20 and summary["kept"] == 20 and summary["new_count"] == 20
+    text = panel.main_menu_text(1)
+    assert "🔎 Останнє сканування: переглянуто <b>20</b> оголошень · підійшло <b>20</b> · нових у базі <b>20</b>" in text
+
+    # Наступне сканування: 2 нові оголошення, решта вже в базі
+    fake_ebay.listings = [listing("n1", "Sony PlayStation 5 Slim 1TB Konsole", 470),
+                          listing("n2", "Sony PlayStation 5 Slim 1TB Konsole", 480)] + consoles()
+    asyncio.run(market._recalculate_watch_medians(db.get_watch(wid, 1), replace_existing=True))
+    assert db.get_scan_summary(1)["new_count"] == 2 and db.get_scan_summary(1)["fetched"] == 22
+
+
+# ---------- ⚙️ мінімальний прибуток ----------
+
+def test_min_profit_setting_filters_inbox(monkeypatch):
+    wid = db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15)
+    # продати ~580€ → чистими 580*0.85-7 = 486€
+    for price in (480, 426, 400, 300):                 # прибуток: 6, 60, 86, 186
+        db.add_deal(wid, f"v1|{price}|0", f"iPhone {price}", price, "EUR", 580, 20, "u", False)
+    assert db.get_inbox_deals(1)[1] == 3               # за замовчуванням ≥50€ — без «6€»
+    db.set_min_profit(1, 80)
+    assert db.get_inbox_deals(1)[1] == 2 and db.count_unseen_deals(1) == 2
+    db.set_min_profit(1, 15)
+    assert db.get_inbox_deals(1)[1] == 3               # 6€ і нижче однаково не показуємо
+
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("mprof:60")
+    asyncio.run(handlers.min_profit_callback(upd, ctx))
+    assert db.get_min_profit(1) == 60 and "✅ 60€" in shown[-1][1] and "Збережено" in shown[-1][0]
+
+
+def test_best_offer_does_not_make_loss_a_deal(fake_ebay):
+    """«Можна торгуватись» більше не робить пропозицію вигідною — рахується ціна оголошення."""
+    fake_ebay.listings = consoles()
+    db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    app = make_app()
+    asyncio.run(scheduler.check_all_watches(app))
+    sale = db.get_market_stats(1)[0]["sale_price"]
+    limit = market.max_buy_price(sale, 50)
+    fake_ebay.listings = [listing("bo", "Sony PlayStation 5 Slim 1TB Konsole", round(limit + 20),
+                                  buyingOptions=["FIXED_PRICE", "BEST_OFFER"])] + consoles()
+    asyncio.run(scheduler.check_all_watches(app))
+    assert db.get_inbox_deals(1)[1] == 0

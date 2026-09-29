@@ -29,6 +29,7 @@ from db import (
     cleanup_old_listing_obs,
     cleanup_old_seen_items,
     get_market_stats,
+    get_min_profit,
     get_seen_items,
     get_sold_listings,
     list_watches,
@@ -108,6 +109,7 @@ async def check_one_watch(app: Application, w: dict):
 
     new_deals = []
     sold = get_sold_listings(w["id"], SALES_WINDOW_DAYS)  # як продаються конфігурації
+    min_profit = get_min_profit(w["chat_id"])
     seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
     seen_updates = []  # записуються одним пакетом наприкінці
     for it in items:
@@ -127,7 +129,9 @@ async def check_one_watch(app: Application, w: dict):
         sale_price = stat["sale_price"] or stat["median_price"]
         # Вигідно, якщо ціна купівлі (для Best Offer — з урахуванням торгу)
         # не вища за максимальну, що ще дає мінімальний прибуток при перепродажі
-        if it["effective_price"] > max_buy_price(sale_price):
+        # Вигідно — лише якщо прибуток ≥ мінімуму користувача за ЦІНОЮ ОГОЛОШЕННЯ (торг — бонус,
+        # а не підстава: «можна торгуватись» не робить збиткову пропозицію вигідною)
+        if it["total_price"] > max_buy_price(sale_price, min_profit):
             seen_updates.append((it["item_id"], it["effective_price"], None))
             continue
         # Дешево, але така конфігурація не продається (при живому ринку) — не сповіщаємо

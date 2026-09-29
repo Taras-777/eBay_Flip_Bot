@@ -20,6 +20,7 @@ from settings import (
     MIN_PRICE_SUGGESTION_PCT,
     MIN_PROFIT_EUR,
     MIN_SAMPLE_SIZE,
+    MIN_PROFIT_CHOICES,
     MIN_SOLD_SAMPLE,
     SALES_WINDOW_DAYS,
     SEARCH_RESERVE,
@@ -47,7 +48,9 @@ from db import (
     get_learned_words,
     get_deal_stats,
     get_market_stats,
+    get_min_profit,
     get_price_history,
+    set_min_profit,
     get_required_aspects,
     get_sold_listings,
     watch_obs_summary,
@@ -630,6 +633,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def _watch_details_text(watch):
     stats = get_market_stats(watch["id"])
+    min_profit = get_min_profit(watch["chat_id"])
     category_txt = html.escape(
         ", ".join(category_label(c["name"], with_original=True) for c in get_watch_categories(watch))
     ) or "усі (не обрано)"
@@ -643,7 +647,7 @@ def _watch_details_text(watch):
         min_price_txt = "без обмеження"
     lines = [
         f"📌 <b>{html.escape(watch['label'])}</b>",
-        f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{MIN_PROFIT_EUR}€</b> (з урахуванням комісії eBay і доставки)",
+        f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{min_profit:.0f}€</b> (з урахуванням комісії eBay і доставки)",
         f"🗂️ Категорії: {category_txt}",
         f"💶 Мінімальна ціна: {min_price_txt}",
         (f"🧾 Обов'язкові характеристики: {html.escape(', '.join(get_required_aspects(watch)))}"
@@ -675,7 +679,7 @@ def _watch_details_text(watch):
     history = get_price_history(watch["id"])
     for s in sorted(stats, key=lambda s: (s["cond_group"], s["spec_group"] != "*", s["spec_group"])):
         sale_price = s["sale_price"] or s["median_price"]
-        buy_limit = max_buy_price(sale_price)
+        buy_limit = max_buy_price(sale_price, min_profit)
         trend = ""
         weekly = weekly_change(history.get((s["cond_group"], s["spec_group"])))
         if weekly and abs(weekly[0]) >= 1:
@@ -696,7 +700,7 @@ def _watch_details_text(watch):
     lines.append(
         "\n<i>«Продати за» — оцінка за найдешевшою чвертю поточних оголошень. Коли бот побачить "
         f"щонайменше {MIN_SOLD_SAMPLE} проданих, рахуватиме за ними. "
-        f"«Купувати до» лишає ≥{MIN_PROFIT_EUR}€ після комісії eBay і доставки.</i>"
+        f"«Купувати до» лишає ≥{min_profit:.0f}€ після комісії eBay і доставки.</i>"
     )
     return "\n".join(lines)
 
@@ -1685,6 +1689,36 @@ async def edit_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await show_main_menu(update, context)
     return ConversationHandler.END
+
+
+# ============================================================
+# «⚙️ МІНІМАЛЬНИЙ ПРИБУТОК» — з якого прибутку пропозиція вважається вигідною
+# ============================================================
+
+@require_access
+async def min_profit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """mprof:show — екран вибору; mprof:<сума> — зберегти."""
+    await _ack_callback(update)
+    chat_id = update.effective_chat.id
+    choice = update.callback_query.data.split(":")[1]
+    note = ""
+    if choice != "show":
+        set_min_profit(chat_id, float(choice))
+        note = f"✅ Збережено: пропозиції з прибутком від <b>{float(choice):.0f}€</b>\n\n"
+    current = get_min_profit(chat_id)
+    buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}€", callback_data=f"mprof:{v}")
+               for v in MIN_PROFIT_CHOICES]
+    rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    await show_panel(
+        update, context,
+        f"{note}⚙️ <b>Мінімальний прибуток</b>: зараз <b>{current:.0f}€</b>\n\n"
+        "Бот пропонує лише оголошення, на яких після перепродажу (мінус комісія eBay і доставка) "
+        "лишається щонайменше стільки. Від цього залежить і «купувати до» в картках товарів.\n\n"
+        "Прибуток рахується за ціною оголошення — можливість торгуватися (🎯) лише бонус. "
+        "Зміна одразу прибирає зі «🔥 Вигідні пропозиції» все, що нижче нового порогу.",
+        reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML,
+    )
 
 
 # ============================================================

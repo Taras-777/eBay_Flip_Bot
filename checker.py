@@ -8,7 +8,6 @@ import time
 from datetime import datetime
 
 from settings import (
-    BEST_OFFER_ASSUMED_DISCOUNT_PCT,
     MIN_SELLER_FEEDBACK_PCT,
     MIN_SELLER_FEEDBACK_SCORE,
 )
@@ -23,7 +22,7 @@ from textparse import (
     extract_spec_key,
     spec_key_from_aspects,
 )
-from db import get_market_stats, get_rejected_ids, get_required_aspects, watch_category_ids
+from db import get_market_stats, get_min_profit, get_rejected_ids, get_required_aspects, watch_category_ids
 from ebay_api import fetch_item_by_legacy_id, resolve_item_id
 from market import _stat_for_item, estimate_resale_profit, max_buy_price, watch_requires_spec
 
@@ -183,8 +182,8 @@ def check_listing(watch, text):
     deal = False
     if stat:
         sale = stat["sale_price"] or stat["median_price"]
-        limit = max_buy_price(sale)
-        effective = total * (1 - BEST_OFFER_ASSUMED_DISCOUNT_PCT / 100) if "BEST_OFFER" in buying else total
+        limit = max_buy_price(sale, get_min_profit(watch["chat_id"]))
+        effective = total  # вигідність — за ціною оголошення, торг лише бонус
         _, profit = estimate_resale_profit(sale, total)
         group = _group_label(stat["cond_group"], stat["spec_group"])
         if effective <= limit:
