@@ -53,12 +53,14 @@ from db import (
     set_min_profit,
     get_required_aspects,
     get_sold_listings,
+    active_listing_counts,
     watch_obs_summary,
     get_user_row,
     get_watch,
     get_watch_categories,
     list_watches,
     remove_watch,
+    mark_market_stale,
     reset_watch_market,
     set_deal_status,
     update_watch_categories,
@@ -100,6 +102,7 @@ from panel import (
 from access import _notify_owner_new_request, cmd_pending, cmd_users, require_access
 from notifications import _notify_median_error, _notify_median_problem
 from ebay_user import is_connected
+from trading_api import verify_watch_now
 from shared_market import attach_shared_history, find_shared_watch, shared_categories
 from sales import sales_note, speed_text, summarize, weekly_change
 
@@ -824,11 +827,13 @@ def _ago(ts):
 SALES_PER_PAGE = 8
 
 
-def _sales_text(watch, sold, show_account_hint=False, page=0):
+def _sales_text(watch, sold, show_account_hint=False, page=0, active=None):
     """Статистика продажів товару за конфігураціями (з таблиці спостережень, без запитів до eBay)."""
     title = f"📈 <b>{html.escape(watch['label'])}: продажі за {SOLD_LOOKBACK_DAYS} днів</b>"
+    active = active or {}
+    tracking = f"📋 Зараз у продажу (бот відстежує): <b>{sum(active.values())}</b> оголошень"
     if not sold:
-        text = (f"{title}\n\nПродажів ще не помічено. Бот вважає оголошення проданим, коли воно зникає "
+        text = (f"{title}\n\n{tracking}\n\nПродажів ще не помічено. Бот вважає оголошення проданим, коли воно зникає "
                 "з eBay задовго до кінця строку (або eBay підтверджує продаж). Статистика "
                 "накопичується з кожним ринковим скануванням — зазирни через день-два.")
         return text + ("\n\n💡 Підключи «🔐 Акаунт eBay» в меню — тоді бот перевірятиме кожен продаж через eBay."
@@ -839,6 +844,7 @@ def _sales_text(watch, sold, show_account_hint=False, page=0):
     week = sum(1 for r in sold if r["gone_at"] >= week_ago)
     lines = [
         title, "",
+        tracking,
         f"Продано: <b>{len(sold)}</b>" + (f" (✅ підтверджено eBay: {confirmed})" if confirmed else ""),
         f"За останні 7 днів: <b>{week}</b> (~{week / 7:.1f} на день)",
     ]
@@ -863,6 +869,7 @@ def _sales_text(watch, sold, show_account_hint=False, page=0):
             + (f"\n  ⏱ продається {speed_text(summarize(rows)['median_days'])}"
                if summarize(rows)["median_days"] is not None else "")
             + f"\n  🕒 останній {_ago(rows[0]['gone_at'])}"
+            + (f"\n  📋 зараз у продажу: {active[(cond, spec)]}" if active.get((cond, spec)) else "")
         )
 
     pages = max(1, -(-len(sold) // SALES_PER_PAGE))
@@ -887,13 +894,16 @@ def _sales_text(watch, sold, show_account_hint=False, page=0):
     return "\n".join(lines)
 
 
-def _sales_keyboard(watch_id, sold, page, extra_rows=()):
+def _sales_keyboard(watch_id, sold, page, extra_rows=(), pending=0):
     pages = max(1, -(-len(sold) // SALES_PER_PAGE))
     page = min(page, pages - 1)
     first = page * SALES_PER_PAGE
     buttons = [InlineKeyboardButton(f"❌ {n}", callback_data=f"srej:{watch_id}:{page}:{r['item_id']}")
                for n, r in enumerate(sold[first:first + SALES_PER_PAGE], first + 1)]
-    rows = list(extra_rows) + [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    rows = list(extra_rows)
+    if pending:
+        rows.append([InlineKeyboardButton(f"⏳ Перевірити зараз ({pending})", callback_data=f"schk:{watch_id}:{page}")])
+    rows += [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️ Новіші", callback_data=f"sales:{watch_id}:{page - 1}"))
@@ -908,14 +918,16 @@ def _sales_keyboard(watch_id, sold, page, extra_rows=()):
 async def _show_sales(update, context, watch, page=0, note="", extra_rows=()):
     sold = get_sold_listings(watch["id"])
     hint = is_owner(update.effective_user.id) and not is_connected()
-    text = _sales_text(watch, sold, show_account_hint=hint, page=page)
+    text = _sales_text(watch, sold, show_account_hint=hint, page=page,
+                       active=active_listing_counts(watch["id"]))
     pending = watch_obs_summary(watch["id"])["pending"] if is_connected() else 0
     if pending:
         text += (f"\n\n⏳ Ще перевіряються через eBay: <b>{pending}</b> — у статистику потраплять, "
                  "лише коли eBay підтвердить продаж.")
     if note:
         text = f"{note}\n\n{text}"
-    await show_panel(update, context, text, reply_markup=_sales_keyboard(watch["id"], sold, page, extra_rows),
+    await show_panel(update, context, text,
+                     reply_markup=_sales_keyboard(watch["id"], sold, page, extra_rows, pending=pending),
                      parse_mode=ParseMode.HTML)
 
 
@@ -930,6 +942,27 @@ async def sales_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await _ack_callback(update)
     await _show_sales(update, context, watch, page=int(parts[2]) if len(parts) > 2 else 0)
+
+
+@require_access
+async def sales_check_now_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """schk:<watch_id>:<сторінка> — перевірити через eBay зниклі оголошення товару прямо зараз."""
+    query_cb = update.callback_query
+    _, watch_id, page = query_cb.data.split(":")
+    watch = get_watch(int(watch_id), update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Цей товар уже видалено.", show_alert=True)
+        return
+    await show_panel(update, context, f"⏳ Перевіряю через eBay зниклі оголошення «{html.escape(watch['label'])}»…")
+    counts = await asyncio.to_thread(verify_watch_now, watch["id"])
+    await asyncio.to_thread(refresh_sale_prices, watch["id"])
+    if counts:
+        labels = {"sold": "✅ продано", "unsold": "🚫 знято", "active": "↩️ ще продається",
+                  "unknown": "❔ eBay не відповів", "not_found": "❔ не знайдено"}
+        note = "Перевірено: " + ", ".join(f"{labels.get(k, k)} — {v}" for k, v in sorted(counts.items()))
+    else:
+        note = "Нічого не перевірено — вичерпано ліміт перевірок на сьогодні або немає входу в акаунт eBay."
+    await _show_sales(update, context, watch, int(page), note=html.escape(note))
 
 
 @require_access
@@ -1193,12 +1226,15 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if options is None or selected is None:
         await query_cb.answer("Список категорій застарів — відкрий його знову.", show_alert=True)
         return
+    old_ids = set(watch_category_ids(watch))
     if choice == "all":
+        new_ids = set()
         update_watch_categories(watch_id, chat_id, [])
     elif choice == "done":
         if not selected:
             await query_cb.answer("Познач хоча б одну категорію або обери «Усі категорії».", show_alert=True)
             return
+        new_ids = set(selected)
         update_watch_categories(
             watch_id, chat_id, [{"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected],
         )
@@ -1212,10 +1248,18 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     context.user_data.pop(f"cat_options_{watch_id}", None)
     context.user_data.pop(f"cat_selected_{watch_id}", None)
-    # Характеристики різних категорій різні — повертаємо автоматичний режим
-    update_watch_required_aspect(watch_id, chat_id, None, None)
-    # Інша категорія — інша вибірка, стара статистика вже не відповідає
-    reset_watch_market(watch_id)
+    # Категорії лише ДОДАНО (або «усі категорії» замість обмеження): старі оголошення й
+    # продажі лишаються правдивими — зберігаємо історію, ринок просто перерахується з ширшою вибіркою
+    only_added = (not new_ids) or (old_ids and old_ids <= new_ids)
+    if new_ids == old_ids:
+        pass
+    elif only_added:
+        mark_market_stale(watch_id)
+    else:
+        # Характеристики різних категорій різні — повертаємо автоматичний режим
+        update_watch_required_aspect(watch_id, chat_id, None, None)
+        # Категорію прибрано/замінено — в історії могли бути оголошення з неї; рахуємо ринок заново
+        reset_watch_market(watch_id)
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
 
 

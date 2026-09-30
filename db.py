@@ -473,6 +473,12 @@ def remove_watch(watch_id, chat_id):
         conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
+def mark_market_stale(watch_id):
+    """Статистика лишається, але найближчий цикл перерахує ринок заново (≤5 хв)."""
+    with get_conn() as conn:
+        conn.execute("UPDATE market_stats SET updated_at = 0 WHERE watch_id = ?", (watch_id,))
+
+
 def reset_watch_market(watch_id):
     """Після зміни фільтрів (категорія, мін. ціна, стан, виключені слова)
     стара статистика й спостереження стосуються вже іншої вибірки."""
@@ -857,15 +863,16 @@ def sold_confirmed_today():
         ).fetchone()["c"] for table in ("listing_obs", "discovery_obs"))
 
 
-def get_pending_sold_checks(limit):
+def get_pending_sold_checks(limit, watch_id=None):
     """Зниклі лоти, які ще треба перевірити через Trading API (найсвіжіші першими)."""
     since = int(time.time()) - SOLD_CHECK_MAX_AGE_DAYS * 86400
+    only = " AND watch_id = ?" if watch_id is not None else ""
+    params = (since,) + ((watch_id,) if watch_id is not None else ()) + (limit,)
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT watch_id, item_id, price, status FROM listing_obs
-               WHERE sold_check = 'pending' AND gone_at >= ?
-               ORDER BY gone_at DESC LIMIT ?""",
-            (since, limit),
+               WHERE sold_check = 'pending' AND gone_at >= ?""" + only + " ORDER BY gone_at DESC LIMIT ?",
+            params,
         ).fetchall()]
 
 
@@ -922,6 +929,17 @@ def get_sold_listings(watch_id, days=SOLD_LOOKBACK_DAYS):
             + _sold_filter() + " ORDER BY gone_at DESC",
             (watch_id, since),
         ).fetchall()]
+
+
+def active_listing_counts(watch_id):
+    """Скільки оголошень зараз у продажу (бот їх відстежує) — за станом і конфігурацією."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT cond_group, COALESCE(spec_group, 'unspecified') AS spec, COUNT(*) AS c
+               FROM listing_obs WHERE watch_id = ? AND status = 'active' GROUP BY cond_group, spec""",
+            (watch_id,),
+        ).fetchall()
+    return {(r["cond_group"], r["spec"]): r["c"] for r in rows}
 
 
 def watch_obs_summary(watch_id, days=SOLD_LOOKBACK_DAYS):
