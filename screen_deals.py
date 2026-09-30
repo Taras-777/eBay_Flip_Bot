@@ -15,6 +15,7 @@ from db import (
     get_inbox_deals,
     mark_deals_seen,
     clear_inbox_deals,
+    inbox_deal_ids,
     get_min_profit,
     set_min_profit,
     get_sold_listings,
@@ -26,6 +27,7 @@ from panel import _ack_callback, show_panel
 from access import require_access
 from sales import sales_note
 from deal_check import recheck_shown_deals
+from undo import record as undo_record, short
 
 
 # ============================================================
@@ -157,17 +159,25 @@ async def deal_inbox_action_callback(update: Update, context: ContextTypes.DEFAU
         await query_cb.answer("Цієї пропозиції вже немає.", show_alert=True)
         return await _render_deals(update, context, int(page))
     note, words = "", []
+    saved: dict = {}
+    chat_id = update.effective_chat.id
     if action == "buy":
         set_deal_status(deal["id"], "bought")
+        undo_record(context, chat_id, "deal_status", f"✅ Куплено «{short(deal['title'], 28)}»",
+                    deal_ids=[deal["id"]], status="new", screen="deals", page=int(page))
         await query_cb.answer("✅ Позначено як куплене")
         note = f"✅ «{html.escape(deal['title'][:50])}» — куплено"
     elif action == "hide":
-        await asyncio.to_thread(hide_item, watch, deal["item_id"], deal["title"])
+        await asyncio.to_thread(hide_item, watch, deal["item_id"], deal["title"], saved)
         set_deal_status(deal["id"], "skipped")
+        undo_record(context, chat_id, "reject", f"🙈 «{short(deal['title'], 28)}»", watch_id=watch["id"],
+                    item_id=deal["item_id"], deal_id=deal["id"], screen="deals", page=int(page), **saved)
         await query_cb.answer("🙈 Сховано")
     else:
-        words = await asyncio.to_thread(reject_and_learn, watch, deal["item_id"], deal["title"])
+        words = await asyncio.to_thread(reject_and_learn, watch, deal["item_id"], deal["title"], saved)
         set_deal_status(deal["id"], "skipped")
+        undo_record(context, chat_id, "reject", f"❌ «{short(deal['title'], 28)}»", watch_id=watch["id"],
+                    item_id=deal["item_id"], deal_id=deal["id"], screen="deals", page=int(page), **saved)
         await query_cb.answer("❌ Прибрано — більше не враховую це оголошення")
         if words:
             note = html.escape(learned_words_note(words))
@@ -177,7 +187,11 @@ async def deal_inbox_action_callback(update: Update, context: ContextTypes.DEFAU
 @require_access
 async def deals_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _ack_callback(update)
+    ids = inbox_deal_ids(update.effective_chat.id)
     clear_inbox_deals(update.effective_chat.id)
+    if ids:
+        undo_record(context, update.effective_chat.id, "deal_status", f"🧹 очищення списку ({len(ids)})",
+                    deal_ids=ids, status="new", screen="deals", page=0)
     await _render_deals(update, context, 0, note="🧹 Список очищено")
 
 

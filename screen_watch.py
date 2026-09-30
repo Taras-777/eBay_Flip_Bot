@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import (
+    UNDO_KEEP_HOURS,
     MIN_PRICE_SUGGESTION_PCT,
     MIN_SAMPLE_SIZE,
     MIN_SOLD_SAMPLE,
@@ -26,6 +27,7 @@ from textparse import (
     plural,
 )
 from learning import unlearn_word
+from undo import record as undo_record, short
 from db import (
     encode_required_aspects,
     get_current_listings,
@@ -223,7 +225,7 @@ def _learned_excluded(watch_id):
     return sorted(w for w, st in get_learned_words(watch_id).items() if st == "excluded")
 
 
-async def _show_watch_details(update, context, watch):
+async def _show_watch_details(update, context, watch, note=""):
     watch_id = watch["id"]
     learned = _learned_excluded(watch_id)
     rows = [
@@ -248,7 +250,7 @@ async def _show_watch_details(update, context, watch):
     await show_panel(
         update,
         context,
-        _watch_details_text(watch),
+        (f"{note}\n\n" if note else "") + _watch_details_text(watch),
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode=ParseMode.HTML,
     )
@@ -287,6 +289,8 @@ async def learned_words_callback(update: Update, context: ContextTypes.DEFAULT_T
         else:
             word = words[idx]
             await asyncio.to_thread(unlearn_word, watch["id"], update.effective_chat.id, word)
+            undo_record(context, update.effective_chat.id, "word_unlearn", f"слово «{word}»",
+                        watch_id=watch["id"], word=word, screen="learned")
             await query_cb.answer(f"🗑 «{word}» більше не відсіюється")
             note = f"✅ «{html.escape(word)}» прибрано — такі оголошення знову враховуються."
             watch = get_watch(watch["id"], update.effective_chat.id)
@@ -839,7 +843,7 @@ async def delwatch_ask_callback(update: Update, context: ContextTypes.DEFAULT_TY
     ]])
     await show_panel(
         update, context,
-        f"🗑️ Видалити товар «{html.escape(watch['label'])}»?",
+        f"🗑️ Видалити товар «{html.escape(watch['label'])}»?\n\n↩️ Протягом {UNDO_KEEP_HOURS} год видалення можна скасувати — історія цін і продажів зберігається.",
         reply_markup=keyboard, parse_mode=ParseMode.HTML,
     )
 
@@ -848,7 +852,11 @@ async def delwatch_ask_callback(update: Update, context: ContextTypes.DEFAULT_TY
 async def delwatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     wid = int(update.callback_query.data.split(":")[1])
     chat_id = update.effective_chat.id
+    watch = get_watch(wid, chat_id)
     remove_watch(wid, chat_id)
+    if watch:
+        undo_record(context, chat_id, "watch_delete", f"видалення «{short(watch['label'])}»",
+                    watch_id=wid, screen="watch")
     await _ack_callback(update)
     await cmd_list(update, context)
 

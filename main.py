@@ -90,6 +90,7 @@ from handlers import (
     watch_details_callback,
     learned_words_callback,
 )
+from screen_undo import undo_callback
 from scheduler import error_handler, post_init, post_shutdown
 
 
@@ -230,6 +231,7 @@ def main():
     app.add_handler(CallbackQueryHandler(listing_page_callback, pattern="^lpage:"))
     app.add_handler(CallbackQueryHandler(unlearn_word_callback, pattern="^unlw:"))
     # Кнопки головного меню (коли жоден діалог не активний)
+    app.add_handler(CallbackQueryHandler(undo_callback, pattern="^undo:"))
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))
     app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
     app.add_handler(CallbackQueryHandler(refresh_all_callback, pattern="^menu:refresh_prices$"))

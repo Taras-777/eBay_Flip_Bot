@@ -17,6 +17,7 @@ from db import (
     delete_listing_obs_by_ids,
     get_current_listings,
     get_learned_words,
+    get_obs_rows,
     get_rejected_titles,
     get_watch,
     reject_item,
@@ -75,11 +76,14 @@ def _set_exclude_words(watch, words_to_add=(), words_to_remove=()):
     update_watch_exclude(watch["id"], watch["chat_id"], " ".join(result))
 
 
-def reject_and_learn(watch, item_id, title):
+def reject_and_learn(watch, item_id, title, undo=None):
     """
     Позначає лот як «не той товар» і, якщо вже є закономірність, додає нові
     слова до виключених. Повертає список щойно вивчених слів.
+    undo — словник, куди записати все, що треба для «↩️ Скасувати».
     """
+    if undo is not None:
+        undo.setdefault("obs", []).extend(get_obs_rows(watch["id"], [item_id]))
     reject_item(watch["id"], item_id, title)
     try:
         words = learn_exclude_words(watch)
@@ -98,15 +102,20 @@ def reject_and_learn(watch, item_id, title):
     word_set = set(words)
     stale = [r["item_id"] for r in get_current_listings(watch["id"])
              if _search_tokens(r.get("title") or "") & word_set]
+    if undo is not None:
+        undo["words"] = list(words)
+        undo.setdefault("obs", []).extend(get_obs_rows(watch["id"], stale))
     delete_listing_obs_by_ids(watch["id"], stale)
     log.info("Watch #%s: вивчено виключені слова %s", watch["id"], words)
     return words
 
 
-def hide_item(watch, item_id, title):
+def hide_item(watch, item_id, title, undo=None):
     """«🙈 Сховати»: той самий товар, але цей лот не підходить (пошкодження,
     розбитий екран…). Більше не показується і не впливає на ціни, але слова
     з його назви бот НЕ вчить — назва зазвичай така сама, як у справних."""
+    if undo is not None:
+        undo.setdefault("obs", []).extend(get_obs_rows(watch["id"], [item_id]))
     reject_item(watch["id"], item_id, title, reason="hidden")
 
 

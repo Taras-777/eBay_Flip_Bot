@@ -12,6 +12,7 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
+from undo import attach_offer, menu_offer, undo_button
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
 from db import count_unseen_deals, get_last_prices_update, get_scan_summary, list_users, sold_confirmed_today
 from ebay_user import is_connected
@@ -120,6 +121,9 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         [btn("list")],
         [btn("discover")],
     ]
+    offer = menu_offer(user_id)
+    if offer:   # щойно щось видалив і пішов у меню — повернути ще можна
+        rows.insert(0, [undo_button(offer["id"], offer["label"])])
     if is_owner(user_id):
         owner_row = []
         if list_users(status="pending"):
@@ -150,6 +154,7 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
     видаляються, щоб не висіли в історії чату.
     """
     chat_id = update.effective_chat.id
+    reply_markup = attach_offer(context, reply_markup)   # «↩️ Скасувати» одразу після дії
     _remember_panel(context, text, reply_markup, parse_mode)
     previous_id = context.user_data.get("panel_message_id")
     if update.callback_query:

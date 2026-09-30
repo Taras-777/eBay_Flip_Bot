@@ -13,7 +13,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULES = ["settings", "netstatus", "version", "textparse", "db", "learning", "checker", "discovery", "ebay_api", "ebay_user", "trading_api", "market", "shared_market", "sales", "backup", "deal_check", "panel", "account", "access",
            "notifications", "screen_common", "screen_addwatch", "screen_watch", "screen_sales",
-           "screen_listings", "screen_deals", "screen_discover", "screen_check", "handlers", "scheduler", "main"]
+           "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_undo", "undo", "handlers", "scheduler", "main"]
 
 
 def undefined_names(path):

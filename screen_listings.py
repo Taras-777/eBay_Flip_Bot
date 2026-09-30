@@ -25,6 +25,7 @@ from market import _annotate_items, _apply_item_filters
 from panel import _ack_callback, show_panel
 from access import require_access
 from screen_common import _listed
+from undo import record as undo_record, short
 
 
 LISTINGS_MAX_PAGES = 3   # за одне натискання — до 3 запитів до eBay
@@ -293,15 +294,21 @@ async def reject_listing_callback(update: Update, context: ContextTypes.DEFAULT_
         await query_cb.answer("Список застарів — відкрий оголошення знову.", show_alert=True)
         return
 
+    saved: dict = {}
     if action == "hidel":
-        await asyncio.to_thread(hide_item, watch, item["item_id"], item["title"])
+        await asyncio.to_thread(hide_item, watch, item["item_id"], item["title"], saved)
         words = []
     else:
-        words = await asyncio.to_thread(reject_and_learn, watch, item["item_id"], item["title"])
+        words = await asyncio.to_thread(reject_and_learn, watch, item["item_id"], item["title"], saved)
     remaining = [it for it in state["items"] if it["item_id"] != item["item_id"]]
     if words:
         word_set = set(words)
         remaining = [it for it in remaining if not (_search_tokens(it["title"]) & word_set)]
+    kept = {it["item_id"] for it in remaining}
+    removed = [[i, it] for i, it in enumerate(state["items"]) if it["item_id"] not in kept]
+    undo_record(context, update.effective_chat.id, "reject",
+                f"{'🙈' if action == 'hidel' else '❌'} «{short(item['title'], 28)}»",
+                watch_id=watch_id, item_id=item["item_id"], screen="listings", listing_items=removed, **saved)
     state = {**state, "items": remaining}
     await query_cb.answer("🙈 Сховано — більше не показуватиму це оголошення" if action == "hidel"
                           else "❌ Прибрано — більше не враховую це оголошення")

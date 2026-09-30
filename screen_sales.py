@@ -14,7 +14,9 @@ from telegram.ext import ContextTypes
 from settings import SOLD_LOOKBACK_DAYS, LOCAL_TZ, is_owner
 from textparse import CONDITION_LABELS, _search_tokens, plural
 from learning import learned_words_note, reject_and_learn
+from undo import record as undo_record, short
 from db import (
+    get_obs_rows,
     delete_listing_obs_by_ids,
     get_current_listings,
     get_sold_listings,
@@ -186,13 +188,18 @@ async def sales_reject_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return await _show_sales(update, context, watch, int(page))
     # «Не той товар»: більше не враховується ні в продажах, ні в цінах, ні в пошуку;
     # якщо в таких назвах повторюються слова — бот їх вивчить (як ❌ Інший товар)
-    words = await asyncio.to_thread(reject_and_learn, watch, item_id, row["title"])
+    saved: dict = {}
+    words = await asyncio.to_thread(reject_and_learn, watch, item_id, row["title"], saved)
     if words:
         # Продажі з щойно вивченими словами теж чужі — прибираємо й їх
         word_set = set(words)
         stale = [r["item_id"] for r in get_sold_listings(watch["id"])
                  if _search_tokens(r.get("title") or "") & word_set]
+        saved.setdefault("obs", []).extend(get_obs_rows(watch["id"], stale))
         delete_listing_obs_by_ids(watch["id"], stale)
+    undo_record(context, update.effective_chat.id, "reject", f"❌ «{short(row['title'], 28)}»",
+                watch_id=watch["id"], item_id=item_id, screen="sales", page=int(page), refresh_sales=True,
+                **saved)
     await asyncio.to_thread(refresh_sale_prices, watch["id"])
     await query_cb.answer("❌ Прибрано — на ціни більше не впливає")
     note = f"❌ Прибрано: {html.escape((row['title'] or '')[:60])}"

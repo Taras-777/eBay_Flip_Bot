@@ -27,6 +27,7 @@ from db import (
     add_deal,
     bulk_upsert_seen_items,
     cleanup_old_listing_obs,
+    purge_deleted_watches,
     cleanup_old_seen_items,
     get_market_stats,
     get_min_profit,
@@ -274,6 +275,7 @@ async def scheduler_loop(app: Application):
                 try:
                     removed = await asyncio.to_thread(cleanup_old_seen_items)
                     removed_obs = await asyncio.to_thread(cleanup_old_listing_obs)
+                    await asyncio.to_thread(purge_deleted_watches)
                     if removed or removed_obs:
                         log.info("Очищено застарілих записів: seen_items %s, listing_obs %s",
                                  removed, removed_obs)

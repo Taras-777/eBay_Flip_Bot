@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS watches (
     min_price REAL DEFAULT 0,
     require_spec INTEGER,
     required_aspect TEXT,
-    categories_json TEXT
+    categories_json TEXT,
+    deleted_at INTEGER          -- видалено, але дані ще зберігаються для «↩️ Скасувати»
 );
 
 CREATE TABLE IF NOT EXISTS market_stats (
@@ -211,6 +212,17 @@ CREATE TABLE IF NOT EXISTS deals (
     checked_at INTEGER     -- коли востаннє перевіряли, чи воно ще продається
 );
 
+-- «↩️ Скасувати»: що саме змінила дія, щоб повернути як було
+CREATE TABLE IF NOT EXISTS undo_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    done INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     chat_id INTEGER NOT NULL,
@@ -237,6 +249,7 @@ CREATE INDEX IF NOT EXISTS idx_disc_item ON discovery_obs (item_id);
 CREATE INDEX IF NOT EXISTS idx_deals_watch ON deals (watch_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_seen_watch ON seen_items (watch_id, item_id);
 CREATE INDEX IF NOT EXISTS idx_watches_chat ON watches (chat_id, active);
+CREATE INDEX IF NOT EXISTS idx_undo_chat ON undo_actions (chat_id, id);
 """
 
 
@@ -350,6 +363,7 @@ def init_db():
             ("require_spec", "INTEGER"),
             ("required_aspect", "TEXT"),
             ("categories_json", "TEXT"),
+            ("deleted_at", "INTEGER"),
         ]:
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")
@@ -393,17 +407,26 @@ def delete_user(user_id):
     """Повністю прибирає користувача: запис доступу видаляється (він зможе надіслати
     новий запит), його товари перестають відстежуватись (не витрачають ліміт eBay)."""
     with get_conn() as conn:
-        row = conn.execute("SELECT chat_id FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
         if row:
             watch_ids = [r["id"] for r in conn.execute(
                 "SELECT id FROM watches WHERE chat_id = ? AND active = 1", (row["chat_id"],)).fetchall()]
-            conn.execute("UPDATE watches SET active = 0 WHERE chat_id = ?", (row["chat_id"],))
-            for wid in watch_ids:
-                conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (wid,))
-                conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (wid,))
-                conn.execute("DELETE FROM seen_items WHERE watch_id = ?", (wid,))
+            # Як і видалення товару: історія ще зберігається для «↩️ Скасувати»
+            conn.execute("UPDATE watches SET active = 0, deleted_at = ? WHERE chat_id = ? AND active = 1",
+                         (int(time.time()), row["chat_id"]))
+        else:
+            watch_ids = []
         conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-        return dict(row) if row else None
+        return {**dict(row), "watch_ids": watch_ids} if row else None
+
+
+def restore_user(user_row, watch_ids):
+    """Скасувати видалення користувача: доступ і його товари — як були."""
+    cols = ["user_id", "chat_id", "username", "first_name", "status", "requested_at", "decided_at"]
+    with get_conn() as conn:
+        conn.execute(f"INSERT OR REPLACE INTO users ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                     [user_row.get(c) for c in cols])
+    return sum(restore_watch(wid, user_row["chat_id"]) for wid in watch_ids)
 
 
 def list_users(status=None):
@@ -464,17 +487,47 @@ def find_duplicate_watch(chat_id, query):
     return None
 
 
+def _purge_watch_data(conn, watch_id):
+    for table in ("market_stats", "seen_items", "listing_obs", "price_history", "scan_stats"):
+        conn.execute(f"DELETE FROM {table} WHERE watch_id = ?", (watch_id,))
+
+
 def remove_watch(watch_id, chat_id):
+    """Товар перестає відстежуватись одразу, а його історія ще UNDO_KEEP_HOURS
+    зберігається — щоб «↩️ Скасувати» повернуло все як було."""
     with get_conn() as conn:
         conn.execute(
-            "UPDATE watches SET active = 0 WHERE id = ? AND chat_id = ?",
-            (watch_id, chat_id),
+            "UPDATE watches SET active = 0, deleted_at = ? WHERE id = ? AND chat_id = ? AND active = 1",
+            (int(time.time()), watch_id, chat_id),
         )
-        conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (watch_id,))
-        conn.execute("DELETE FROM seen_items WHERE watch_id = ?", (watch_id,))
-        conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (watch_id,))
-        conn.execute("DELETE FROM price_history WHERE watch_id = ?", (watch_id,))
-        conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
+
+
+def restore_watch(watch_id, chat_id):
+    """Скасувати видалення: True, якщо історія ще збереглась і товар знову відстежується."""
+    with get_conn() as conn:
+        restored = conn.execute(
+            "UPDATE watches SET active = 1, deleted_at = NULL "
+            "WHERE id = ? AND chat_id = ? AND active = 0 AND deleted_at IS NOT NULL",
+            (watch_id, chat_id),
+        ).rowcount
+        if restored:   # поки товар був видалений, ринок не скануввався — перерахувати
+            conn.execute("UPDATE market_stats SET updated_at = 0 WHERE watch_id = ?", (watch_id,))
+        return bool(restored)
+
+
+def purge_deleted_watches(keep_seconds=None):
+    """Остаточно прибирає історію товарів, видалених давніше за UNDO_KEEP_HOURS."""
+    keep = settings.UNDO_KEEP_HOURS * 3600 if keep_seconds is None else keep_seconds
+    cutoff = int(time.time()) - keep
+    with get_conn() as conn:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM watches WHERE active = 0 AND deleted_at IS NOT NULL AND deleted_at <= ?",
+            (cutoff,)).fetchall()]
+        for wid in ids:
+            _purge_watch_data(conn, wid)
+            conn.execute("UPDATE watches SET deleted_at = NULL WHERE id = ?", (wid,))
+        conn.execute("DELETE FROM undo_actions WHERE created_at <= ?", (cutoff,))
+    return len(ids)
 
 
 def mark_market_stale(watch_id):
@@ -885,7 +938,9 @@ def get_pending_sold_checks(limit, watch_id=None):
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT watch_id, item_id, price, status FROM listing_obs
-               WHERE sold_check = 'pending' AND gone_at >= ?""" + only + " ORDER BY gone_at DESC LIMIT ?",
+               WHERE sold_check = 'pending' AND gone_at >= ?
+               AND watch_id NOT IN (SELECT id FROM watches WHERE active = 0)""" + only
+            + " ORDER BY gone_at DESC LIMIT ?",
             params,
         ).fetchall()]
 
@@ -1355,6 +1410,82 @@ def delete_listing_obs_by_ids(watch_id, item_ids):
             "DELETE FROM listing_obs WHERE watch_id = ? AND item_id = ?",
             [(watch_id, i) for i in item_ids],
         )
+
+
+# ---------- «↩️ Скасувати» ----------
+
+def get_obs_rows(watch_id, item_ids):
+    """Знімок спостережень перед видаленням — щоб скасування повернуло їх як були."""
+    item_ids = list(item_ids)
+    if not item_ids:
+        return []
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            f"SELECT * FROM listing_obs WHERE watch_id = ? AND item_id IN ({','.join('?' * len(item_ids))})",
+            [watch_id] + item_ids).fetchall()]
+
+
+def restore_obs_rows(rows):
+    with get_conn() as conn:
+        for r in rows:
+            cols = list(r)
+            conn.execute(f"INSERT OR IGNORE INTO listing_obs ({', '.join(cols)}) "
+                         f"VALUES ({', '.join('?' * len(cols))})", [r[c] for c in cols])
+
+
+def unreject_item(watch_id, item_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM rejected_items WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))
+
+
+def forget_learned_words(watch_id, words):
+    """Слово знову «не вивчене» (а не «скасоване») — бот зможе запропонувати його пізніше."""
+    with get_conn() as conn:
+        conn.executemany("DELETE FROM learned_words WHERE watch_id = ? AND word = ?",
+                         [(watch_id, w) for w in words])
+
+
+def set_deals_status(deal_ids, status):
+    with get_conn() as conn:
+        conn.executemany("UPDATE deals SET status = ? WHERE id = ?", [(status, i) for i in deal_ids])
+
+
+def inbox_deal_ids(chat_id):
+    with get_conn() as conn:
+        return [r["id"] for r in conn.execute(
+            """SELECT d.id FROM deals d JOIN watches w ON w.id = d.watch_id
+               WHERE w.chat_id = ? AND d.status = 'new'""", (chat_id,)).fetchall()]
+
+
+def add_undo(chat_id, kind, label, payload):
+    with get_conn() as conn:
+        return conn.execute(
+            "INSERT INTO undo_actions (chat_id, kind, label, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, kind, label, json.dumps(payload, ensure_ascii=False), int(time.time())),
+        ).lastrowid
+
+
+def get_undo(undo_id, chat_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM undo_actions WHERE id = ? AND chat_id = ?", (undo_id, chat_id)).fetchone()
+    if not row:
+        return None
+    return {**dict(row), "payload": json.loads(row["payload"])}
+
+
+def latest_undo(chat_id, since):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, label FROM undo_actions WHERE chat_id = ? AND done = 0 AND created_at >= ? "
+            "ORDER BY id DESC LIMIT 1", (chat_id, since)).fetchone()
+    return dict(row) if row else None
+
+
+def mark_undo_done(undo_id):
+    """True — позначили зараз; False — вже скасовано раніше (подвійне натискання)."""
+    with get_conn() as conn:
+        return bool(conn.execute("UPDATE undo_actions SET done = 1 WHERE id = ? AND done = 0",
+                                 (undo_id,)).rowcount)
 
 
 # ---------- службові значення ----------

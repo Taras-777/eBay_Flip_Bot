@@ -17,6 +17,7 @@ from db import (
     set_user_status,
     upsert_user_request,
 )
+from undo import record as undo_record
 from panel import _ack_callback, back_to_menu_keyboard, refresh_owner_menu, show_panel
 from textparse import plural
 
@@ -203,7 +204,11 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=keyboard,
         )
         return
-    delete_user(int(user_id))
+    removed = delete_user(int(user_id))
+    if removed:
+        user = {k: v for k, v in removed.items() if k != "watch_ids"}
+        undo_record(context, update.effective_chat.id, "user_delete", f"видалення {name}",
+                    user=user, watch_ids=removed["watch_ids"], screen="users")
     try:
         await context.bot.send_message(
             chat_id=row["chat_id"],
