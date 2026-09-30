@@ -86,7 +86,6 @@ async def _render_markdowns(update, context, page=0, note=""):
         nav.append(InlineKeyboardButton("Далі ▶️", callback_data=f"mkd:{page + 1}"))
     if nav:
         buttons.append(nav)
-    buttons.append([InlineKeyboardButton(f"⚙️ Поріг знижки: {pct:.0f}%", callback_data="mdpct:show")])
     buttons.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
     if shown:
         lines.append("<i>🙈 — сховати це оголошення; ❌ Інший товар — не той товар, бот запам'ятає.</i>")
@@ -152,6 +151,6 @@ async def drop_pct_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{note}⚙️ <b>Поріг знижки</b>: зараз <b>{current:.0f}%</b>\n\n"
         "У «📉 Знизили ціну» потрапляють оголошення, ціну яких знизили щонайменше на стільки "
         "від першої ціни, яку бачив бот. Менший поріг — більше оголошень, але й більше дрібних знижок.",
-        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("◀️ До знижок", callback_data="mkd:0")]]),
+        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")]]),
         parse_mode=ParseMode.HTML,
     )

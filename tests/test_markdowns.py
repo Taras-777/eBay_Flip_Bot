@@ -89,6 +89,16 @@ def test_cheapest_scan_tracks_and_respects_interval(fake_ebay):
 
 # ---------- екран ----------
 
+def test_menu_button_only_when_list_not_empty():
+    wid = _setup()
+    labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert not any(x.startswith("📉") for x in labels)
+    db.track_prices(wid, [_item("a", 700)])
+    db.track_prices(wid, [_item("a", 520)])
+    labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert labels[1] == "📉 Знизили ціну · 🆕 1"          # одразу під «🔥»
+
+
 def test_screen_menu_counter_hide_and_undo(monkeypatch):
     wid = _setup()
     db.track_prices(wid, [_item("a", 700, has_best_offer=True), _item("b", 650)])
@@ -103,7 +113,6 @@ def test_screen_menu_counter_hide_and_undo(monkeypatch):
     text, buttons = shown[-1]
     assert "Знизили ціну</b> (2)" in text and "було 700€ → зараз <b>520€</b> (−26%)" in text
     assert "🎯 Можна торгуватись" in text and "✅ Вже вигідно" in text
-    assert "⚙️ Поріг знижки: 20%" in buttons
     assert "📉 Знизили ціну" in [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
 
     upd, ctx2 = press(f"mact:hide:{wid}:a:0")
@@ -136,7 +145,10 @@ def test_drop_pct_setting(monkeypatch):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("mdpct:30")
     asyncio.run(handlers.drop_pct_callback(upd, ctx))
-    assert db.get_drop_pct(1) == 30 and "✅ 30%" in shown[-1][1]
+    assert db.get_drop_pct(1) == 30 and "✅ 30%" in shown[-1][1] and "◀️ До налаштувань" in shown[-1][1]
+    import account
+    labels = [b.text for r in account._settings_keyboard(1).inline_keyboard for b in r]
+    assert "📉 Поріг знижки: 30%" in labels
 
 
 def test_deal_card_mentions_earlier_price_cut():

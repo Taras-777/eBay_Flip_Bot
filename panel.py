@@ -12,7 +12,7 @@ from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes
 
-from markdowns import count_unseen_markdowns
+from markdowns import markdown_counts
 from undo import attach_offer, menu_offer, undo_button
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
 from db import count_unseen_deals, get_last_prices_update, get_scan_summary, list_users, sold_confirmed_today
@@ -118,14 +118,15 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
 
     unseen = count_unseen_deals(user_id)
     deals_label = MENU_LABELS["deals"] + (f" · 🆕 {unseen}" if unseen else "")
-    unseen_md = count_unseen_markdowns(user_id)
+    total_md, unseen_md = markdown_counts(user_id)
     md_label = MENU_LABELS["markdowns"] + (f" · 🆕 {unseen_md}" if unseen_md else "")
     rows = [
         [InlineKeyboardButton(deals_label, callback_data="deals:0")],
-        [InlineKeyboardButton(md_label, callback_data="mkd:0")],
         [btn("list")],
         [btn("discover")],
     ]
+    if total_md:   # «📉 Знизили ціну» — лише коли там щось є
+        rows.insert(1, [InlineKeyboardButton(md_label, callback_data="mkd:0")])
     offer = menu_offer(user_id)
     if offer:   # щойно щось видалив і пішов у меню — повернути ще можна
         rows.insert(0, [undo_button(offer["id"], offer["label"])])

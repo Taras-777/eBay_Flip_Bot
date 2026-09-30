@@ -110,12 +110,14 @@ def markdown_list(chat_id):
     return result
 
 
-def count_unseen_markdowns(chat_id):
+def markdown_counts(chat_id):
+    """(усього, нових) — для кнопки в головному меню."""
     try:
-        return sum(1 for r in markdown_list(chat_id) if r["seen_at"] is None)
+        rows = markdown_list(chat_id)
     except Exception as e:   # лічильник у меню не має ламати саме меню
         log.debug("Не вдалося порахувати знижки: %s", e)
-        return 0
+        return 0, 0
+    return len(rows), sum(1 for r in rows if r["seen_at"] is None)
 
 
 def recheck_rows(rows):

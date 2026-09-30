@@ -13,7 +13,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import sold_check_stats
+from db import get_drop_pct, sold_check_stats
 from ebay_api import trading_calls_today
 from deal_check import trading_breakdown_lines
 from ebay_user import (
@@ -106,7 +106,7 @@ def _settings_text(note=""):
     return "\n\n".join(parts)
 
 
-def _settings_keyboard():
+def _settings_keyboard(chat_id=None):
     rows = []
     if is_configured():
         if is_connected():
@@ -114,13 +114,16 @@ def _settings_keyboard():
                          InlineKeyboardButton("🔌 Відключити", callback_data="eacc:disconnect")])
         else:
             rows.append([InlineKeyboardButton("🔐 Підключити акаунт eBay", callback_data="eacc:connect")])
+    if chat_id is not None:
+        rows.append([InlineKeyboardButton(f"📉 Поріг знижки: {get_drop_pct(chat_id):.0f}%",
+                                          callback_data="mdpct:show")])
     rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
     rows.append(BACK_ROW)
     return InlineKeyboardMarkup(rows)
 
 
 async def show_settings(update, context, note=""):
-    await show_panel(update, context, _settings_text(note), reply_markup=_settings_keyboard(),
+    await show_panel(update, context, _settings_text(note), reply_markup=_settings_keyboard(update.effective_chat.id),
                      parse_mode=ParseMode.HTML)
 
 
