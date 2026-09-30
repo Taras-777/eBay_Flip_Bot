@@ -1,0 +1,7 @@
+# Lint у CI (GitHub Actions → lint): справжні помилки — синтаксис, невизначені
+# імена, невикористані імпорти й змінні. Стиль (довжина рядків тощо) не чіпаємо.
+target-version = "py312"
+extend-exclude = [".venv", "venv", "data"]
+
+[lint]
+select = ["E9", "F"]

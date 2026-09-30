@@ -13,7 +13,9 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import get_api_calls_today, sold_check_stats
+from db import sold_check_stats
+from ebay_api import trading_calls_today
+from deal_check import trading_breakdown_lines
 from ebay_user import (
     UserAuthError,
     connection_info,
@@ -68,7 +70,8 @@ def _connected_text():
         f"❔ eBay не відповів: {stats.get('unknown', 0)}",
         f"⏳ чекають перевірки: {stats.get('pending', 0)}",
         "",
-        f"📡 Запитів Trading API сьогодні: {get_api_calls_today('trading')} / {TRADING_DAILY_BUDGET}",
+        f"📡 Запитів Trading API сьогодні: {trading_calls_today()[0]} / {TRADING_DAILY_BUDGET}",
+        *trading_breakdown_lines(),
     ]
     return "\n".join(lines)
 

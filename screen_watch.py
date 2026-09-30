@@ -278,7 +278,7 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    groups = {}
+    groups: dict = {}
     for row in listings:
         groups.setdefault((row["cond_group"], row["spec_group"]), []).append(row["price"])
 
@@ -727,7 +727,9 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await _ack_callback(update)
     chat_id = update.effective_chat.id
     watches = list_watches(chat_id=chat_id, active_only=True)
-    done, failed, skipped = [], [], []
+    done: list = []
+    failed: list = []
+    skipped: list = []
     context.bot_data["refresh_all_running"] = True
     try:
         for n, watch in enumerate(watches, 1):

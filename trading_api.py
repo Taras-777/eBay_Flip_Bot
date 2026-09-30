@@ -12,6 +12,8 @@ Trading API повертає й завершені оголошення (до 90
 
 import xml.etree.ElementTree as ET
 
+from defusedxml.ElementTree import fromstring as safe_fromstring
+
 from settings import SOLD_CHECK_BATCH, TRADING_DAILY_BUDGET, log
 from db import (
     apply_discovery_check,
@@ -47,7 +49,7 @@ def _text(node, path):
 
 def parse_get_item(xml_text):
     """Відповідь GetItem → {'result': sold|unsold|active|not_found|unknown, ...}."""
-    root = ET.fromstring(xml_text)
+    root = safe_fromstring(xml_text)   # захист від «XML-бомб» у відповіді
     codes = {c.text.strip() for c in root.findall("e:Errors/e:ErrorCode", NS) if c.text}
     ack = _text(root, "e:Ack")
     if ack == "Failure" or root.find("e:Item", NS) is None:
@@ -110,6 +112,11 @@ def get_item_status(item_id):
         raise RuntimeError(f"Trading API: незрозуміла відповідь (HTTP {resp.status_code})")
 
 
+def _purpose(apply):
+    """Для розбивки запитів у «⚙️ Налаштування»: твої товари чи «💡 Що перепродавати»."""
+    return "discovery" if apply is apply_discovery_check else "watch"
+
+
 def _run_checks(queue):
     """queue: [(apply, (власник, item_id))] → {результат: кількість}."""
     counts = {}
@@ -120,6 +127,7 @@ def _run_checks(queue):
             apply(owner, item_id, known)
             counts[known] = counts.get(known, 0) + 1
             continue
+        record_api_call(f"trading:{_purpose(apply)}")
         try:
             info = get_item_status(item_id)
         except UserAuthError as e:

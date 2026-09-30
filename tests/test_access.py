@@ -35,7 +35,7 @@ def test_delete_user_and_request_again(monkeypatch):
     shown, ctx = setup(monkeypatch)
     db.upsert_user_request(42, 42, "anna", "Anna")
     db.set_user_status(42, "approved")
-    wid = db.add_watch(42, "PS5", "PS5", "", "", 15)
+    db.add_watch(42, "PS5", "PS5", "", "", 15)
     assert "👥 Користувачі" in [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
 
     asyncio.run(access.cmd_users(owner_update("menu:users"), ctx))

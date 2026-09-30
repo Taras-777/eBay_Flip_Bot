@@ -109,7 +109,7 @@ async def access_decision_callback(update: Update, context: ContextTypes.DEFAULT
 
     if action == "approve":
         set_user_status(target_id, "approved")
-        await query_cb.edit_message_text(f"{query_cb.message.text}\n\n✅ Доступ надано.")
+        await query_cb.edit_message_text(f"{query_cb.message.text}\n\n✅ Доступ надано.")  # type: ignore[attr-defined]
         try:
             await context.bot.send_message(
                 chat_id=row["chat_id"],
@@ -119,7 +119,7 @@ async def access_decision_callback(update: Update, context: ContextTypes.DEFAULT
             log.warning("Не вдалося сповістити користувача %s: %s", target_id, e)
     else:
         set_user_status(target_id, "denied")
-        await query_cb.edit_message_text(f"{query_cb.message.text}\n\n⛔ Доступ відхилено.")
+        await query_cb.edit_message_text(f"{query_cb.message.text}\n\n⛔ Доступ відхилено.")  # type: ignore[attr-defined]
         try:
             await context.bot.send_message(
                 chat_id=row["chat_id"],

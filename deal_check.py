@@ -17,7 +17,7 @@ from settings import (
     TRADING_DAILY_BUDGET,
     log,
 )
-from db import get_deals_to_recheck, mark_deal_checked
+from db import get_api_calls_today, get_deals_to_recheck, mark_deal_checked, record_api_call
 from ebay_api import browse_budget_left, fetch_item_by_legacy_id, trading_calls_today
 from ebay_user import UserAuthError, is_connected
 from trading_api import get_item_status, legacy_item_id
@@ -25,9 +25,28 @@ from trading_api import get_item_status, legacy_item_id
 GONE_RESULTS = {"sold", "unsold", "not_found"}
 
 
+TRADING_PURPOSES = (("watch", "мої товари"), ("discovery", "💡 Що перепродавати"),
+                    ("deals", "🔥 вигідні пропозиції"))
+
+
+def trading_breakdown_lines():
+    """Рядки для «⚙️ Налаштування»: на що сьогодні пішли запити Trading API."""
+    total = trading_calls_today()[0]
+    parts = [(label, get_api_calls_today(f"trading:{key}")) for key, label in TRADING_PURPOSES]
+    lines = ["   " + " · ".join(f"{label}: {n}" for label, n in parts)]
+    other = total - sum(n for _, n in parts)
+    if other > 0:
+        lines.append(f"   інше: {other} (до оновлення бота, копія бота на ПК або check_sold.py)")
+    browse = get_api_calls_today("browse:deals")
+    if browse:
+        lines.append(f"   🔥 вигідні пропозиції через Browse API: {browse}")
+    return lines
+
+
 def listing_available(item_id):
     """True — ще продається, False — продано/знято, None — не вдалося дізнатися."""
     if is_connected() and trading_calls_today()[0] < TRADING_DAILY_BUDGET:
+        record_api_call("trading:deals")
         try:
             result = get_item_status(item_id)["result"]
             if result == "active":
@@ -40,6 +59,7 @@ def listing_available(item_id):
             log.debug("Trading API не відповів про %s: %s", item_id, e)
     if browse_budget_left() <= SEARCH_RESERVE:
         return None   # Browse бережемо для пошуку нових лотів
+    record_api_call("browse:deals")
     try:
         return fetch_item_by_legacy_id(legacy_item_id(item_id)) is not None
     except Exception as e:

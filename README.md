@@ -160,8 +160,30 @@ python -m pytest -q
 ```
 
 Тести не ходять ні в eBay, ні в Telegram — використовують тимчасову базу й
-підробні відповіді eBay. На GitHub вони запускаються автоматично після кожного
-`push` (вкладка **Actions**).
+підробні відповіді eBay.
+
+### ✅ Перевірки на GitHub (CI)
+
+Після кожного `push` GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+запускає сім окремих перевірок — кожна зі своєю галочкою біля коміту:
+
+| Перевірка | Що робить |
+|---|---|
+| `syntax` | синтаксис усіх `.py` (`compileall`) |
+| `lint` | Ruff: невизначені імена, невикористані імпорти й змінні ([`ruff.toml`](ruff.toml)) |
+| `type-check` | mypy у м'якому режимі ([`mypy.ini`](mypy.ini)) |
+| `import-check` | кожен модуль імпортується без помилок |
+| `tests` | `pytest` |
+| `docker-build` | образ збирається і бот у ньому імпортується |
+| `security` | pip-audit (вразливості залежностей) і bandit (небезпечні місця в коді) |
+
+Те саме локально перед `push`:
+
+```bash
+pip install ruff mypy types-requests pip-audit bandit
+ruff check . ; python -m mypy . ; python -m pytest -q
+pip-audit -r requirements.txt ; bandit -q -r . -x ./tests,./.venv,./venv -ll --skip B608
+```
 
 ## 📁 Структура
 

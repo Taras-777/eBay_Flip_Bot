@@ -7,7 +7,7 @@ import db
 import ebay_api
 import scheduler
 import shared_market
-from conftest import listing, patch_ui
+from conftest import patch_ui
 from test_scheduler import consoles, make_app
 
 CATS = [{"id": "139971", "name": "Konsolen"}]
@@ -57,7 +57,6 @@ def test_shared_search_uses_softest_settings_and_own_filters():
 
 
 def test_new_user_gets_history_and_hint(monkeypatch):
-    import access
     import handlers
     w1 = db.add_watch(1, "iPhone", "iPhone 16 Pro", "", "", 15, categories=[{"id": "9355", "name": "Handys"}])
     now = int(time.time())

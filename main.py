@@ -270,7 +270,7 @@ def main():
 
 # Сумісність: старі скрипти й тести звертаються до main.<назва> — шукаємо
 # назву в модулях бота (присвоєння main.<назва> = ... на модулі не впливає).
-import access, db, ebay_api, handlers, market, notifications, panel, scheduler, settings, textparse  # noqa: E402
+import access, db, ebay_api, handlers, market, notifications, panel, scheduler, textparse  # noqa: E402
 
 _MODULES = (settings, textparse, db, ebay_api, market, panel, access, notifications, handlers, scheduler)
 

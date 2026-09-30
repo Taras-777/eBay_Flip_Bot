@@ -20,7 +20,7 @@ _cache = {"version": None}
 
 
 def code_fingerprint():
-    digest = hashlib.sha1()
+    digest = hashlib.sha1(usedforsecurity=False)  # лише відбиток коду, не безпека
     for name in sorted(n for n in os.listdir(ROOT) if n.endswith(".py")):
         digest.update(name.encode())
         with open(os.path.join(ROOT, name), "rb") as f:

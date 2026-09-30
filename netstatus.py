@@ -8,7 +8,7 @@ import time
 
 from settings import log
 
-_down_since = {}
+_down_since: dict = {}
 _lock = threading.Lock()
 
 

@@ -14,7 +14,6 @@ from telegram.error import BadRequest
 import access
 import db
 import handlers
-import notifications
 import panel
 
 

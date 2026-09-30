@@ -1,19 +1,115 @@
+# Перевірки після кожного push: у GitHub на коміті — окрема галочка для кожної.
 name: CI
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
 jobs:
-  test:
+  syntax:
+    name: syntax
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Синтаксис усіх .py
+        run: python -m compileall -q .
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m pip install ruff
+      - name: Ruff (налаштування — ruff.toml)
+        run: ruff check --output-format=github .
+
+  type-check:
+    name: type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Встановити залежності
-        run: python -m pip install -r requirements.txt pytest
-      - name: Тести
+      - run: python -m pip install -r requirements.txt mypy types-requests
+      - name: Mypy (налаштування — mypy.ini)
+        run: python -m mypy .
+
+  import-check:
+    name: import-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Тестовий config.py (справжній у git не потрапляє)
+        run: |
+          test -f config.py || printf 'EBAY_CLIENT_ID = "ci"\nEBAY_CLIENT_SECRET = "ci"\nTELEGRAM_BOT_TOKEN = "123:CI"\nOWNER_TELEGRAM_ID = 0\n' > config.py
+      - name: Кожен модуль імпортується
+        env:
+          DATA_DIR: ${{ runner.temp }}/data
+        run: |
+          python - <<'PY'
+          import glob, importlib, sys
+          sys.path.insert(0, ".")
+          for f in sorted(glob.glob("*.py")):
+              importlib.import_module(f[:-3])
+              print("✓", f)
+          PY
+
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: python -m pip install -r requirements.txt pytest
+      - name: Pytest
         run: python -m pytest -q
+
+  docker-build:
+    name: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Тестовий config.py (справжній у git не потрапляє)
+        run: |
+          test -f config.py || printf 'EBAY_CLIENT_ID = "ci"\nEBAY_CLIENT_SECRET = "ci"\nTELEGRAM_BOT_TOKEN = "123:CI"\nOWNER_TELEGRAM_ID = 0\n' > config.py
+      - name: Збірка образу
+        run: docker build -t ebay-bot:ci .
+      - name: Бот стартує в образі (імпорт main)
+        run: docker run --rm ebay-bot:ci python -c "import main; print('ok')"
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m pip install pip-audit bandit
+      - name: Вразливості в залежностях (pip-audit)
+        run: pip-audit -r requirements.txt
+      - name: Небезпечні місця в коді (bandit)
+        # B608 вимкнено: SQL збирається лише з констант коду, значення — через «?»
+        run: bandit -q -r . -x ./tests,./.venv,./venv -ll --skip B608

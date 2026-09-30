@@ -329,17 +329,17 @@ async def reject_deal_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query_cb.answer("🙈 Сховано — більше не показуватиму це оголошення" if hidden
                           else "❌ Прибрано — більше не враховую це оголошення")
 
-    old_rows = query_cb.message.reply_markup.inline_keyboard if query_cb.message.reply_markup else []
+    old_rows = query_cb.message.reply_markup.inline_keyboard if query_cb.message.reply_markup else []  # type: ignore[attr-defined]
     this_deal = {f"rejd:{deal['id']}", f"hided:{deal['id']}"}
     grouped = any(b.callback_data in this_deal and "#" in b.text for row in old_rows for b in row)
     if grouped:
         # Кілька знахідок в одному повідомленні — прибираємо лише кнопки цього лота
         rows = [[b for b in row if b.callback_data not in this_deal] for row in old_rows]
         rows = [row for row in rows if row]
-        text = query_cb.message.text
+        text = query_cb.message.text  # type: ignore[attr-defined]
     else:
         rows = [[InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
-        text = (f"{query_cb.message.text}\n\n"
+        text = (f"{query_cb.message.text}\n\n"  # type: ignore[attr-defined]
                 + ("🙈 Сховано — це оголошення більше не показуватиму" if hidden
                    else "❌ Інший товар — більше не враховую"))
     if words:
@@ -362,7 +362,7 @@ async def unlearn_word_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query_cb.answer("Цей товар уже видалено.", show_alert=True)
         return
     await query_cb.answer(f"↩️ «{word}» більше не відсіюється")
-    markup = query_cb.message.reply_markup
+    markup = query_cb.message.reply_markup  # type: ignore[attr-defined]
     if markup:
         rows = [[b for b in row if b.callback_data != query_cb.data] for row in markup.inline_keyboard]
         try:
@@ -380,11 +380,11 @@ async def deal_action_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     owner_chat_id = get_deal_owner_chat_id(deal_id)
     if owner_chat_id != update.effective_chat.id:
-        await query_cb.message.reply_text("⛔ Ця пропозиція тобі не належить.")
+        await query_cb.message.reply_text("⛔ Ця пропозиція тобі не належить.")  # type: ignore[attr-defined]
         return
 
     status = "bought" if action == "buy" else "skipped"
     set_deal_status(deal_id, status)
 
     label = "✅ Куплено" if status == "bought" else "❌ Пропущено"
-    await query_cb.edit_message_text(f"{query_cb.message.text}\n\n{label}")
+    await query_cb.edit_message_text(f"{query_cb.message.text}\n\n{label}")  # type: ignore[attr-defined]

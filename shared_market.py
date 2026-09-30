@@ -25,9 +25,9 @@ MARKET_CACHE_SECONDS = 45 * 60   # ринкове сканування (раз �
 MANUAL_CACHE_SECONDS = 5 * 60    # ручне «Оновити ціни» — не старіше 5 хв
 DEAL_CACHE_SECONDS = 4 * 60      # пошук нових лотів (кожні 5 хв) — ділиться в межах циклу
 
-_cache = {}
+_cache: dict = {}
 _cache_lock = threading.Lock()
-_key_locks = {}
+_key_locks: dict = {}
 
 
 def market_key(w):

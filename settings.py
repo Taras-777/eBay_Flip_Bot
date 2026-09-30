@@ -6,12 +6,12 @@
 import config
 import logging
 import os
-from datetime import timezone
+from datetime import timezone, tzinfo
 
 
 try:
     from zoneinfo import ZoneInfo
-    LOCAL_TZ = ZoneInfo("Europe/Berlin")
+    LOCAL_TZ: tzinfo = ZoneInfo("Europe/Berlin")
 except Exception:  # немає бази часових зон (напр. Windows без tzdata)
     LOCAL_TZ = timezone.utc
 

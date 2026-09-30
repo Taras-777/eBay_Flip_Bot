@@ -229,7 +229,7 @@ async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
 async def scheduler_loop(app: Application):
     try:
         await asyncio.sleep(5)
-        last_cleanup_at = 0
+        last_cleanup_at = 0.0
         while True:
             try:
                 if browse_budget_left() > 0:

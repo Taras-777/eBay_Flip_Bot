@@ -112,3 +112,26 @@ def test_listing_available_uses_trading_then_browse(monkeypatch):
     assert deal_check.listing_available("v1|5|0") is False
     monkeypatch.setattr(deal_check, "browse_budget_left", lambda: 10)   # бюджет — для пошуку
     assert deal_check.listing_available("v1|5|0") is None
+
+
+# ---------- розбивка запитів Trading API ----------
+
+def test_trading_breakdown(monkeypatch):
+    import account
+    import trading_api
+    for _ in range(3):
+        db.record_api_call("trading")
+    db.record_api_call("trading:watch")
+    db.record_api_call("trading:deals")
+    monkeypatch.setattr(deal_check, "trading_calls_today", lambda: (5, False))
+    lines = deal_check.trading_breakdown_lines()
+    assert "мої товари: 1 · 💡 Що перепродавати: 0 · 🔥 вигідні пропозиції: 1" in lines[0]
+    assert lines[1].startswith("   інше: 3")
+
+    # перевірка зниклих рахується окремо: твої товари і «💡 Що перепродавати»
+    monkeypatch.setattr(trading_api, "get_item_status", lambda item_id: {"result": "sold"})
+    trading_api._run_checks([(db.apply_sold_check, (1, "v1|a|0")),
+                             (db.apply_discovery_check, ("PS5", "v1|b|0"))])
+    assert db.get_api_calls_today("trading:watch") == 2
+    assert db.get_api_calls_today("trading:discovery") == 1
+    assert callable(account._connected_text)

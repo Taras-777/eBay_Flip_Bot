@@ -2,7 +2,6 @@
 from conftest import patch_ui
 import asyncio
 import gzip
-import os
 import sqlite3
 import time
 from unittest.mock import AsyncMock, MagicMock
