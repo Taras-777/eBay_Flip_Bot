@@ -33,9 +33,8 @@ from db import (
     get_seen_items,
     get_sold_listings,
     list_watches,
-    watch_category_ids,
 )
-from ebay_api import _watch_search_kwargs, browse_budget_left, fetch_browse_rate_limit, search_in_categories, seconds_until_reset
+from ebay_api import browse_budget_left, fetch_browse_rate_limit, seconds_until_reset
 from market import (
     _annotate_items,
     _apply_item_filters,
@@ -55,6 +54,7 @@ from notifications import (
 from sales import is_slow_seller, price_drops, sales_note
 from shared_market import deal_scan
 from netstatus import is_down, mark_down, mark_up
+from backup import daily_backup
 
 
 async def check_all_watches(app: Application):
@@ -255,6 +255,11 @@ async def scheduler_loop(app: Application):
             task = app.bot_data.get("sold_check_task")
             if task is None or task.done():
                 app.bot_data["sold_check_task"] = asyncio.create_task(asyncio.to_thread(verify_disappeared))
+
+            # Резервна копія бази — раз на добу (окремим потоком, не заважає перевіркам)
+            task = app.bot_data.get("backup_task")
+            if task is None or task.done():
+                app.bot_data["backup_task"] = asyncio.create_task(asyncio.to_thread(daily_backup))
 
             # Раз на добу прибираємо застарілі записи seen_items
             now = time.time()

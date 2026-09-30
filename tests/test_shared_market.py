@@ -7,7 +7,7 @@ import db
 import ebay_api
 import scheduler
 import shared_market
-from conftest import listing
+from conftest import listing, patch_ui
 from test_scheduler import consoles, make_app
 
 CATS = [{"id": "139971", "name": "Konsolen"}]
@@ -73,8 +73,8 @@ def test_new_user_gets_history_and_hint(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r] if reply_markup else []))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
-    monkeypatch.setattr(handlers, "_ebay_configured", lambda: True)
+    patch_ui(monkeypatch, "show_panel", fake_show)
+    patch_ui(monkeypatch, "_ebay_configured", lambda: True)
     upd = MagicMock()
     upd.effective_chat.id = upd.effective_user.id = 2
     upd.message.text = "iphone 16 pro"
@@ -91,7 +91,7 @@ def test_new_user_gets_history_and_hint(monkeypatch):
         went_to.append(context.user_data["new_watch_categories"])
         return handlers.ASK_ASPECT
 
-    monkeypatch.setattr(handlers, "_propose_aspects", fake_aspects)
+    patch_ui(monkeypatch, "_propose_aspects", fake_aspects)
     upd.callback_query.data = "shr:yes"
     upd.callback_query.answer = AsyncMock()
     asyncio.run(handlers.addwatch_shared_choice(upd, ctx))

@@ -10,7 +10,7 @@ import db
 import ebay_api
 import handlers
 import learning
-from conftest import FakeResponse
+from conftest import FakeResponse, patch_ui
 
 
 # ---------- посилання ----------
@@ -168,7 +168,7 @@ def test_check_flow_in_bot(monkeypatch, ebay_item):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [[b.text for b in r] for r in reply_markup.inline_keyboard] if reply_markup else []))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
     w = iphone_watch()
     upd = MagicMock()
@@ -195,7 +195,7 @@ def test_watch_screen_has_check_button(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append([b.text for r in reply_markup.inline_keyboard for b in r])
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     asyncio.run(handlers._show_watch_details(MagicMock(), MagicMock(), iphone_watch()))
     assert "🔍 Перевірити оголошення" in shown[-1]
 

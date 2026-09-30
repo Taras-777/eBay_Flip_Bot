@@ -1,13 +1,14 @@
 """
-«🔐 Акаунт eBay» (лише власник): вхід в акаунт eBay для перевірки через
+«⚙️ Налаштування» (лише власник): вхід в акаунт eBay для перевірки через
 Trading API, чи зниклі оголошення справді продали.
 """
 
 import asyncio
 import html
+import os
 from datetime import datetime
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -24,6 +25,7 @@ from ebay_user import (
     is_connected,
 )
 from panel import _ack_callback, show_main_menu, show_panel
+from backup import backups_summary, make_backup
 
 EBAY_CODE = 0  # чекаємо адресу сторінки після входу в eBay
 
@@ -87,28 +89,73 @@ def _login_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔗 Увійти в eBay", url=consent_url())], BACK_ROW])
 
 
+def _settings_text(note=""):
+    """Екран «⚙️ Налаштування»: акаунт eBay і резервні копії."""
+    parts = [note] if note else []
+    parts.append("⚙️ <b>Налаштування</b>")
+    if not is_configured():
+        parts.append(_not_configured_text())
+    elif is_connected():
+        parts.append(_connected_text())
+    else:
+        parts.append("🔐 <b>Акаунт eBay</b> — ❌ не підключено\n\n" + WHY_TEXT)
+    parts.append(backups_summary())
+    return "\n\n".join(parts)
+
+
+def _settings_keyboard():
+    rows = []
+    if is_configured():
+        if is_connected():
+            rows.append([InlineKeyboardButton("🔄 Увійти в eBay заново", callback_data="eacc:connect"),
+                         InlineKeyboardButton("🔌 Відключити", callback_data="eacc:disconnect")])
+        else:
+            rows.append([InlineKeyboardButton("🔐 Підключити акаунт eBay", callback_data="eacc:connect")])
+    rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
+    rows.append(BACK_ROW)
+    return InlineKeyboardMarkup(rows)
+
+
+async def show_settings(update, context, note=""):
+    await show_panel(update, context, _settings_text(note), reply_markup=_settings_keyboard(),
+                     parse_mode=ParseMode.HTML)
+
+
 async def ebay_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """menu:ebay_account — стан підключення; eacc:connect — одразу вхід."""
+    """menu:ebay_account — екран «⚙️ Налаштування»; eacc:connect — вхід в акаунт eBay."""
     await _ack_callback(update)
     if not is_owner(update.effective_user.id):
         await show_main_menu(update, context)
         return ConversationHandler.END
-    if not is_configured():
-        await show_panel(update, context, _not_configured_text(),
-                         reply_markup=InlineKeyboardMarkup([BACK_ROW]), parse_mode=ParseMode.HTML)
-        return ConversationHandler.END
-    relogin = update.callback_query and update.callback_query.data == "eacc:connect"
-    if is_connected() and not relogin:
-        rows = [
-            [InlineKeyboardButton("🔄 Увійти заново", callback_data="eacc:connect")],
-            [InlineKeyboardButton("🔌 Відключити", callback_data="eacc:disconnect")],
-            BACK_ROW,
-        ]
-        await show_panel(update, context, _connected_text(),
-                         reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    login = update.callback_query and update.callback_query.data == "eacc:connect"
+    if not login or not is_configured():
+        await show_settings(update, context)
         return ConversationHandler.END
     await show_panel(update, context, _login_text(), reply_markup=_login_keyboard(), parse_mode=ParseMode.HTML)
     return EBAY_CODE
+
+
+async def backup_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """backup:send — свіжа копія бази файлом (лише власник)."""
+    await _ack_callback(update)
+    if not is_owner(update.effective_user.id):
+        return
+    await show_panel(update, context, "💾 ⏳ Роблю резервну копію бази…")
+    try:
+        path = await asyncio.to_thread(make_backup)
+        with open(path, "rb") as f:
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=InputFile(f, filename=os.path.basename(path)),
+                caption="💾 Резервна копія бази бота. Тут і вхід в акаунт eBay — нікому не пересилай.\n"
+                        "Відновити: розпакуй і поклади як data/ebay_flip_bot.sqlite3 (бот зупинений).",
+            )
+        note = "✅ Резервну копію надіслано файлом вище."
+    except Exception as e:
+        log.exception("Не вдалося надіслати резервну копію: %s", e)
+        note = "⚠️ Не вдалося зробити резервну копію — деталі в логах."
+    context.user_data.pop("panel_message_id", None)   # екран — нижче за файл
+    await show_settings(update, context, note=note)
 
 
 async def ebay_account_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,7 +181,7 @@ async def ebay_account_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_panel(update, context, _login_text("⚠️ Не вдалося зв'язатися з eBay. Спробуй ще раз."),
                          reply_markup=_login_keyboard(), parse_mode=ParseMode.HTML)
         return EBAY_CODE
-    rows = [[InlineKeyboardButton("🔐 Стан перевірок", callback_data="menu:ebay_account")], BACK_ROW]
+    rows = [[InlineKeyboardButton("⚙️ Налаштування", callback_data="menu:ebay_account")], BACK_ROW]
     await show_panel(update, context,
                      "✅ <b>Акаунт eBay підключено.</b>\n\nВідтепер бот перевірятиме кожне зникле "
                      "оголошення: продано чи просто знято. Перші результати з'являться після "
@@ -159,7 +206,5 @@ async def ebay_account_disconnect(update: Update, context: ContextTypes.DEFAULT_
     await _ack_callback(update)
     if is_owner(update.effective_user.id):
         disconnect()
-    await show_panel(update, context,
-                     "🔌 Акаунт eBay відключено. Бот знову оцінює продажі лише за зниклими оголошеннями.",
-                     reply_markup=InlineKeyboardMarkup(
-                         [[InlineKeyboardButton("🔐 Акаунт eBay", callback_data="menu:ebay_account")], BACK_ROW]))
+    await show_settings(update, context,
+                        note="🔌 Акаунт eBay відключено. Бот знову оцінює продажі лише за зниклими оголошеннями.")

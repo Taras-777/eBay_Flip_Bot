@@ -47,7 +47,7 @@ DB_PATH = os.path.join(DATA_DIR, "ebay_flip_bot.sqlite3")
 STATE_FILE = os.path.join(DATA_DIR, "bot_state.pickle")
 
 
-# Лише значення за замовчуванням для старої колонки БД — у логіці не використовується
+# Стара колонка БД (поріг знижки) — у логіці не використовується, лише значення за замовчуванням
 DEFAULT_DISCOUNT_THRESHOLD_PCT = 25
 
 
@@ -224,17 +224,6 @@ ITEM_LOCATION_REGION = "EUROPEAN_UNION"
 # Поштовий індекс покупця — передається в заголовку X-EBAY-C-ENDUSERCTX,
 # щоб eBay точніше рахував вартість і доступність доставки саме сюди
 EBAY_BUYER_POSTAL_CODE = "76684"
-
-
-SEED_CATEGORY_HINTS = [
-    ("iphone, samsung galaxy, pixel", 20, "смартфони — великий обсяг однорідних лотів"),
-    ("playstation, ps5, ps4, xbox, nintendo switch", 20, "ігрові консолі — стандартизований товар"),
-    ("macbook, thinkpad, dell xps, laptop, ноутбук", 25, "ноутбуки — конфігурації відрізняються"),
-    ("airpods, sony wh, навушники, headphones", 20, "аудіо-гаджети — стабільна ринкова ціна"),
-    ("nike, adidas, jordan, yeezy, кросівки, sneakers", 35, "взуття/одяг — розкид через розмір/стан"),
-    ("watch, годинник, rolex, omega", 30, "годинники — розкид через стан/комплектацію"),
-]
-
 
 # Скільки днів тримати запис "цей лот уже бачили", перш ніж прибрати
 # з таблиці seen_items. Без цього таблиця росте нескінченно — старі

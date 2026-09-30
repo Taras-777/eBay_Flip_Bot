@@ -36,6 +36,8 @@ from textparse import (
     spec_required_by_default,
 )
 from db import (
+    mark_market_stale,
+    prune_listing_obs,
     get_current_listings,
     delete_market_stats_except,
     get_api_calls_today,
@@ -55,10 +57,8 @@ from db import (
 )
 from shared_market import MANUAL_CACHE_SECONDS, MARKET_CACHE_SECONDS, market_page, own_filter
 from ebay_api import (
-    _watch_search_kwargs,
     browse_budget_left,
     fetch_item_aspects,
-    search_active_items,
     search_in_categories,
 )
 
@@ -342,6 +342,18 @@ def _compute_group_stats(watch_id, items):
             "sale_source": source, "sample_size": len(clean),
         }
     return stats
+
+
+def apply_filters_to_history(w):
+    """Після зміни мінімальної ціни чи характеристик: не стираємо історію, а прибираємо з неї
+    лише те, що не проходить нові фільтри; ринок перерахується найближчим циклом."""
+    removed = prune_listing_obs(w["id"], min_price=w.get("min_price") or 0,
+                                drop_unspecified=watch_requires_spec(w))
+    mark_market_stale(w["id"])
+    refresh_sale_prices(w["id"])
+    if removed:
+        log.info("watch #%s: нові фільтри — прибрано з історії %s оголошень", w["id"], removed)
+    return removed
 
 
 def refresh_sale_prices(watch_id):

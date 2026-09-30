@@ -41,8 +41,3 @@ def test_multiple_categories_roundtrip():
 def test_legacy_single_required_aspect():
     assert db.get_required_aspects({"required_aspect": "Netzwerk"}) == ["Netzwerk"]
     assert db.get_required_aspects({"required_aspect": '["A", "B"]'}) == ["A", "B"]
-
-
-def test_threshold_suggestion_from_seed_hints():
-    pct, _ = db.find_threshold_suggestion("PS5 Slim")
-    assert pct == 20

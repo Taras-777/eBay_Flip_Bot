@@ -10,7 +10,7 @@ import db
 import ebay_user
 import settings
 import trading_api
-from conftest import FakeResponse
+from conftest import FakeResponse, patch_ui
 
 
 def xml_item(status="Completed", sold="1"):
@@ -258,7 +258,9 @@ def test_account_screen_without_runame(monkeypatch, screen):
 def test_account_login_flow(monkeypatch, screen):
     monkeypatch.setattr(account, "is_configured", lambda: True)
     monkeypatch.setattr(ebay_user, "EBAY_RUNAME", "Taras-RuName")
-    state = asyncio.run(account.ebay_account_start(make_update(), MagicMock()))
+    state = asyncio.run(account.ebay_account_start(make_update(), MagicMock()))   # «⚙️ Налаштування»
+    assert state == account.ConversationHandler.END and ["🔐 Підключити акаунт eBay"] in screen[-1][1]
+    state = asyncio.run(account.ebay_account_start(make_update("eacc:connect"), MagicMock()))
     assert state == account.EBAY_CODE and ["🔗 Увійти в eBay"] in screen[-1][1]
 
     got = []
@@ -277,8 +279,8 @@ def test_account_connected_screen(monkeypatch, screen):
     db.apply_sold_check(1, "a", "sold")
     asyncio.run(account.ebay_account_start(make_update(), MagicMock()))
     text, rows = screen[-1]
-    assert "✅ підключено" in text and "продано: 1" in text
-    assert ["🔌 Відключити"] in rows
+    assert "⚙️ <b>Налаштування</b>" in text and "✅ підключено" in text and "продано: 1" in text
+    assert ["🔄 Увійти в eBay заново", "🔌 Відключити"] in rows and ["💾 Надіслати резервну копію бази"] in rows
 
 
 # ---------- «📈 Продажі» у картці товару ----------
@@ -335,7 +337,7 @@ def test_sales_button_in_watch_card(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r]))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     w = sales_watch()
     asyncio.run(handlers._show_watch_details(MagicMock(), MagicMock(), w))
     assert "📈 Продажі" in shown[-1][1]
@@ -344,7 +346,7 @@ def test_sales_button_in_watch_card(monkeypatch):
     upd = make_update(f"sales:{w['id']}")
     import access
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
-    monkeypatch.setattr(handlers, "is_connected", lambda: True)
+    patch_ui(monkeypatch, "is_connected", lambda: True)
     asyncio.run(handlers.sales_callback(upd, MagicMock()))
     assert "Продано: <b>1</b>" in shown[-1][0] and "◀️ До товару" in shown[-1][1]
 
@@ -430,9 +432,9 @@ def test_remove_wrong_item_from_sales(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [b.callback_data for r in reply_markup.inline_keyboard for b in r]))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
-    monkeypatch.setattr(handlers, "is_connected", lambda: True)
+    patch_ui(monkeypatch, "is_connected", lambda: True)
 
     upd = make_update(f"sales:{w['id']}")
     asyncio.run(handlers.sales_callback(upd, MagicMock()))
@@ -516,7 +518,7 @@ def test_check_now_button(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r] if reply_markup else []))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
     monkeypatch.setattr(trading_api, "get_item_status",
                         lambda item_id: {"result": "sold" if item_id == "v1|1|0" else "active"})
@@ -547,3 +549,27 @@ def test_sales_screen_shows_tracked_listings():
     assert "📋 зараз у продажу: 3" in text          # біля 256GB
     empty = handlers._sales_text(w, [], active=active)
     assert "<b>5</b> оголошень" in empty and "Продажів ще не помічено" in empty
+
+
+def test_adding_category_keeps_history(monkeypatch):
+    import access
+    import handlers
+    wid = db.add_watch(1, "PS4", "PS4", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    add_sale(wid, "s1", 90, "500GB", confirmed=True)
+    db.upsert_market_stats(wid, "used", "*", 100, 20, sale_price=90, sale_source="x")
+    monkeypatch.setattr(access, "is_owner", lambda uid: True)
+    patch_ui(monkeypatch, "_show_watch_details", AsyncMock())
+    options = [{"id": "139971", "name": "Konsolen"}, {"id": "171831", "name": "Konsolen-Bundles"}]
+
+    def press(choice, selected):
+        upd = make_update(f"setcat:{wid}:{choice}")
+        ctx = MagicMock()
+        ctx.user_data = {f"cat_options_{wid}": options, f"cat_selected_{wid}": set(selected)}
+        asyncio.run(handlers.set_category_callback(upd, ctx))
+
+    press("done", {"139971", "171831"})                                # додали категорію
+    assert [r["item_id"] for r in db.get_sold_listings(wid)] == ["s1"]  # продажі на місці
+    assert db.get_market_stats(wid)[0]["updated_at"] == 0               # ринок перерахується найближчим циклом
+
+    press("done", {"171831"})                                           # прибрали стару категорію
+    assert db.get_sold_listings(wid) == [] and db.get_market_stats(wid) == []

@@ -20,7 +20,6 @@ from settings import (
     LISTING_OBS_RETENTION_DAYS,
     MARKET_REFRESH_MINUTES,
     PRICE_HISTORY_DAYS,
-    SEED_CATEGORY_HINTS,
     SEEN_ITEMS_RETENTION_DAYS,
     SOLD_CHECK_MAX_AGE_DAYS,
     SOLD_LOOKBACK_DAYS,
@@ -169,14 +168,6 @@ CREATE TABLE IF NOT EXISTS seen_items (
     PRIMARY KEY (item_id, watch_id)
 );
 
-CREATE TABLE IF NOT EXISTS category_hints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    keywords TEXT NOT NULL,
-    pct REAL NOT NULL,
-    reason TEXT DEFAULT '',
-    created_at INTEGER NOT NULL
-);
-
 -- Лоти, які користувач прибрав: reason='wrong' — «🚫 Не той товар» (з них
 -- бот вчить слова), 'hidden' — «🙈 Сховати» (той товар, але не підходить:
 -- розбитий екран, пошкодження тощо). І ті, і ті більше не враховуються.
@@ -228,6 +219,22 @@ CREATE TABLE IF NOT EXISTS users (
     decided_at INTEGER
 );
 
+"""
+
+
+# Індекси: без них кожен екран і кожна перевірка переглядають усю таблицю
+# спостережень, яка росте на тисячі рядків щодня. Створюються один раз.
+INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_obs_watch_status ON listing_obs (watch_id, status, gone_at);
+CREATE INDEX IF NOT EXISTS idx_obs_sold_check ON listing_obs (sold_check, gone_at);
+CREATE INDEX IF NOT EXISTS idx_obs_item ON listing_obs (item_id);
+CREATE INDEX IF NOT EXISTS idx_obs_last_seen ON listing_obs (last_seen);
+CREATE INDEX IF NOT EXISTS idx_disc_candidate ON discovery_obs (candidate, status, gone_at);
+CREATE INDEX IF NOT EXISTS idx_disc_sold_check ON discovery_obs (sold_check, gone_at);
+CREATE INDEX IF NOT EXISTS idx_disc_item ON discovery_obs (item_id);
+CREATE INDEX IF NOT EXISTS idx_deals_watch ON deals (watch_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_seen_watch ON seen_items (watch_id, item_id);
+CREATE INDEX IF NOT EXISTS idx_watches_chat ON watches (chat_id, active);
 """
 
 
@@ -344,13 +351,7 @@ def init_db():
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")
 
-        row = conn.execute("SELECT COUNT(*) AS c FROM category_hints").fetchone()
-        if row["c"] == 0:
-            for keywords, pct, reason in SEED_CATEGORY_HINTS:
-                conn.execute(
-                    "INSERT INTO category_hints (keywords, pct, reason, created_at) VALUES (?, ?, ?, ?)",
-                    (keywords, pct, reason, int(time.time())),
-                )
+        conn.executescript(INDEXES)
 
 
 # ---------- users / доступ ----------
@@ -415,7 +416,7 @@ def list_users(status=None):
 
 # ---------- watches ----------
 
-def add_watch(chat_id, label, query, exclude, condition_ids, discount_threshold_pct,
+def add_watch(chat_id, label, query, exclude, condition_ids, discount_threshold_pct=DEFAULT_DISCOUNT_THRESHOLD_PCT,
               category_id="", category_name="", min_price=0, require_spec=None, required_aspect=None,
               categories=None):
     if categories:
@@ -473,6 +474,28 @@ def remove_watch(watch_id, chat_id):
         conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
+def mark_market_stale(watch_id):
+    """Статистика лишається, але найближчий цикл перерахує ринок заново (≤5 хв)."""
+    with get_conn() as conn:
+        conn.execute("UPDATE market_stats SET updated_at = 0 WHERE watch_id = ?", (watch_id,))
+
+
+def prune_listing_obs(watch_id, min_price=0, drop_unspecified=False):
+    """Прибирає з історії товару лише те, що не проходить його НОВІ фільтри
+    (решта спостережень і продажів лишається). Повертає кількість прибраних."""
+    conds, params = [], [watch_id]
+    if min_price:
+        conds.append("price < ?")
+        params.append(min_price)
+    if drop_unspecified:
+        conds.append("COALESCE(spec_group, 'unspecified') = 'unspecified'")
+    if not conds:
+        return 0
+    with get_conn() as conn:
+        return conn.execute(
+            f"DELETE FROM listing_obs WHERE watch_id = ? AND ({' OR '.join(conds)})", params).rowcount
+
+
 def reset_watch_market(watch_id):
     """Після зміни фільтрів (категорія, мін. ціна, стан, виключені слова)
     стара статистика й спостереження стосуються вже іншої вибірки."""
@@ -483,12 +506,6 @@ def reset_watch_market(watch_id):
         conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
-def update_threshold(watch_id, chat_id, new_pct):
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE watches SET discount_threshold_pct = ? WHERE id = ? AND chat_id = ?",
-            (new_pct, watch_id, chat_id),
-        )
 
 
 def update_watch_exclude(watch_id, chat_id, exclude_text):
@@ -1130,22 +1147,8 @@ def save_category_aspects(category_id, aspects):
 
 # ---------- категорії-підказки (запасна підказка порогу, коли eBay недоступний) ----------
 
-def list_category_hints():
-    with get_conn() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM category_hints ORDER BY id").fetchall()]
 
 
-def find_threshold_suggestion(query: str):
-    q_lower = query.lower()
-    for hint in list_category_hints():
-        keywords = [k.strip() for k in hint["keywords"].split(",") if k.strip()]
-        for kw in keywords:
-            if kw in q_lower:
-                return hint["pct"], hint["reason"]
-    return (
-        DEFAULT_DISCOUNT_THRESHOLD_PCT,
-        "для цього товару немає готової підказки в базі, тому запропоновано типове значення",
-    )
 
 
 # ---------- deals ----------

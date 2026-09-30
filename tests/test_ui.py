@@ -2,6 +2,7 @@
 Екрани й кнопки бота без Telegram: список товарів, картка товару, гортання
 оголошень, «🙈 Сховати» / «❌ Інший товар», головне меню, панель без дублів.
 """
+from conftest import patch_ui
 import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
@@ -55,7 +56,7 @@ def make_context():
 @pytest.fixture
 def screen(monkeypatch):
     s = Screen()
-    monkeypatch.setattr(handlers, "show_panel", s)
+    patch_ui(monkeypatch, "show_panel", s)
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
     return s
 
@@ -161,8 +162,8 @@ def _fake_ebay_pages(monkeypatch, total=250, every=2):
         stats["raw"] = len(page)
         return [dict(p) for p in page if every and int(p["item_id"][1:]) % every == 0]
 
-    monkeypatch.setattr(handlers, "search_in_categories", fake_search)
-    monkeypatch.setattr(handlers, "_annotate_items", lambda items, **kw: items)
+    patch_ui(monkeypatch, "search_in_categories", fake_search)
+    patch_ui(monkeypatch, "_annotate_items", lambda items, **kw: items)
     return calls
 
 
@@ -238,13 +239,14 @@ def test_hide_from_deal_notification(screen):
 def test_owner_menu_has_refresh_button(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: True)
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
-    assert labels == ["🔥 Вигідні пропозиції", "➕ Додати товар", "📦 Мої товари", "💡 Що перепродавати", "🔄 Оновити запити", "💰 Оновити ціни", "🔐 Акаунт eBay"]
+    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати",
+                      "🔄 Оновити запити", "💰 Оновити ціни", "⚙️ Налаштування"]
 
 
 def test_regular_user_menu_has_no_owner_buttons(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: False)
     labels = [b.text for r in panel.build_main_menu(2).inline_keyboard for b in r]
-    assert labels == ["🔥 Вигідні пропозиції", "➕ Додати товар", "📦 Мої товари", "💡 Що перепродавати"]
+    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати"]
 
 
 def _panel_context(panel_id=10, edit_error=None):
@@ -297,22 +299,6 @@ def test_refresh_usage_button_fetches_limits(monkeypatch):
 
 # ---------- сповіщення ----------
 
-def test_grouped_deals_header_and_buttons(monkeypatch):
-    sent = []
-
-    async def fake_notify(app, chat_id, text, reply_markup=None, parse_mode=None):
-        sent.append((text, reply_markup))
-
-    monkeypatch.setattr(notifications, "notify", fake_notify)
-    w = {"chat_id": 1, "label": "PS5", "id": 1}
-    stat = {"sale_price": 450, "median_price": 480, "sale_source": "x"}
-    deals = [(n, {"title": f"PS5 nr{n}", "total_price": 300, "suspicious": False, "has_best_offer": False,
-                  "spec_group": "825GB", "url": "https://x"}, stat) for n in range(1, 7)]
-    run(notifications._send_grouped_deals(MagicMock(), w, deals))
-    text, markup = sent[0]
-    assert text.startswith("🔥 Знайдено 6 вигідних пропозицій: PS5")
-    first_row = [b.text for b in markup.inline_keyboard[0]]
-    assert first_row == ["🙈 #1 сховати", "❌ #1 інший товар"]
 
 
 # ---------- додавання товару: крок характеристик ----------
@@ -331,7 +317,7 @@ ASPECTS = [{"name": "Speicherkapazität", "required": False}, {"name": "Plattfor
 
 
 def test_after_categories_bot_asks_for_required_aspects(screen, monkeypatch):
-    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
+    patch_ui(monkeypatch, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
     ctx = _new_watch_context()
     state = run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
     assert state == handlers.ASK_ASPECT
@@ -340,8 +326,8 @@ def test_after_categories_bot_asks_for_required_aspects(screen, monkeypatch):
 
 
 def test_chosen_aspects_are_saved_with_new_watch(screen, monkeypatch):
-    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
-    monkeypatch.setattr(handlers, "suggest_min_price", lambda q, ids: None)  # без кроку мін. ціни
+    patch_ui(monkeypatch, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
+    patch_ui(monkeypatch, "suggest_min_price", lambda q, ids: None)  # без кроку мін. ціни
     ctx = _new_watch_context()
     run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
     run(handlers.addwatch_aspect_choice(make_update("nasp:0"), ctx))
@@ -354,8 +340,8 @@ def test_chosen_aspects_are_saved_with_new_watch(screen, monkeypatch):
 
 @pytest.mark.parametrize("choice,require_spec", [("auto", None), ("none", 0)])
 def test_auto_and_none_aspect_choices(screen, monkeypatch, choice, require_spec):
-    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
-    monkeypatch.setattr(handlers, "suggest_min_price", lambda q, ids: None)
+    patch_ui(monkeypatch, "aspect_options_for_categories", lambda ids, q: list(ASPECTS))
+    patch_ui(monkeypatch, "suggest_min_price", lambda q, ids: None)
     ctx = _new_watch_context()
     run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
     run(handlers.addwatch_aspect_choice(make_update(f"nasp:{choice}"), ctx))
@@ -364,8 +350,8 @@ def test_auto_and_none_aspect_choices(screen, monkeypatch, choice, require_spec)
 
 
 def test_aspect_step_skipped_when_ebay_has_none(screen, monkeypatch):
-    monkeypatch.setattr(handlers, "aspect_options_for_categories", lambda ids, q: [])
-    monkeypatch.setattr(handlers, "suggest_min_price", lambda q, ids: (200, 500, 30))
+    patch_ui(monkeypatch, "aspect_options_for_categories", lambda ids, q: [])
+    patch_ui(monkeypatch, "suggest_min_price", lambda q, ids: (200, 500, 30))
     state = run(handlers.addwatch_category_choice(make_update("cat:done"), _new_watch_context()))
     assert state == handlers.ASK_MIN_PRICE_CHOICE
 

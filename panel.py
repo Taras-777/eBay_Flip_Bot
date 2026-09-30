@@ -49,7 +49,7 @@ MENU_LABELS = {
     "users": "👥 Користувачі",
     "refresh_usage": "🔄 Оновити запити",
     "refresh_prices": "💰 Оновити ціни",
-    "ebay_account": "🔐 Акаунт eBay",
+    "ebay_account": "⚙️ Налаштування",
 }
 
 
@@ -117,7 +117,6 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
     deals_label = MENU_LABELS["deals"] + (f" · 🆕 {unseen}" if unseen else "")
     rows = [
         [InlineKeyboardButton(deals_label, callback_data="deals:0")],
-        [btn("addwatch")],
         [btn("list")],
         [btn("discover")],
     ]

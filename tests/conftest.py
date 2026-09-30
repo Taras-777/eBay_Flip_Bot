@@ -88,3 +88,19 @@ def listing(item_id, title, price, condition_id="3000", created_ago_s=60, **extr
     }
     data.update(extra)
     return data
+
+
+SCREEN_MODULES = ("handlers", "screen_common", "screen_addwatch", "screen_watch", "screen_sales",
+                  "screen_listings", "screen_deals", "screen_discover", "screen_check")
+
+
+def patch_ui(monkeypatch, name, value):
+    """Підмінити name в усіх модулях екранів, де воно є (код екранів розділено на screen_*.py)."""
+    import importlib
+    patched = False
+    for mod_name in SCREEN_MODULES:
+        module = importlib.import_module(mod_name)
+        if name in vars(module):
+            monkeypatch.setattr(module, name, value)
+            patched = True
+    assert patched, f"{name} немає в жодному модулі екранів"

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Точка входу: створення бота, реєстрація обробників і запуск.
 """
 
@@ -25,6 +25,7 @@ from account import (
     ebay_account_disconnect,
     ebay_account_interrupt,
     ebay_account_start,
+    backup_send_callback,
 )
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from handlers import (
@@ -51,6 +52,7 @@ from handlers import (
     all_configs_callback,
     sales_callback,
     sales_reject_callback,
+    sales_check_now_callback,
     deals_callback,
     min_profit_callback,
     deal_inbox_action_callback,
@@ -207,6 +209,7 @@ def main():
     app.add_handler(check_conv)
     app.add_handler(account_conv)
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
+    app.add_handler(CallbackQueryHandler(backup_send_callback, pattern="^backup:send$"))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("stats", cmd_stats))
 
@@ -243,6 +246,7 @@ def main():
     app.add_handler(CallbackQueryHandler(all_configs_callback, pattern="^configs:"))
     app.add_handler(CallbackQueryHandler(sales_callback, pattern="^sales:"))
     app.add_handler(CallbackQueryHandler(sales_reject_callback, pattern="^srej:"))
+    app.add_handler(CallbackQueryHandler(sales_check_now_callback, pattern="^schk:"))
     app.add_handler(CallbackQueryHandler(deals_callback, pattern="^deals:"))
     app.add_handler(CallbackQueryHandler(min_profit_callback, pattern="^mprof:"))
     app.add_handler(CallbackQueryHandler(deal_inbox_action_callback, pattern="^dact:"))

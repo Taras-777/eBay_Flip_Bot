@@ -9,7 +9,7 @@ import access
 import db
 import discovery
 import handlers
-from conftest import listing
+from conftest import listing, patch_ui
 
 
 def market(title, prices, prefix="x", age_s=3600):
@@ -84,9 +84,9 @@ def _screen(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r] if reply_markup else []))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
-    monkeypatch.setattr(handlers, "is_owner", lambda uid: True)
+    patch_ui(monkeypatch, "is_owner", lambda uid: True)
     return shown
 
 

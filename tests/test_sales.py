@@ -7,7 +7,7 @@ import db
 import sales
 import market
 import scheduler
-from conftest import listing
+from conftest import listing, patch_ui
 from test_scheduler import consoles, make_app
 
 DAY = 86400
@@ -158,12 +158,12 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append(text)
 
-    monkeypatch.setattr(handlers, "is_owner", lambda uid: True)
-    monkeypatch.setattr(handlers, "_recalculate_watch_medians", fake_recalc)
-    monkeypatch.setattr(handlers, "fetch_browse_rate_limit", lambda: fetched.append(1))
-    monkeypatch.setattr(handlers, "browse_budget_left", lambda: 4000)
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
-    monkeypatch.setattr(handlers, "main_menu_text", lambda uid: "MENU")
+    patch_ui(monkeypatch, "is_owner", lambda uid: True)
+    patch_ui(monkeypatch, "_recalculate_watch_medians", fake_recalc)
+    patch_ui(monkeypatch, "fetch_browse_rate_limit", lambda: fetched.append(1))
+    patch_ui(monkeypatch, "browse_budget_left", lambda: 4000)
+    patch_ui(monkeypatch, "show_panel", fake_show)
+    patch_ui(monkeypatch, "main_menu_text", lambda uid: "MENU")
     upd = MagicMock()
     upd.effective_chat.id = upd.effective_user.id = 1
     upd.callback_query.answer = AsyncMock()
@@ -208,7 +208,7 @@ def _screen(monkeypatch):
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r]))
 
-    monkeypatch.setattr(handlers, "show_panel", fake_show)
+    patch_ui(monkeypatch, "show_panel", fake_show)
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
 
     def press(data):
