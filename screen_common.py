@@ -8,7 +8,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from settings import LOCAL_TZ
-from textparse import category_label, is_accessory_category, plural
+from textparse import aspect_label, category_label, is_accessory_category, plural
 
 
 def _ebay_configured():
@@ -41,7 +41,9 @@ def _aspect_keyboard(watch_id, options, selected, extra_rows=None):
     for idx, opt in enumerate(options):
         mark = "☑️" if opt["name"] in selected else "⬜"
         badge = " ❗" if opt.get("required") else ""
-        rows.append([InlineKeyboardButton(f"{mark} {opt['name'][:36]}{badge}", callback_data=f"tglasp:{watch_id}:{idx}")])
+        shown = aspect_label(opt["name"])
+        shown = shown if len(shown) <= 36 else shown[:35] + "…"
+        rows.append([InlineKeyboardButton(f"{mark} {shown}{badge}", callback_data=f"tglasp:{watch_id}:{idx}")])
     rows.append([InlineKeyboardButton(f"💾 Зберегти вибір ({len(selected)})", callback_data=f"saveasp:{watch_id}")])
     rows.append([
         InlineKeyboardButton("🤖 Авто", callback_data=f"setasp:{watch_id}:auto"),

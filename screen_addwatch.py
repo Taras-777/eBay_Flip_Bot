@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import DEFAULT_CONDITION_IDS, MIN_PRICE_SUGGESTION_PCT, log
-from textparse import category_label, plural
+from textparse import aspect_label, aspects_label, category_label, plural
 from db import (
     add_watch,
     encode_required_aspects,
@@ -238,7 +238,9 @@ async def _render_new_watch_aspects(update, context):
     for idx, opt in enumerate(options):
         mark = "☑️" if opt["name"] in selected else "⬜"
         badge = " ❗" if opt.get("required") else ""
-        rows.append([InlineKeyboardButton(f"{mark} {opt['name'][:36]}{badge}", callback_data=f"nasp:{idx}")])
+        shown = aspect_label(opt["name"])
+        shown = shown if len(shown) <= 36 else shown[:35] + "…"
+        rows.append([InlineKeyboardButton(f"{mark} {shown}{badge}", callback_data=f"nasp:{idx}")])
     rows.append([InlineKeyboardButton(f"💾 Зберегти вибір ({len(selected)})", callback_data="nasp:save")])
     rows.append([
         InlineKeyboardButton("🤖 Авто", callback_data="nasp:auto"),
@@ -387,7 +389,7 @@ async def _finalize_watch(update, context):
         extras.append(f"💶 Мінімальна ціна: {min_price:.0f}€")
     aspects = get_required_aspects({"required_aspect": required_aspect})
     if aspects:
-        extras.append(f"🧾 Обов'язкові характеристики: {html.escape(', '.join(aspects))}")
+        extras.append(f"🧾 Обов'язкові характеристики: {html.escape(aspects_label(aspects), quote=False)}")
     extras_txt = ("\n" + "\n".join(extras)) if extras else ""
 
     user_id = update.effective_user.id

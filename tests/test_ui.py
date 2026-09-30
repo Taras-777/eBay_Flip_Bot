@@ -321,7 +321,7 @@ def test_after_categories_bot_asks_for_required_aspects(screen, monkeypatch):
     state = run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
     assert state == handlers.ASK_ASPECT
     assert "обов'язкові характеристики" in screen.text
-    assert screen.rows[0] == ["⬜ Speicherkapazität"] and screen.rows[1] == ["⬜ Plattform ❗"]
+    assert screen.rows[0] == ["⬜ Обсяг пам'яті"] and screen.rows[1] == ["⬜ Платформа ❗"]
 
 
 def test_chosen_aspects_are_saved_with_new_watch(screen, monkeypatch):
@@ -330,11 +330,11 @@ def test_chosen_aspects_are_saved_with_new_watch(screen, monkeypatch):
     ctx = _new_watch_context()
     run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
     run(handlers.addwatch_aspect_choice(make_update("nasp:0"), ctx))
-    assert screen.rows[0] == ["☑️ Speicherkapazität"]
+    assert screen.rows[0] == ["☑️ Обсяг пам'яті"]
     run(handlers.addwatch_aspect_choice(make_update("nasp:save"), ctx))
     watch = db.list_watches(chat_id=1)[0]
     assert db.get_required_aspects(watch) == ["Speicherkapazität"]
-    assert "Обов'язкові характеристики: Speicherkapazität" in screen.text
+    assert "Обов'язкові характеристики: Обсяг пам'яті (Speicherkapazität)" in screen.text
 
 
 @pytest.mark.parametrize("choice,require_spec", [("auto", None), ("none", 0)])
@@ -361,3 +361,41 @@ def test_refresh_prices_button_on_watch_screen_not_in_edit(screen):
     assert "🔄 Оновити ціни" in screen.buttons()
     run(handlers.edit_menu_callback(make_update(f"editw:{wid}"), make_context()))
     assert "🔄 Оновити ціни" not in screen.buttons()
+
+
+# ---------- 🧠 вивчені слова ----------
+
+def _card_buttons(screen):
+    return [b for row in screen.rows for b in row]
+
+
+def test_learned_words_button_and_removal(screen):
+    wid = db.add_watch(1, "PlayStation 4", "PlayStation 4", "ps3, cfw", "", 15)
+    run(handlers.watch_details_callback(make_update(f"watch_details:{wid}"), make_context()))
+    assert not any(b.startswith("🧠") for b in _card_buttons(screen))    # слів немає — кнопки немає
+
+    db.set_learned_word(wid, "ps3", "excluded")
+    db.set_learned_word(wid, "cfw", "excluded")
+    db.set_learned_word(wid, "old", "ignored")                          # скасоване — не рахується
+    run(handlers.watch_details_callback(make_update(f"watch_details:{wid}"), make_context()))
+    assert "🧠 Вивчені слова (2)" in _card_buttons(screen)
+
+    run(handlers.learned_words_callback(make_update(f"lwords:{wid}"), make_context()))
+    assert "🗑 cfw" in _card_buttons(screen) and "🗑 ps3" in _card_buttons(screen)
+
+    run(handlers.learned_words_callback(make_update(f"lwdel:{wid}:0"), make_context()))   # cfw
+    assert "«cfw» прибрано" in screen.text and "🗑 cfw" not in _card_buttons(screen)
+    assert "cfw" not in (db.get_watch(wid, 1)["exclude"] or "")
+    assert db.get_learned_words(wid)["cfw"] == "ignored"
+
+    run(handlers.learned_words_callback(make_update(f"lwdel:{wid}:0"), make_context()))   # ps3 — останнє
+    assert "📌" in screen.text and not any(b.startswith("🧠") for b in _card_buttons(screen))
+
+
+def test_aspect_names_translated_for_display():
+    from textparse import aspect_label, aspects_label
+    assert aspect_label("Speicherkapazität") == "Обсяг пам'яті"
+    assert aspect_label("arbeitsspeichergröße") == "Оперативна пам'ять (RAM)"     # регістр не важливий
+    assert aspect_label("Plattform", with_original=True) == "Платформа (Plattform)"
+    assert aspect_label("Unbekanntes Merkmal") == "Unbekanntes Merkmal"          # без перекладу — як є
+    assert aspects_label(["Marke", "Modell"]) == "Бренд (Marke), Модель (Modell)"

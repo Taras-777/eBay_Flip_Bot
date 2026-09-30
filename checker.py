@@ -12,6 +12,7 @@ from settings import (
     MIN_SELLER_FEEDBACK_SCORE,
 )
 from textparse import (
+    aspects_label,
     COMPAT_ASPECTS,
     CURRENCY_TO_EUR,
     _aspect_satisfied_by_title,
@@ -157,7 +158,7 @@ def check_listing(watch, text):
     if compat:
         checks.append((FAIL, f"У характеристиках є «{compat[0]}» — так позначають аксесуари"))
     elif missing:
-        checks.append((FAIL, "Не заповнені обов'язкові характеристики: " + ", ".join(missing)))
+        checks.append((FAIL, "Не заповнені обов'язкові характеристики: " + aspects_label(missing)))
     elif not required and watch_requires_spec(watch) and spec == "unspecified":
         checks.append((FAIL, "Невідомий обсяг пам'яті — ні в назві, ні в характеристиках"))
     else:

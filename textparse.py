@@ -281,6 +281,157 @@ def category_label(name, with_original=False):
     return f"{uk} ({name})" if with_original else uk
 
 
+# Характеристики eBay.de (item specifics) українською — лише для показу.
+# Бот порівнює й зберігає оригінальні німецькі назви, тож переклад нічого не ламає.
+ASPECT_NAMES_UK = {
+    # загальні
+    "marke": "Бренд",
+    "modell": "Модель",
+    "produktart": "Тип товару",
+    "typ": "Тип",
+    "produktlinie": "Лінійка",
+    "produktreihe": "Лінійка",
+    "serie": "Серія",
+    "variante": "Варіант",
+    "edition": "Видання",
+    "farbe": "Колір",
+    "herstellerfarbe": "Колір (від виробника)",
+    "zustand": "Стан",
+    "herstellernummer": "Номер виробника (MPN)",
+    "herstellungsland und -region": "Країна виробництва",
+    "herstellungsjahr": "Рік виробництва",
+    "erscheinungsjahr": "Рік випуску",
+    "veröffentlichungsjahr": "Рік випуску",
+    "release-jahr": "Рік випуску",
+    "eigenschaften": "Особливості",
+    "besonderheiten": "Особливості",
+    "merkmale": "Особливості",
+    "lieferumfang": "Комплектація",
+    "set enthält": "Комплектація",
+    "bundle-beschreibung": "Опис комплекту",
+    "modifizierter artikel": "Модифікований товар",
+    "modifikationsbeschreibung": "Опис модифікації",
+    "herstellergarantie": "Гарантія виробника",
+    "material": "Матеріал",
+    "größe": "Розмір",
+    "gewicht": "Вага",
+    "artikelgewicht": "Вага",
+    "abmessungen": "Розміри",
+    "stil": "Стиль",
+    "formfaktor": "Форм-фактор",
+    "kapazität": "Ємність",
+    "leistung": "Потужність",
+    "spannung": "Напруга",
+    "energieeffizienzklasse": "Клас енергоефективності",
+    "kompatible marke": "Сумісний бренд",
+    "kompatibles modell": "Сумісна модель",
+    "kompatibles betriebssystem": "Сумісна ОС",
+    "kompatible plattform": "Сумісна платформа",
+    # пам'ять і начинка
+    "speicherkapazität": "Обсяг пам'яті",
+    "speichergröße": "Обсяг пам'яті",
+    "speichertyp": "Тип пам'яті",
+    "arbeitsspeichergröße": "Оперативна пам'ять (RAM)",
+    "arbeitsspeicher": "Оперативна пам'ять (RAM)",
+    "ram-größe": "Оперативна пам'ять (RAM)",
+    "festplattenkapazität": "Обсяг диска",
+    "ssd-festplattenkapazität": "Обсяг SSD",
+    "festplattentyp": "Тип диска",
+    "speicherkartentyp": "Тип карти пам'яті",
+    "prozessor": "Процесор",
+    "prozessortyp": "Процесор",
+    "prozessorhersteller": "Виробник процесора",
+    "prozessorgeschwindigkeit": "Частота процесора",
+    "taktfrequenz": "Частота",
+    "anzahl der prozessorkerne": "Кількість ядер",
+    "anzahl der kerne": "Кількість ядер",
+    "grafikprozessor": "Відеокарта",
+    "grafikkarte": "Відеокарта",
+    "gpu": "Відеокарта",
+    "grafikverarbeitungstyp": "Тип графіки",
+    "chipsatz-hersteller": "Виробник чипсета",
+    "chipsatz/gpu-modell": "Модель GPU",
+    "betriebssystem": "Операційна система",
+    "betriebssystemversion": "Версія ОС",
+    "betriebssystem-edition": "Редакція ОС",
+    "optisches laufwerk": "Оптичний привід",
+    "laufwerk": "Привід",
+    "anschlüsse": "Роз'єми",
+    "anschluss": "Роз'єм",
+    "schnittstelle": "Інтерфейс",
+    "konnektivität": "Підключення",
+    "verbindung": "Підключення",
+    "tastaturlayout": "Розкладка клавіатури",
+    "tastatursprache": "Мова клавіатури",
+    # екран
+    "bildschirmgröße": "Діагональ екрана",
+    "bildschirmdiagonale": "Діагональ екрана",
+    "displaygröße": "Діагональ екрана",
+    "maximale auflösung": "Макс. роздільна здатність",
+    "auflösung": "Роздільна здатність",
+    "bildschirmauflösung": "Роздільна здатність екрана",
+    "bildschirmtechnologie": "Технологія екрана",
+    "displaytechnologie": "Технологія екрана",
+    "displaytyp": "Тип екрана",
+    "bildwiederholfrequenz": "Частота оновлення",
+    "seitenverhältnis": "Співвідношення сторін",
+    # телефони й планшети
+    "netzwerk": "Мережа (оператор)",
+    "mobilfunkstandard": "Стандарт зв'язку",
+    "mobilfunkgeneration": "Покоління мережі",
+    "netzwerkgeneration": "Покоління мережі",
+    "sperrstatus": "Блокування (SIM-lock)",
+    "simlock": "Блокування (SIM-lock)",
+    "anzahl der sim-kartensteckplätze": "Кількість SIM",
+    "sim-kartensteckplatz": "Слот SIM",
+    "kamera-auflösung": "Роздільна здатність камери",
+    "kameraauflösung": "Роздільна здатність камери",
+    "hauptkamera-auflösung": "Основна камера",
+    "akkukapazität": "Ємність акумулятора",
+    "akkulaufzeit": "Час роботи від батареї",
+    "akkuzustand": "Стан акумулятора",
+    "zustand des akkus": "Стан акумулятора",
+    "wasserdichtigkeit": "Водозахист",
+    "wasserdicht": "Водозахист",
+    # консолі й ігри
+    "plattform": "Платформа",
+    "regionalcode": "Регіон",
+    "region": "Регіон",
+    "anzahl der controller": "Кількість контролерів",
+    "anzahl der enthaltenen controller": "Кількість контролерів",
+    "enthaltene spiele": "Ігри в комплекті",
+    "enthaltenes spiel": "Гра в комплекті",
+    # фото й аудіо
+    "effektive megapixel": "Мегапікселі",
+    "megapixel": "Мегапікселі",
+    "kameratyp": "Тип камери",
+    "objektivbajonett": "Байонет",
+    "objektivanschluss": "Байонет",
+    "brennweite": "Фокусна відстань",
+    "sensorgröße": "Розмір матриці",
+    "geräuschunterdrückung": "Шумозаглушення",
+    "aktive geräuschunterdrückung": "Активне шумозаглушення",
+    "kopfhörer-stil": "Тип навушників",
+    # годинники
+    "gehäusegröße": "Розмір корпусу",
+    "gehäusematerial": "Матеріал корпусу",
+    "armbandmaterial": "Матеріал ремінця",
+}
+
+
+def aspect_label(name, with_original=False):
+    """Назва характеристики українською (з німецьким оригіналом у дужках за потреби),
+    якщо переклад є, інакше — оригінал."""
+    uk = ASPECT_NAMES_UK.get((name or "").strip().lower())
+    if not uk:
+        return name
+    return f"{uk} ({name})" if with_original else uk
+
+
+def aspects_label(names, with_original=True):
+    return ", ".join(aspect_label(n, with_original) for n in names)
+
+
 def is_accessory_category(name):
     lowered = (name or "").lower()
     return any(word in lowered for word in ACCESSORY_CATEGORY_WORDS)

@@ -19,11 +19,13 @@ from settings import (
     log,
 )
 from textparse import (
+    aspects_label,
     CONDITION_LABELS,
     _group_label,
     category_label,
     plural,
 )
+from learning import unlearn_word
 from db import (
     encode_required_aspects,
     get_current_listings,
@@ -162,7 +164,7 @@ def _watch_details_text(watch):
         f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{min_profit:.0f}€</b> (з урахуванням комісії eBay і доставки)",
         f"🗂️ Категорії: {category_txt}",
         f"💶 Мінімальна ціна: {min_price_txt}",
-        (f"🧾 Обов'язкові характеристики: {html.escape(', '.join(get_required_aspects(watch)))}"
+        (f"🧾 Обов'язкові характеристики: {html.escape(aspects_label(get_required_aspects(watch)), quote=False)}"
          if get_required_aspects(watch) else
          "💾 Лише оголошення з відомою пам'яттю: "
          + ("так" if watch_requires_spec(watch) else "ні")
@@ -179,7 +181,7 @@ def _watch_details_text(watch):
             lines.append(f"⏳ У черзі на перевірку «продано?»: <b>{obs['pending']}</b>")
         if obs["withdrawn"]:
             lines.append(f"🚫 Зникли без продажу (не враховуються): {obs['withdrawn']}")
-    learned = sorted(w for w, st in get_learned_words(watch["id"]).items() if st == "excluded")
+    learned = _learned_excluded(watch["id"])
     if learned:
         lines.append(f"🧠 Відсіюю за вивченими словами: {html.escape(', '.join(learned))}")
     if not stats:
@@ -217,8 +219,13 @@ def _watch_details_text(watch):
     return "\n".join(lines)
 
 
+def _learned_excluded(watch_id):
+    return sorted(w for w, st in get_learned_words(watch_id).items() if st == "excluded")
+
+
 async def _show_watch_details(update, context, watch):
     watch_id = watch["id"]
+    learned = _learned_excluded(watch_id)
     rows = [
         [InlineKeyboardButton("🔎 Переглянути оголошення", callback_data=f"view_listings:{watch_id}")],
         [InlineKeyboardButton("🔍 Перевірити оголошення", callback_data=f"chkl:{watch_id}")],
@@ -227,6 +234,11 @@ async def _show_watch_details(update, context, watch):
             InlineKeyboardButton("📈 Продажі", callback_data=f"sales:{watch_id}"),
         ],
         [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")],
+    ]
+    if learned:   # кнопка лише коли є що прибирати
+        rows.append([InlineKeyboardButton(f"🧠 Вивчені слова ({len(learned)})",
+                                          callback_data=f"lwords:{watch_id}")])
+    rows += [
         [
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
             InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
@@ -240,6 +252,49 @@ async def _show_watch_details(update, context, watch):
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode=ParseMode.HTML,
     )
+
+
+async def _show_learned_words(update, context, watch, note=""):
+    words = _learned_excluded(watch["id"])
+    lines = [note] if note else []
+    lines.append(f"🧠 <b>Вивчені слова — {html.escape(watch['label'])}</b>")
+    lines.append("Бот сам вивів ці слова з оголошень, які ти відхилив (❌ Інший товар), і "
+                 "відсіює оголошення з ними. Натисни слово, щоб більше не відсіювати — "
+                 "бот його більше не пропонуватиме.")
+    rows = [[InlineKeyboardButton(f"🗑 {w}", callback_data=f"lwdel:{watch['id']}:{i}")]
+            for i, w in enumerate(words)]
+    rows = [sum(rows[i:i + 2], []) for i in range(0, len(rows), 2)]   # по два в ряд
+    rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch['id']}")])
+    await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+
+
+@require_access
+async def learned_words_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lwords:<watch_id> — список вивчених слів; lwdel:<watch_id>:<номер> — прибрати слово."""
+    query_cb = update.callback_query
+    parts = query_cb.data.split(":")
+    watch = get_watch(int(parts[1]), update.effective_chat.id)
+    if watch is None:
+        await query_cb.answer("Цей товар уже видалено.", show_alert=True)
+        return
+    note = ""
+    if parts[0] == "lwdel":
+        words = _learned_excluded(watch["id"])
+        idx = int(parts[2])
+        if idx >= len(words):
+            await query_cb.answer("Список змінився — онови екран.", show_alert=True)
+        else:
+            word = words[idx]
+            await asyncio.to_thread(unlearn_word, watch["id"], update.effective_chat.id, word)
+            await query_cb.answer(f"🗑 «{word}» більше не відсіюється")
+            note = f"✅ «{html.escape(word)}» прибрано — такі оголошення знову враховуються."
+            watch = get_watch(watch["id"], update.effective_chat.id)
+            if not _learned_excluded(watch["id"]):   # слів не лишилось — назад до картки
+                return await _show_watch_details(update, context, watch)
+    else:
+        await _ack_callback(update)
+    await _show_learned_words(update, context, watch, note=note)
 
 
 @require_access
@@ -328,13 +383,13 @@ async def _render_aspect_picker(update, context, watch):
     watch_id = watch["id"]
     options = context.user_data.get(f"asp_options_{watch_id}") or []
     selected = context.user_data.get(f"asp_selected_{watch_id}") or set()
-    current = ", ".join(get_required_aspects(watch)) or (
+    current = aspects_label(get_required_aspects(watch)) or (
         "авто" if watch.get("require_spec") is None else "без вимоги")
     back_row = [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")]
     await show_panel(
         update, context,
         f"🧾 <b>{html.escape(watch['label'])}: обов'язкові характеристики</b>\n"
-        f"Зараз: {html.escape(current)}\n\n{ASPECT_CHOICE_TEXT}",
+        f"Зараз: {html.escape(current, quote=False)}\n\n{ASPECT_CHOICE_TEXT}",
         reply_markup=_aspect_keyboard(watch_id, options, selected, extra_rows=[back_row]),
         parse_mode=ParseMode.HTML,
     )

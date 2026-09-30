@@ -66,6 +66,9 @@ from screen_watch import (  # noqa: F401
     delwatch_ask_callback,
     delwatch_yes_callback,
     cmd_stats,
+    learned_words_callback,
+    _show_learned_words,
+    _learned_excluded,
 )
 from screen_sales import (  # noqa: F401
     SALES_PER_PAGE,
