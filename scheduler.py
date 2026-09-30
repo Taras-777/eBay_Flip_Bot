@@ -28,6 +28,7 @@ from db import (
     bulk_upsert_seen_items,
     cleanup_old_listing_obs,
     purge_deleted_watches,
+    track_prices,
     cleanup_old_seen_items,
     get_market_stats,
     get_min_profit,
@@ -56,6 +57,7 @@ from sales import is_slow_seller, price_drops, sales_note
 from shared_market import deal_scan
 from netstatus import is_down, mark_down, mark_up
 from deal_check import recheck_deals
+from markdowns import run_markdown_scan
 from backup import daily_backup
 
 
@@ -106,6 +108,8 @@ async def check_one_watch(app: Application, w: dict):
 
         items = await asyncio.to_thread(_deal_scan)
 
+    if items:   # «📉 Знизили ціну»: перша й поточна ціна кожного оголошення
+        await asyncio.to_thread(track_prices, w["id"], items)
     if not items or not stats:
         return
 
@@ -258,6 +262,11 @@ async def scheduler_loop(app: Application):
             task = app.bot_data.get("sold_check_task")
             if task is None or task.done():
                 app.bot_data["sold_check_task"] = asyncio.create_task(asyncio.to_thread(verify_disappeared))
+
+            # «📉 Знизили ціну»: найдешевші оголошення кожного товару раз на кілька годин
+            task = app.bot_data.get("markdown_task")
+            if task is None or task.done():
+                app.bot_data["markdown_task"] = asyncio.create_task(asyncio.to_thread(run_markdown_scan))
 
             # «🔥 Вигідні пропозиції»: чи лоти ще продаються — продані/зняті зникають зі списку
             task = app.bot_data.get("deal_check_task")

@@ -31,6 +31,8 @@ async def _return_to_screen(update, context, action, note):
     watch = get_watch(p["watch_id"], chat_id) if p.get("watch_id") else None
     if screen == "deals":
         return await _render_deals(update, context, p.get("page", 0), note=note)
+    if screen == "markdowns":
+        return await _render_markdowns(update, context, p.get("page", 0), note=note)
     if screen == "users":
         return await _show_users(update, context, note=raw)
     if watch is None:
@@ -77,6 +79,7 @@ async def undo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Імпорти з інших екранів — унизу, щоб модулі могли посилатися один на одного
 from access import _show_users  # noqa: E402
 from screen_deals import _render_deals  # noqa: E402
+from screen_markdowns import _render_markdowns  # noqa: E402
 from screen_listings import _listing_state_key, _render_listing_panel  # noqa: E402
 from screen_sales import _show_sales  # noqa: E402
 from screen_watch import _show_learned_words, _show_watch_details  # noqa: E402

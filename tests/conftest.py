@@ -91,7 +91,7 @@ def listing(item_id, title, price, condition_id="3000", created_ago_s=60, **extr
 
 
 SCREEN_MODULES = ("handlers", "screen_common", "screen_addwatch", "screen_watch", "screen_sales",
-                  "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_undo")
+                  "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_undo", "screen_markdowns")
 
 
 def patch_ui(monkeypatch, name, value):

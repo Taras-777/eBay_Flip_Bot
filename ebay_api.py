@@ -717,6 +717,8 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "condition_id": str(it.get("conditionId") or ""),
                 "cond_group": cond_group,
                 "created_at": _parse_ebay_ts(it.get("itemCreationDate")),
+                # варіантне оголошення (кілька кольорів/обсягів) — ціна стрибає між варіантами
+                "is_variation": bool(it.get("itemGroupHref") or it.get("itemGroupType")),
                 "end_at": _parse_ebay_ts(it.get("itemEndDate")),
                 "seller_feedback_score": feedback_score,
                 "seller_feedback_pct": feedback_pct,

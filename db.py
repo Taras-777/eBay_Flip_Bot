@@ -212,6 +212,26 @@ CREATE TABLE IF NOT EXISTS deals (
     checked_at INTEGER     -- коли востаннє перевіряли, чи воно ще продається
 );
 
+-- «📉 Знизили ціну»: перша й поточна ціна кожного оголошення товару
+CREATE TABLE IF NOT EXISTS price_track (
+    watch_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    title TEXT,
+    url TEXT,
+    cond_group TEXT,
+    spec_group TEXT,
+    listed_at INTEGER,          -- коли оголошення виставили на eBay
+    has_best_offer INTEGER DEFAULT 0,
+    first_price REAL NOT NULL,  -- ціна, коли бот побачив оголошення вперше
+    first_seen INTEGER NOT NULL,
+    price REAL NOT NULL,        -- поточна ціна (з доставкою)
+    min_price REAL NOT NULL,
+    price_changed_at INTEGER,   -- коли ціну востаннє знизили
+    last_seen INTEGER NOT NULL, -- 0 — перевірили: продано чи знято
+    seen_at INTEGER,            -- коли користувач бачив поточну знижку (NULL — нова)
+    PRIMARY KEY (watch_id, item_id)
+);
+
 -- «↩️ Скасувати»: що саме змінила дія, щоб повернути як було
 CREATE TABLE IF NOT EXISTS undo_actions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,6 +270,7 @@ CREATE INDEX IF NOT EXISTS idx_deals_watch ON deals (watch_id, status, created_a
 CREATE INDEX IF NOT EXISTS idx_seen_watch ON seen_items (watch_id, item_id);
 CREATE INDEX IF NOT EXISTS idx_watches_chat ON watches (chat_id, active);
 CREATE INDEX IF NOT EXISTS idx_undo_chat ON undo_actions (chat_id, id);
+CREATE INDEX IF NOT EXISTS idx_track_watch ON price_track (watch_id, last_seen);
 """
 
 
@@ -488,7 +509,7 @@ def find_duplicate_watch(chat_id, query):
 
 
 def _purge_watch_data(conn, watch_id):
-    for table in ("market_stats", "seen_items", "listing_obs", "price_history", "scan_stats"):
+    for table in ("market_stats", "seen_items", "listing_obs", "price_history", "scan_stats", "price_track"):
         conn.execute(f"DELETE FROM {table} WHERE watch_id = ?", (watch_id,))
 
 
@@ -1149,6 +1170,7 @@ def cleanup_old_listing_obs():
         old_day = datetime.fromtimestamp(time.time() - PRICE_HISTORY_DAYS * 86400, LOCAL_TZ).strftime("%Y-%m-%d")
         conn.execute("DELETE FROM price_history WHERE day < ?", (old_day,))
         conn.execute("DELETE FROM item_specs WHERE fetched_at < ?", (cutoff,))
+        conn.execute("DELETE FROM price_track WHERE last_seen < ?", (cutoff,))
         return conn.execute("DELETE FROM listing_obs WHERE last_seen < ?", (cutoff,)).rowcount
 
 
@@ -1410,6 +1432,100 @@ def delete_listing_obs_by_ids(watch_id, item_ids):
             "DELETE FROM listing_obs WHERE watch_id = ? AND item_id = ?",
             [(watch_id, i) for i in item_ids],
         )
+
+
+# ---------- «📉 Знизили ціну» ----------
+
+PRICE_STEP_EUR = 0.5   # дрібні коливання (копійки курсу валют) — не зниження
+
+
+def track_prices(watch_id, items):
+    """Запам'ятовує ціни оголошень: першу, поточну, найнижчу й час останнього зниження.
+    Варіантні оголошення (кілька кольорів/обсягів з різними цінами) не відстежуємо —
+    їхня «ціна» стрибає між варіантами."""
+    now = int(time.time())
+    rows = [(watch_id, it["item_id"], it.get("title"), it.get("url"), it.get("cond_group"),
+             it.get("spec_group", "unspecified"), it.get("created_at"), int(bool(it.get("has_best_offer"))),
+             it["total_price"], now, it["total_price"], it["total_price"], now)
+            for it in items
+            if it.get("item_id") and it.get("total_price") and not it.get("is_variation")]
+    if not rows:
+        return 0
+    with get_conn() as conn:
+        conn.executemany(
+            f"""INSERT INTO price_track (watch_id, item_id, title, url, cond_group, spec_group, listed_at,
+                                        has_best_offer, first_price, first_seen, price, min_price, last_seen)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(watch_id, item_id) DO UPDATE SET
+                 title = excluded.title, url = excluded.url, cond_group = excluded.cond_group,
+                 spec_group = excluded.spec_group, listed_at = COALESCE(price_track.listed_at, excluded.listed_at),
+                 has_best_offer = excluded.has_best_offer, last_seen = excluded.last_seen,
+                 price_changed_at = CASE WHEN excluded.price < price_track.price - {PRICE_STEP_EUR}
+                                         THEN excluded.last_seen ELSE price_track.price_changed_at END,
+                 seen_at = CASE WHEN excluded.price < price_track.price - {PRICE_STEP_EUR}
+                                THEN NULL ELSE price_track.seen_at END,
+                 min_price = MIN(price_track.min_price, excluded.price),
+                 price = excluded.price""",
+            rows,
+        )
+    return len(rows)
+
+
+def get_markdown_candidates(chat_id, min_drop_pct, min_days, fresh_seconds):
+    """Оголошення користувача, які висять ≥ min_days і подешевшали на ≥ min_drop_pct
+    від першої побаченої ціни (без відхилених і тих, що вже в «🔥 Вигідні пропозиції»)."""
+    now = int(time.time())
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT t.*, w.label AS watch_label, w.chat_id FROM price_track t
+               JOIN watches w ON w.id = t.watch_id
+               WHERE w.chat_id = ? AND w.active = 1
+                 AND t.last_seen >= ? AND t.price <= t.first_price * (1 - ? / 100.0)
+                 AND COALESCE(t.listed_at, t.first_seen) <= ?
+                 AND NOT EXISTS (SELECT 1 FROM rejected_items r
+                                 WHERE r.watch_id = t.watch_id AND r.item_id = t.item_id)
+                 AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.watch_id = t.watch_id
+                                 AND d.item_id = t.item_id AND d.status IN ('new', 'bought'))""",
+            (chat_id, now - fresh_seconds, min_drop_pct, now - min_days * 86400),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_track_row(watch_id, item_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM price_track WHERE watch_id = ? AND item_id = ?",
+                           (watch_id, item_id)).fetchone()
+    return dict(row) if row else None
+
+
+def mark_track_seen(keys):
+    """keys: [(watch_id, item_id)] — користувач побачив ці знижки."""
+    with get_conn() as conn:
+        conn.executemany("UPDATE price_track SET seen_at = ? WHERE watch_id = ? AND item_id = ? AND seen_at IS NULL",
+                         [(int(time.time()), w, i) for w, i in keys])
+
+
+def mark_track_gone(watch_id, item_id):
+    """Оголошення продано чи знято — зі «📉» зникає (якщо з'явиться знову — повернеться)."""
+    with get_conn() as conn:
+        conn.execute("UPDATE price_track SET last_seen = 0 WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))
+
+
+def touch_track(watch_id, item_id):
+    with get_conn() as conn:
+        conn.execute("UPDATE price_track SET last_seen = ? WHERE watch_id = ? AND item_id = ?",
+                     (int(time.time()), watch_id, item_id))
+
+
+def get_drop_pct(chat_id):
+    try:
+        return float(get_meta(f"drop_pct:{chat_id}") or settings.PRICE_DROP_PCT)
+    except ValueError:
+        return float(settings.PRICE_DROP_PCT)
+
+
+def set_drop_pct(chat_id, value):
+    set_meta(f"drop_pct:{chat_id}", value)
 
 
 # ---------- «↩️ Скасувати» ----------

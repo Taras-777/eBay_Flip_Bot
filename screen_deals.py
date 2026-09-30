@@ -12,6 +12,7 @@ from settings import MIN_PROFIT_CHOICES, SALES_WINDOW_DAYS
 from learning import hide_item, learned_words_note, reject_and_learn
 from db import (
     get_deal,
+    get_track_row,
     get_inbox_deals,
     mark_deals_seen,
     clear_inbox_deals,
@@ -74,6 +75,11 @@ def _deal_card(n, d, sold=None):
     new = "🆕 " if d["seen_at"] is None else ""
     offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
     warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""
+    track = get_track_row(d["watch_id"], d["item_id"])
+    if track and track["first_price"] >= d["total_price"] * 1.05:
+        cut = (track["first_price"] - d["total_price"]) / track["first_price"] * 100
+        warn += (f"\n📉 Продавець уже знизив ціну на {cut:.0f}% (було {track['first_price']:.0f}€) — "
+                 "ймовірно, погодиться поторгуватись")
     listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
     return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
             f"{html.escape(d['title'][:90])}\n{listed}"
