@@ -8,7 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from settings import MIN_PROFIT_CHOICES, SALES_WINDOW_DAYS
+from settings import LAPTOP_SALES_WINDOW_DAYS, MIN_PROFIT_CHOICES, SALES_WINDOW_DAYS
 from learning import hide_item, learned_words_note, reject_and_learn
 from db import (
     get_deal,
@@ -28,6 +28,7 @@ from panel import _ack_callback, show_panel
 from access import require_access
 from sales import sales_note
 from deal_check import recheck_shown_deals
+from laptops import laptop_warnings
 from undo import record as undo_record, short
 
 
@@ -75,6 +76,8 @@ def _deal_card(n, d, sold=None):
     new = "🆕 " if d["seen_at"] is None else ""
     offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
     warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""
+    for w in laptop_warnings(d["title"]):
+        warn += f"\n{w}"
     track = get_track_row(d["watch_id"], d["item_id"])
     if track and track["first_price"] >= d["total_price"] * 1.05:
         cut = (track["first_price"] - d["total_price"]) / track["first_price"] * 100
@@ -111,7 +114,7 @@ async def _render_deals(update, context, page=0, note=""):
     sold_by_watch = {}
     for i, d in enumerate(deals, 1 + page * DEALS_PER_PAGE):
         if d["watch_id"] not in sold_by_watch:
-            sold_by_watch[d["watch_id"]] = get_sold_listings(d["watch_id"], SALES_WINDOW_DAYS)
+            sold_by_watch[d["watch_id"]] = get_sold_listings(d["watch_id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))
         lines.append(_deal_card(i, d, sold_by_watch[d["watch_id"]]))
         rows.append([
             InlineKeyboardButton(f"✅ {i} Куплено", callback_data=f"dact:buy:{d['id']}:{page}"),

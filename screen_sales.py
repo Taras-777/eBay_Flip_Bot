@@ -15,6 +15,7 @@ from settings import SOLD_LOOKBACK_DAYS, LOCAL_TZ, is_owner
 from textparse import CONDITION_LABELS, _search_tokens, plural
 from learning import learned_words_note, reject_and_learn
 from undo import record as undo_record, short
+from laptops import spec_matches
 from db import (
     get_obs_rows,
     delete_listing_obs_by_ids,
@@ -231,7 +232,7 @@ async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT
 
     rows_db = [
         r for r in get_current_listings(watch_id)
-        if r["cond_group"] == cond and (spec == "*" or r["spec_group"] == spec) and r.get("url")
+        if r["cond_group"] == cond and spec_matches(r["spec_group"], spec) and r.get("url")
     ]
     rows_db.sort(key=lambda r: r["price"])
     top = rows_db

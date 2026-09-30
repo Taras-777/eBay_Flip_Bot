@@ -399,3 +399,4 @@ def test_aspect_names_translated_for_display():
     assert aspect_label("Plattform", with_original=True) == "Платформа (Plattform)"
     assert aspect_label("Unbekanntes Merkmal") == "Unbekanntes Merkmal"          # без перекладу — як є
     assert aspects_label(["Marke", "Modell"]) == "Бренд (Marke), Модель (Modell)"
+

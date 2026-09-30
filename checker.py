@@ -25,6 +25,7 @@ from textparse import (
 )
 from db import get_market_stats, get_min_profit, get_rejected_ids, get_required_aspects, watch_category_ids
 from ebay_api import fetch_item_by_legacy_id, resolve_item_id
+from laptops import is_laptop, laptop_spec, laptop_warnings
 from market import _stat_for_item, estimate_resale_profit, max_buy_price, watch_requires_spec
 
 EU_COUNTRIES = {
@@ -148,9 +149,14 @@ def check_listing(watch, text):
         (a.get("name") or "").strip().lower(): a.get("value") or ""
         for a in item.get("localizedAspects") or []
     }
-    spec = extract_spec_key(title)
-    if spec == "unspecified":
-        spec = spec_key_from_aspects(title, aspects)
+    categories = [c for c in (item.get("categoryPath") or "").split("|") if c]
+    laptop = is_laptop(title, categories, watch["query"])
+    if laptop:
+        spec = laptop_spec(title, aspects, query=watch["query"])
+    else:
+        spec = extract_spec_key(title)
+        if spec == "unspecified":
+            spec = spec_key_from_aspects(title, aspects)
     compat = [name for name in aspects if name in COMPAT_ASPECTS]
     required = get_required_aspects(watch)
     missing = [name for name in required
@@ -163,6 +169,11 @@ def check_listing(watch, text):
         checks.append((FAIL, "Невідомий обсяг пам'яті — ні в назві, ні в характеристиках"))
     else:
         checks.append((OK, f"Характеристики: {spec}" if spec != "unspecified" else "Характеристики: ок"))
+
+    # Ноутбуки: розкладка, блок живлення, BIOS… (лише попередження)
+    if laptop:
+        for warning in laptop_warnings(title, aspects):
+            checks.append((WARN, warning.removeprefix("⚠️ ")))
 
     # 10. Продавець (лише попередження — такі оголошення не відкидаються)
     seller = item.get("seller") or {}

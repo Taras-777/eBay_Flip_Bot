@@ -26,6 +26,8 @@ from settings import (
     SEARCH_RESERVE,
     log,
 )
+from laptops import SEP as LAPTOP_SEP, is_laptop, laptop_spec, spec_matches, spec_parents
+from laptops import needs_aspects as laptop_needs_aspects
 from textparse import (
     COMPAT_ASPECTS,
     _aspect_satisfied_by_title,
@@ -155,12 +157,25 @@ def _annotate_items(items, max_lookups=0, watch=None):
     разу. Мережеві запити — лише з потоку (asyncio.to_thread).
     """
     required = get_required_aspects(watch)
+    watch_laptop = bool(watch) and is_laptop(
+        query=watch.get("query") or "", category_names=[c["name"] for c in get_watch_categories(watch)])
     for it in items:
-        it["spec_group"] = extract_spec_key(it["title"])
+        # Ноутбуки — за класом (відеокарта · процесор · RAM або чип MacBook), решта — за пам'яттю
+        it["laptop"] = watch_laptop or is_laptop(it["title"], it.get("category_names"))
+        it["spec_group"] = (laptop_spec(it["title"], query=(watch or {}).get("query") or "") if it["laptop"]
+                            else extract_spec_key(it["title"]))
         it["aspects"] = None
+
+    def _spec(it, aspects):
+        if it["laptop"]:
+            return laptop_spec(it["title"], aspects, query=(watch or {}).get("query") or "")
+        title_spec = extract_spec_key(it["title"])
+        return title_spec if title_spec != "unspecified" else spec_key_from_aspects(it["title"], aspects)
 
     def needs_aspects(it):
         if ASPECT_LOOKUP_ALL or it["spec_group"] == "unspecified":
+            return True
+        if it["laptop"] and laptop_needs_aspects(it["spec_group"]):
             return True
         return any(not _aspect_satisfied_by_title(name, it["title"]) for name in required)
 
@@ -182,7 +197,12 @@ def _annotate_items(items, max_lookups=0, watch=None):
         entry = cached.get(it["item_id"])
         if entry is not None:
             spec, aspects = entry
-            if it["spec_group"] == "unspecified":
+            if it["laptop"]:
+                if aspects is not None:   # клас ноутбука — завжди заново з назви й характеристик
+                    it["spec_group"] = _spec(it, aspects)
+                    it["aspects"] = aspects
+                    continue
+            elif it["spec_group"] == "unspecified":
                 it["spec_group"] = spec
             if aspects is not None:
                 it["aspects"] = aspects
@@ -211,8 +231,7 @@ def _annotate_items(items, max_lookups=0, watch=None):
     for it, aspects in zip(to_fetch, results):
         if aspects is None:
             continue
-        title_spec = extract_spec_key(it["title"])
-        spec = title_spec if title_spec != "unspecified" else spec_key_from_aspects(it["title"], aspects)
+        spec = _spec(it, aspects)
         save_cached_spec(it["item_id"], spec, aspects)
         it["spec_group"] = spec
         it["aspects"] = aspects
@@ -267,8 +286,12 @@ def _apply_item_filters(w, items):
 
 def _stat_for_item(stats, it):
     """Спершу статистика точної конфігурації; якщо окремої немає (замало
-    оголошень) — загальна група цього стану."""
-    return stats.get((it["cond_group"], it["spec_group"])) or stats.get((it["cond_group"], "*"))
+    оголошень) — найближчий ширший клас ноутбука, і лише тоді загальна група стану."""
+    cond, spec = it["cond_group"], it.get("spec_group") or "unspecified"
+    for key in [spec] + spec_parents(spec):
+        if (cond, key) in stats:
+            return stats[(cond, key)]
+    return stats.get((cond, "*"))
 
 
 def _fetch_market_items(w, max_age=MARKET_CACHE_SECONDS):
@@ -319,11 +342,18 @@ def _compute_group_stats(watch_id, items):
         groups.setdefault((it["cond_group"], "*"), []).append(it["total_price"])
         if it["spec_group"] != "unspecified":
             groups.setdefault((it["cond_group"], it["spec_group"]), []).append(it["total_price"])
+            # Ноутбуки: ще й ширші класи («RTX 4060 · i7 13 gen» → «RTX 4060»), якщо в точному мало
+            for parent in spec_parents(it["spec_group"]):
+                groups.setdefault((it["cond_group"], parent), []).append(it["total_price"])
 
     stats = {}
     for (cond, spec), prices in groups.items():
         # Конфігурація, що містить УСІ лоти цього стану, дублювала б групу "*"
         if spec != "*" and len(prices) == len(groups[(cond, "*")]):
+            continue
+        # Ширший клас, що збігається з одним вужчим, — зайвий дублікат
+        if spec != "*" and any(c == cond and s.startswith(spec + LAPTOP_SEP) and len(p) == len(prices)
+                               for (c, s), p in groups.items()):
             continue
         clean = filter_outliers(prices)
         if len(clean) < MIN_SAMPLE_SIZE:
@@ -370,7 +400,7 @@ def refresh_sale_prices(watch_id):
             source = f"за {plural(len(gone), 'проданим', 'проданими', 'проданими')}"
         elif "продан" in (s["sale_source"] or ""):
             prices = filter_outliers([r["price"] for r in active.get(cond, [])
-                                      if spec == "*" or r["spec_group"] == spec])
+                                      if spec_matches(r["spec_group"], spec)])
             if len(prices) < MIN_SAMPLE_SIZE:
                 continue
             sale, source = percentile(prices, SALE_PRICE_PERCENTILE), "за поточними оголошеннями"

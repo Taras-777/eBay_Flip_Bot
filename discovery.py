@@ -21,6 +21,7 @@ import time
 from collections import Counter
 
 from settings import DEFAULT_CONDITION_IDS, MIN_SOLD_SAMPLE, SEARCH_RESERVE, log
+from laptops import is_laptop, laptop_spec
 from textparse import _search_tokens, _title_matches_search, extract_spec_key, is_accessory_category
 from db import (
     discovery_gone_stats,
@@ -90,6 +91,15 @@ CANDIDATES = [
     ("💻", "MacBook Air M3", "MacBook Air M3", 650),
     ("💻", "MacBook Pro M3", "MacBook Pro M3", 900),
     ("💻", "MacBook Pro M4", "MacBook Pro M4", 1100),
+    # Ігрові й бізнесові ноутбуки: у запиті — відеокарта, бо вона найбільше впливає на ціну
+    ("💻", "Lenovo Legion 5 RTX 4060", "Legion 5 RTX 4060", 600),
+    ("💻", "Lenovo Legion 5 RTX 3060", "Legion 5 RTX 3060", 450),
+    ("💻", "Lenovo LOQ RTX 4050", "Lenovo LOQ RTX 4050", 400),
+    ("💻", "Lenovo LOQ RTX 4060", "Lenovo LOQ RTX 4060", 500),
+    ("💻", "Acer Nitro 5 RTX 3050", "Acer Nitro 5 RTX 3050", 300),
+    ("💻", "Acer Nitro V RTX 4050", "Acer Nitro V RTX 4050", 400),
+    ("💻", "ThinkPad X1 Carbon Gen 10", "ThinkPad X1 Carbon Gen 10", 400),
+    ("💻", "ThinkPad T14 Gen 3", "ThinkPad T14 Gen 3", 300),
     ("🖥", "Mac mini M4", "Mac mini M4", 400),
     # Комп'ютерні комплектуючі
     ("🖥", "RTX 4060", "RTX 4060", 180),
@@ -176,7 +186,8 @@ def analyze_candidate(emoji, name, query, floor):
              and _same_model(it["title"], query)
              and not any(is_accessory_category(n) for n in it.get("category_names") or [])]
     for it in items:
-        it["spec_group"] = extract_spec_key(it["title"])
+        it["spec_group"] = (laptop_spec(it["title"], query=query)
+                            if is_laptop(it["title"], it.get("category_names"), query) else extract_spec_key(it["title"]))
 
     created = [it["created_at"] for it in items if it.get("created_at")]
     update_discovery_obs(name, items, min(created) if created else None)

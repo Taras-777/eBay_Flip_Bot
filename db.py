@@ -1001,8 +1001,10 @@ def get_gone_prices(watch_id, cond_group, spec_group=None):
          + _sold_filter())
     params = [watch_id, since, cond_group]
     if spec_group is not None:
-        q += " AND spec_group = ?"
-        params.append(spec_group)
+        # Ноутбуки: ширший клас («RTX 4060») включає вужчі («RTX 4060 · i7 13 gen · 16GB»)
+        q += " AND (spec_group = ? OR spec_group LIKE ? ESCAPE '\\')"
+        like = spec_group.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + " · %"
+        params += [spec_group, like]
     with get_conn() as conn:
         return [r["price"] for r in conn.execute(q, params).fetchall() if r["price"]]
 

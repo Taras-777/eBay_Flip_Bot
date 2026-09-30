@@ -17,6 +17,7 @@ from settings import (
     LOW_BUDGET_INTERVAL_MINUTES,
     MARKET_REFRESH_MINUTES,
     MAX_SPEC_LOOKUPS_PER_DEAL_SCAN,
+    LAPTOP_SALES_WINDOW_DAYS,
     SALES_WINDOW_DAYS,
     SEARCH_RESERVE,
     THREAD_POOL_SIZE,
@@ -114,7 +115,7 @@ async def check_one_watch(app: Application, w: dict):
         return
 
     new_deals = []
-    sold = get_sold_listings(w["id"], SALES_WINDOW_DAYS)  # як продаються конфігурації
+    sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))  # як продаються конфігурації
     min_profit = get_min_profit(w["chat_id"])
     seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
     seen_updates = []  # записуються одним пакетом наприкінці

@@ -13,9 +13,11 @@ from settings import (
     LOCAL_TZ,
     PRICE_DROP_ALERT_EVERY_DAYS,
     PRICE_DROP_ALERT_PCT,
+    LAPTOP_SALES_WINDOW_DAYS,
     SALES_WINDOW_DAYS,
     SLOW_SELLER_MIN_WATCH_SALES,
 )
+from laptops import SEP as LAPTOP_SEP, spec_matches
 from textparse import plural
 from db import get_meta, get_price_history, set_meta
 
@@ -28,11 +30,17 @@ def days_to_sell(row):
     return (row["gone_at"] - start) / 86400
 
 
-def group_rows(sold, cond, spec, days=SALES_WINDOW_DAYS):
-    """Продажі групи за останні days днів. spec «*» — усі конфігурації стану."""
-    since = time.time() - days * 86400
+def window_days(sold, spec=None):
+    """Вікно продажів: для ноутбуків (класи «RTX 4060 · …») — довше, вони продаються рідше."""
+    specs = [spec] + [r.get("spec_group") for r in sold]
+    return LAPTOP_SALES_WINDOW_DAYS if any(s and LAPTOP_SEP in s for s in specs) else SALES_WINDOW_DAYS
+
+
+def group_rows(sold, cond, spec, days=None):
+    """Продажі групи за останні days днів (за замовчуванням — window_days). spec «*» — усі конфігурації стану."""
+    since = time.time() - (days or window_days(sold, spec)) * 86400
     return [r for r in sold if r["gone_at"] >= since and r["cond_group"] == cond
-            and (spec == "*" or (r["spec_group"] or "unspecified") == spec)]
+            and spec_matches(r["spec_group"], spec)]
 
 
 def summarize(rows):
@@ -63,7 +71,7 @@ def sales_note(sold, cond, spec):
     summary = summarize(group_rows(sold, cond, spec))
     if not summary:
         return ""
-    parts = [f"{plural(summary['count'], 'продаж', 'продажі', 'продажів')} за {SALES_WINDOW_DAYS} днів",
+    parts = [f"{plural(summary['count'], 'продаж', 'продажі', 'продажів')} за {window_days(sold, spec)} днів",
              f"типова ціна {summary['median_price']:.0f}€"]
     speed = speed_text(summary["median_days"])
     if speed:
@@ -76,7 +84,7 @@ def is_slow_seller(sold, cond, spec):
     Без відомої конфігурації не фільтруємо: такі оголошення розкидані по різних групах."""
     if not spec or spec in ("unspecified", "*"):
         return False
-    total = len([r for r in sold if r["gone_at"] >= time.time() - SALES_WINDOW_DAYS * 86400])
+    total = len([r for r in sold if r["gone_at"] >= time.time() - window_days(sold, spec) * 86400])
     return total >= SLOW_SELLER_MIN_WATCH_SALES and not group_rows(sold, cond, spec)
 
 
@@ -113,6 +121,9 @@ def price_drops(watch_id, today=None):
             continue
         # Якщо є окремі конфігурації цього стану — про «усі» не попереджаємо (дублювало б)
         if spec == "*" and any(c == cond and s != "*" for c, s in history):
+            continue
+        # Ширший клас ноутбука, в якого є вужчі, — теж (попереджаємо про точний клас)
+        if spec != "*" and any(c == cond and s != spec and spec_matches(s, spec) for c, s in history):
             continue
         key = f"drop_alert:{watch_id}:{cond}:{spec}"
         if time.time() - float(get_meta(key, "0") or 0) < PRICE_DROP_ALERT_EVERY_DAYS * 86400:
