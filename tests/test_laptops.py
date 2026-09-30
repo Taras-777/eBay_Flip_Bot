@@ -108,3 +108,37 @@ def test_laptop_sales_window_is_longer():
     assert "1 продаж за 30 днів" in sales.sales_note([row], "used", "RTX 4060 · i7 13 gen · 16GB")
     phone = {**row, "spec_group": "256GB"}
     assert sales.sales_note([phone], "used", "256GB") == ""        # у телефонів — як і було, 14 днів
+
+
+# ---------- невідома відеокарта ----------
+
+def test_unknown_gpu_not_grouped_and_not_a_deal(fake_ebay, monkeypatch):
+    import asyncio
+    import scheduler
+    from conftest import listing
+    from test_scheduler import make_app
+    items = _items("GPU ? · i7 14 gen · 16GB", 900, 10) + _items("RTX 4060 · i7 13 gen · 16GB", 900, 8)
+    keys = {spec for _, spec in market._compute_group_stats(1, items)}
+    assert not any(k.startswith("GPU ?") for k in keys) and "*" in keys
+
+    monkeypatch.setattr(market, "ASPECT_LOOKUP_ENABLED", False)   # характеристики ще не прочитані
+    fake_ebay.listings = [listing(f"n{i}", f"MSI Katana 15 i7-13620H RTX 4060 16GB Nr{i}", 900 + i)
+                          for i in range(12)]
+    wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15)
+    app = make_app()
+    asyncio.run(scheduler.check_all_watches(app))
+    fake_ebay.listings = [listing("cheap", "MSI Katana 15 B13VFK Gaming", 300)] + fake_ebay.listings
+    asyncio.run(scheduler.check_all_watches(app))
+    assert db.get_inbox_deals(1)[1] == 0                         # клас невідомий — не пропонуємо
+    assert db.get_seen_items(wid, ["cheap"]) == {}               # і не забуваємо: оцінимо пізніше
+
+
+def test_unknown_gpu_items_read_first(monkeypatch):
+    fetched = []
+    monkeypatch.setattr(market, "fetch_item_aspects", lambda item_id: fetched.append(item_id) or {})
+    monkeypatch.setattr(market, "browse_budget_left", lambda: 5000)
+    wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15)
+    items = [{"item_id": "known", "title": "MSI Katana i7-13620H RTX 4060 16GB"},
+             {"item_id": "unknown", "title": "MSI Katana 15 B13VFK"}]
+    market._annotate_items(items, max_lookups=1, watch=db.get_watch(wid, 1))
+    assert fetched == ["unknown"]

@@ -39,6 +39,7 @@ from db import (
     watch_category_ids,
 )
 from ebay_api import _watch_search_kwargs, browse_budget_left, search_in_categories
+from laptops import UNKNOWN_GPU
 from market import _annotate_items, _apply_item_filters, _stat_for_item, estimate_resale_profit, max_buy_price
 
 PAGE_SIZE = 200
@@ -96,6 +97,8 @@ def markdown_list(chat_id):
         if r["watch_id"] not in stats_by_watch:
             stats_by_watch[r["watch_id"]] = {(s["cond_group"], s["spec_group"]): s
                                              for s in get_market_stats(r["watch_id"])}
+        if (r["spec_group"] or "").startswith(UNKNOWN_GPU):
+            continue   # ноутбук з невідомою відеокартою — ціну ні з чим порівняти
         stat = _stat_for_item(stats_by_watch[r["watch_id"]], r)
         if stat is None:
             continue   # ринкова ціна ще не відома — не з чим порівняти

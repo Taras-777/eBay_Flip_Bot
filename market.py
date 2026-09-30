@@ -26,7 +26,7 @@ from settings import (
     SEARCH_RESERVE,
     log,
 )
-from laptops import SEP as LAPTOP_SEP, is_laptop, laptop_spec, spec_matches, spec_parents
+from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, laptop_spec, spec_matches, spec_parents
 from laptops import needs_aspects as laptop_needs_aspects
 from textparse import (
     COMPAT_ASPECTS,
@@ -182,6 +182,8 @@ def _annotate_items(items, max_lookups=0, watch=None):
     candidates = [it for it in items if it.get("item_id") and needs_aspects(it)]
     if not candidates:
         return items
+    # Першими — ноутбуки з невідомою відеокартою: без неї їх не оцінити
+    candidates.sort(key=lambda it: not (it["laptop"] and laptop_needs_aspects(it["spec_group"])))
     cached = get_cached_specs([it["item_id"] for it in candidates])
 
     lookups_left = 0
@@ -284,6 +286,11 @@ def _apply_item_filters(w, items):
     return kept
 
 
+def laptop_unknown(it):
+    """Ноутбук, клас якого ще не відомий (немає відеокарти) — оцінювати рано."""
+    return bool(it.get("laptop")) and laptop_needs_aspects(it.get("spec_group") or "unspecified")
+
+
 def _stat_for_item(stats, it):
     """Спершу статистика точної конфігурації; якщо окремої немає (замало
     оголошень) — найближчий ширший клас ноутбука, і лише тоді загальна група стану."""
@@ -340,7 +347,8 @@ def _compute_group_stats(watch_id, items):
     groups = {}
     for it in items:
         groups.setdefault((it["cond_group"], "*"), []).append(it["total_price"])
-        if it["spec_group"] != "unspecified":
+        # Ноутбук з невідомою відеокартою — лише в «усі конфігурації»: група «GPU ?» — суміш усього
+        if it["spec_group"] != "unspecified" and not it["spec_group"].startswith(UNKNOWN_GPU):
             groups.setdefault((it["cond_group"], it["spec_group"]), []).append(it["total_price"])
             # Ноутбуки: ще й ширші класи («RTX 4060 · i7 13 gen» → «RTX 4060»), якщо в точному мало
             for parent in spec_parents(it["spec_group"]):

@@ -43,6 +43,7 @@ from market import (
     _apply_item_filters,
     _recalculate_watch_medians,
     _stat_for_item,
+    laptop_unknown,
     max_buy_price,
 )
 from panel import repost_panel
@@ -128,6 +129,10 @@ async def check_one_watch(app: Application, w: dict):
             seen_updates.append((it["item_id"], it["effective_price"], None))
             continue
 
+        if laptop_unknown(it):
+            # Відеокарта ще невідома: не записуємо в seen_items — наступного циклу,
+            # коли бот прочитає характеристики, оголошення оціниться як нове
+            continue
         stat = _stat_for_item(stats, it)
         if stat is None:
             seen_updates.append((it["item_id"], it["effective_price"], None))
