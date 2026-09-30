@@ -6,6 +6,7 @@ import db
 import deal_check
 import handlers
 import screen_common
+import settings
 import scheduler
 from test_sales import _screen
 from test_scheduler import consoles, make_app
@@ -36,6 +37,9 @@ def test_listed_text():
     assert screen_common._listed(now).startswith("сьогодні о ")
     assert screen_common._listed(now - 3 * DAY).endswith("(3 дні тому)")
     assert screen_common._listed(now - 10 * DAY).endswith("(10 днів тому)")
+    from datetime import datetime
+    old = now - 800 * DAY
+    assert screen_common._listed(old).startswith(datetime.fromtimestamp(old, settings.LOCAL_TZ).strftime("%d.%m.%Y"))
 
 
 def test_listings_show_listed_date(monkeypatch):
@@ -45,6 +49,20 @@ def test_listings_show_listed_date(monkeypatch):
     state["items"][0]["created_at"] = int(time.time() - 3 * DAY)
     asyncio.run(handlers._render_listing_panel(make_update(), make_context(), 7, state))
     assert screen.text.count("📅 виставлено") == 1 and "(3 дні тому)" in screen.text
+
+
+def test_listings_screen_keeps_listing_date(monkeypatch):
+    """Дата має дожити від відповіді eBay до екрана «🔎 Оголошення»."""
+    import screen_listings
+    listed = int(time.time() - 3 * DAY)
+    found = [{"item_id": "a", "title": "Sony PlayStation 5", "total_price": 300, "currency": "EUR",
+              "condition": "Gebraucht", "url": "u", "created_at": listed}]
+    monkeypatch.setattr(screen_listings, "search_in_categories", lambda *a, **kw: [dict(x) for x in found])
+    monkeypatch.setattr(screen_listings, "_annotate_items", lambda items, **kw: items)
+    monkeypatch.setattr(screen_listings, "_apply_item_filters", lambda w, items: items)
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "1", "name": "K"}])
+    items = screen_listings._fetch_cheapest(db.get_watch(wid, 1), screen_listings._new_fetch_state(), 10)
+    assert items[0]["created_at"] == listed
 
 
 def test_new_deal_remembers_listing_date(fake_ebay):

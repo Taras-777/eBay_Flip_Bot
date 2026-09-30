@@ -77,7 +77,8 @@ def _fetch_cheapest(watch, fetch, need):
     kept.sort(key=lambda item: item["total_price"])
     return [
         {"item_id": it["item_id"], "title": it["title"], "price": it["total_price"],
-         "currency": it.get("currency") or "EUR", "condition": it.get("condition"), "url": it.get("url")}
+         "currency": it.get("currency") or "EUR", "condition": it.get("condition"), "url": it.get("url"),
+         "created_at": it.get("created_at")}
         for it in kept
     ]
 
