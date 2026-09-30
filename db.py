@@ -206,7 +206,9 @@ CREATE TABLE IF NOT EXISTS deals (
     created_at INTEGER NOT NULL,
     seen_at INTEGER,       -- коли користувач побачив у «🔥 Вигідні пропозиції» (NULL — нова)
     cond_group TEXT,       -- група статистики (стан, конфігурація), за якою пропозиція вигідна
-    spec_group TEXT
+    spec_group TEXT,
+    listed_at INTEGER,     -- коли оголошення виставили на eBay
+    checked_at INTEGER     -- коли востаннє перевіряли, чи воно ще продається
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -308,9 +310,10 @@ def init_db():
         if deal_cols and "seen_at" not in deal_cols:
             conn.execute("ALTER TABLE deals ADD COLUMN seen_at INTEGER")
             conn.execute("UPDATE deals SET seen_at = created_at")  # старі — вже бачені в чаті
-        for col in ("cond_group", "spec_group"):
+        for col, ddl in [("cond_group", "TEXT"), ("spec_group", "TEXT"),
+                         ("listed_at", "INTEGER"), ("checked_at", "INTEGER")]:
             if deal_cols and col not in deal_cols:
-                conn.execute(f"ALTER TABLE deals ADD COLUMN {col} TEXT")
+                conn.execute(f"ALTER TABLE deals ADD COLUMN {col} {ddl}")
 
         disc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(discovery_obs)").fetchall()}
         for col, ddl in [("sold_check", "TEXT"), ("checked_at", "INTEGER")]:
@@ -1154,15 +1157,16 @@ def save_category_aspects(category_id, aspects):
 # ---------- deals ----------
 
 def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
-             has_best_offer=False, cond_group=None, spec_group=None):
+             has_best_offer=False, cond_group=None, spec_group=None, listed_at=None):
+    now = int(time.time())
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO deals
                (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
-                has_best_offer, status, created_at, cond_group, spec_group)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?)""",
+                has_best_offer, status, created_at, cond_group, spec_group, listed_at, checked_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?)""",
             (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url,
-             int(suspicious), int(has_best_offer), int(time.time()), cond_group, spec_group),
+             int(suspicious), int(has_best_offer), now, cond_group, spec_group, listed_at, now),
         )
         return cur.lastrowid
 
@@ -1237,6 +1241,37 @@ def count_unseen_deals(chat_id):
                AND d.created_at >= ? AND """ + _profit_sql() + " >= ?",
             (chat_id, since, get_min_profit(chat_id)),
         ).fetchone()["c"]
+
+
+def get_deals_to_recheck(limit, stale_seconds, deal_ids=None):
+    """Пропозиції зі «🔥 Вигідні пропозиції», які давно не перевіряли, чи лот ще продається
+    (лише ті, що проходять мін. прибуток свого користувача). Найдавніше перевірені — першими.
+    deal_ids — обмежитись цими (сторінка, яку користувач зараз відкриває)."""
+    now = int(time.time())
+    min_profit = ("COALESCE((SELECT CAST(m.value AS REAL) FROM meta m "
+                  "WHERE m.key = 'min_profit:' || w.chat_id), " + str(float(settings.MIN_PROFIT_EUR)) + ")")
+    sql = ("SELECT d.id, d.item_id FROM deals d JOIN watches w ON w.id = d.watch_id "
+           "WHERE w.active = 1 AND d.status = 'new' AND d.created_at >= ? "
+           "AND COALESCE(d.checked_at, d.created_at) < ? AND " + _profit_sql() + " >= " + min_profit)
+    params = [now - DEALS_INBOX_DAYS * 86400, now - stale_seconds]
+    if deal_ids is not None:
+        if not deal_ids:
+            return []
+        sql += " AND d.id IN (" + ",".join("?" * len(deal_ids)) + ")"
+        params += list(deal_ids)
+    sql += " ORDER BY COALESCE(d.checked_at, d.created_at) LIMIT ?"
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(sql, params + [limit]).fetchall()]
+
+
+def mark_deal_checked(deal_id, gone=False):
+    """Результат перевірки: gone=True — лот продано/знято, пропозиція зникає зі списку."""
+    with get_conn() as conn:
+        if gone:
+            conn.execute("UPDATE deals SET status = 'gone', checked_at = ? WHERE id = ? AND status = 'new'",
+                         (int(time.time()), deal_id))
+        else:
+            conn.execute("UPDATE deals SET checked_at = ? WHERE id = ?", (int(time.time()), deal_id))
 
 
 def mark_deals_seen(deal_ids):

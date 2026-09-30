@@ -24,6 +24,7 @@ from ebay_api import _watch_search_kwargs, search_in_categories
 from market import _annotate_items, _apply_item_filters
 from panel import _ack_callback, show_panel
 from access import require_access
+from screen_common import _listed
 
 
 LISTINGS_MAX_PAGES = 3   # за одне натискання — до 3 запитів до eBay
@@ -211,8 +212,9 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         lines.append("Підходящих оголошень не лишилось.")
     for i, it in enumerate(shown, start + 1):
         cond = f" · стан: {html.escape(it['condition'])}" if it.get("condition") else ""
+        listed = f"\n📅 виставлено {_listed(it['created_at'])}" if it.get("created_at") else ""
         lines.append(f"<b>{i}. {html.escape(it['title'][:160])}</b>\n"
-                     f"💶 {it['price']:.0f} {html.escape(it['currency'])}{cond}")
+                     f"💶 {it['price']:.0f} {html.escape(it['currency'])}{cond}{listed}")
         row = []
         if it.get("url"):
             row.append(InlineKeyboardButton(

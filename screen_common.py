@@ -72,6 +72,19 @@ def _ago(ts):
     return f"{plural(days, 'день', 'дні', 'днів')} тому"
 
 
+def _listed(ts):
+    """Коли оголошення виставили: «сьогодні о 14:02», «вчора о 09:15», «27.09 (3 дні тому)»."""
+    if not ts:
+        return ""
+    moment = datetime.fromtimestamp(ts, LOCAL_TZ)
+    days = (datetime.now(LOCAL_TZ).date() - moment.date()).days
+    if days <= 0:
+        return f"сьогодні о {moment:%H:%M}"
+    if days == 1:
+        return f"вчора о {moment:%H:%M}"
+    return f"{moment:%d.%m} ({plural(days, 'день', 'дні', 'днів')} тому)"
+
+
 def _when(ts):
     moment = datetime.fromtimestamp(ts, LOCAL_TZ)
     days = (datetime.now(LOCAL_TZ).date() - moment.date()).days

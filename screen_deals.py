@@ -25,6 +25,7 @@ from market import estimate_resale_profit
 from panel import _ack_callback, show_panel
 from access import require_access
 from sales import sales_note
+from deal_check import recheck_shown_deals
 
 
 # ============================================================
@@ -71,8 +72,9 @@ def _deal_card(n, d, sold=None):
     new = "🆕 " if d["seen_at"] is None else ""
     offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
     warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""
-    return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · {_when(d['created_at'])}\n"
-            f"{html.escape(d['title'][:90])}\n"
+    listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
+    return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
+            f"{html.escape(d['title'][:90])}\n{listed}"
             f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток ~<b>{profit:.0f}€</b>{offer}{warn}\n"
             + (f"{html.escape(note)}\n" if note else "") +
             f'<a href="{html.escape(d["url"])}">🔗 Відкрити на eBay</a>')
@@ -81,11 +83,17 @@ def _deal_card(n, d, sold=None):
 async def _render_deals(update, context, page=0, note=""):
     chat_id = update.effective_chat.id
     deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
+    # Перед показом — чи ці лоти ще продаються (вигідні розкуповують швидко)
+    removed = await asyncio.to_thread(recheck_shown_deals, [d["id"] for d in deals]) if deals else 0
+    if removed:
+        deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
+        gone_note = f"🗑 Прибрано вже проданих чи знятих: {removed}"
+        note = f"{note}\n{gone_note}" if note else gone_note
     if not deals and page > 0:
         page = max(0, (total - 1) // DEALS_PER_PAGE)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     lines = [f"🔥 <b>Вигідні пропозиції</b> ({total}) · прибуток від {get_min_profit(chat_id):.0f}€, "
-             "найвигідніші вгорі"]
+             "найвигідніші вгорі. Продані й зняті оголошення бот прибирає сам."]
     if note:
         lines.append(note)
     rows = []
@@ -175,5 +183,6 @@ async def deals_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Імпорти з інших екранів — унизу, щоб модулі могли посилатися один на одного
 from screen_common import (  # noqa: E402
+    _listed,
     _when,
 )

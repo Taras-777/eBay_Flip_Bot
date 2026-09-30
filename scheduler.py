@@ -54,6 +54,7 @@ from notifications import (
 from sales import is_slow_seller, price_drops, sales_note
 from shared_market import deal_scan
 from netstatus import is_down, mark_down, mark_up
+from deal_check import recheck_deals
 from backup import daily_backup
 
 
@@ -162,6 +163,7 @@ async def check_one_watch(app: Application, w: dict):
             has_best_offer=it["has_best_offer"],
             cond_group=stat["cond_group"],
             spec_group=stat["spec_group"],
+            listed_at=it.get("created_at"),
         )
         seen_updates.append((it["item_id"], it["effective_price"], it["effective_price"]))
         new_deals.append((deal_id, it, stat))
@@ -255,6 +257,11 @@ async def scheduler_loop(app: Application):
             task = app.bot_data.get("sold_check_task")
             if task is None or task.done():
                 app.bot_data["sold_check_task"] = asyncio.create_task(asyncio.to_thread(verify_disappeared))
+
+            # «🔥 Вигідні пропозиції»: чи лоти ще продаються — продані/зняті зникають зі списку
+            task = app.bot_data.get("deal_check_task")
+            if task is None or task.done():
+                app.bot_data["deal_check_task"] = asyncio.create_task(asyncio.to_thread(recheck_deals))
 
             # Резервна копія бази — раз на добу (окремим потоком, не заважає перевіркам)
             task = app.bot_data.get("backup_task")
