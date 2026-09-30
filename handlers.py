@@ -60,7 +60,6 @@ from db import (
     get_watch_categories,
     list_watches,
     remove_watch,
-    mark_market_stale,
     reset_watch_market,
     set_deal_status,
     update_watch_categories,
@@ -1226,15 +1225,12 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if options is None or selected is None:
         await query_cb.answer("Список категорій застарів — відкрий його знову.", show_alert=True)
         return
-    old_ids = set(watch_category_ids(watch))
     if choice == "all":
-        new_ids = set()
         update_watch_categories(watch_id, chat_id, [])
     elif choice == "done":
         if not selected:
             await query_cb.answer("Познач хоча б одну категорію або обери «Усі категорії».", show_alert=True)
             return
-        new_ids = set(selected)
         update_watch_categories(
             watch_id, chat_id, [{"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected],
         )
@@ -1248,18 +1244,10 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     context.user_data.pop(f"cat_options_{watch_id}", None)
     context.user_data.pop(f"cat_selected_{watch_id}", None)
-    # Категорії лише ДОДАНО (або «усі категорії» замість обмеження): старі оголошення й
-    # продажі лишаються правдивими — зберігаємо історію, ринок просто перерахується з ширшою вибіркою
-    only_added = (not new_ids) or (old_ids and old_ids <= new_ids)
-    if new_ids == old_ids:
-        pass
-    elif only_added:
-        mark_market_stale(watch_id)
-    else:
-        # Характеристики різних категорій різні — повертаємо автоматичний режим
-        update_watch_required_aspect(watch_id, chat_id, None, None)
-        # Категорію прибрано/замінено — в історії могли бути оголошення з неї; рахуємо ринок заново
-        reset_watch_market(watch_id)
+    # Характеристики різних категорій різні — повертаємо автоматичний режим
+    update_watch_required_aspect(watch_id, chat_id, None, None)
+    # Інша категорія — інша вибірка, стара статистика вже не відповідає
+    reset_watch_market(watch_id)
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
 
 

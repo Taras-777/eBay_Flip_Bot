@@ -473,12 +473,6 @@ def remove_watch(watch_id, chat_id):
         conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
-def mark_market_stale(watch_id):
-    """Статистика лишається, але найближчий цикл перерахує ринок заново (≤5 хв)."""
-    with get_conn() as conn:
-        conn.execute("UPDATE market_stats SET updated_at = 0 WHERE watch_id = ?", (watch_id,))
-
-
 def reset_watch_market(watch_id):
     """Після зміни фільтрів (категорія, мін. ціна, стан, виключені слова)
     стара статистика й спостереження стосуються вже іншої вибірки."""

@@ -110,26 +110,15 @@ def get_item_status(item_id):
         raise RuntimeError(f"Trading API: незрозуміла відповідь (HTTP {resp.status_code})")
 
 
-def verify_disappeared(limit=SOLD_CHECK_BATCH):
-    """Перевіряє чергу зниклих лотів: спершу твоїх товарів, потім «💡 Що перепродавати».
-    Повертає кількість перевірених. Викликати з потоку (asyncio.to_thread)."""
-    if not is_connected():
-        return 0
-    left = min(limit, TRADING_DAILY_BUDGET - trading_calls_today()[0])
-    if left <= 0:
-        return 0
-    queue = [(apply_sold_check, (r["watch_id"], r["item_id"])) for r in get_pending_sold_checks(left)]
-    if len(queue) < left:
-        queue += [(apply_discovery_check, (r["candidate"], r["item_id"]))
-                  for r in get_pending_discovery_checks(left - len(queue))]
-    done, counts = 0, {}
+def _run_checks(queue):
+    """queue: [(apply, (власник, item_id))] → {результат: кількість}."""
+    counts = {}
     for apply, (owner, item_id) in queue:
         known = known_sold_check(item_id)
         if known:
             # Цей лот уже перевіряли для іншого товару (спільний ринок) — eBay не питаємо
             apply(owner, item_id, known)
             counts[known] = counts.get(known, 0) + 1
-            done += 1
             continue
         try:
             info = get_item_status(item_id)
@@ -143,8 +132,40 @@ def verify_disappeared(limit=SOLD_CHECK_BATCH):
             log.info("eBay не віддав статус оголошення %s (%s) — рахую за зникненням", item_id, info["error"])
         apply(owner, item_id, info["result"])
         counts[info["result"]] = counts.get(info["result"], 0) + 1
-        done += 1
+    return counts
+
+
+def _budget_left(limit):
+    return min(limit, TRADING_DAILY_BUDGET - trading_calls_today()[0])
+
+
+def verify_disappeared(limit=SOLD_CHECK_BATCH):
+    """Перевіряє чергу зниклих лотів: спершу твоїх товарів, потім «💡 Що перепродавати».
+    Повертає кількість перевірених. Викликати з потоку (asyncio.to_thread)."""
+    if not is_connected():
+        return 0
+    left = _budget_left(limit)
+    if left <= 0:
+        return 0
+    queue = [(apply_sold_check, (r["watch_id"], r["item_id"])) for r in get_pending_sold_checks(left)]
+    if len(queue) < left:
+        queue += [(apply_discovery_check, (r["candidate"], r["item_id"]))
+                  for r in get_pending_discovery_checks(left - len(queue))]
+    counts = _run_checks(queue)
+    done = sum(counts.values())
     if done:
         log.info("Перевірено зниклих оголошень: %s (%s)", done,
                  ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
     return done
+
+
+def verify_watch_now(watch_id, limit=100):
+    """«⏳ Перевірити зараз» — черга одного товару поза розкладом. Повертає {результат: кількість}.
+    Викликати з потоку."""
+    if not is_connected():
+        return {}
+    left = _budget_left(limit)
+    if left <= 0:
+        return {}
+    rows = get_pending_sold_checks(left, watch_id=watch_id)
+    return _run_checks([(apply_sold_check, (r["watch_id"], r["item_id"])) for r in rows])

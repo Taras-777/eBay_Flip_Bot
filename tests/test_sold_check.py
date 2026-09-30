@@ -547,27 +547,3 @@ def test_sales_screen_shows_tracked_listings():
     assert "📋 зараз у продажу: 3" in text          # біля 256GB
     empty = handlers._sales_text(w, [], active=active)
     assert "<b>5</b> оголошень" in empty and "Продажів ще не помічено" in empty
-
-
-def test_adding_category_keeps_history(monkeypatch):
-    import access
-    import handlers
-    wid = db.add_watch(1, "PS4", "PS4", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
-    add_sale(wid, "s1", 90, "500GB", confirmed=True)
-    db.upsert_market_stats(wid, "used", "*", 100, 20, sale_price=90, sale_source="x")
-    monkeypatch.setattr(access, "is_owner", lambda uid: True)
-    monkeypatch.setattr(handlers, "_show_watch_details", AsyncMock())
-    options = [{"id": "139971", "name": "Konsolen"}, {"id": "171831", "name": "Konsolen-Bundles"}]
-
-    def press(choice, selected):
-        upd = make_update(f"setcat:{wid}:{choice}")
-        ctx = MagicMock()
-        ctx.user_data = {f"cat_options_{wid}": options, f"cat_selected_{wid}": set(selected)}
-        asyncio.run(handlers.set_category_callback(upd, ctx))
-
-    press("done", {"139971", "171831"})                                # додали категорію
-    assert [r["item_id"] for r in db.get_sold_listings(wid)] == ["s1"]  # продажі на місці
-    assert db.get_market_stats(wid)[0]["updated_at"] == 0               # ринок перерахується найближчим циклом
-
-    press("done", {"171831"})                                           # прибрали стару категорію
-    assert db.get_sold_listings(wid) == [] and db.get_market_stats(wid) == []
