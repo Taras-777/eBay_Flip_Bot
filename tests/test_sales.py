@@ -153,7 +153,9 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
 
     async def fake_recalc(watch, replace_existing=False):
         recalculated.append(watch["id"])
-        return [], ({("used", "*"): {}} if watch["id"] == w1 else {}), []
+        if watch["id"] == w1:
+            return [], {("used", "*"): {}}, []
+        return [{"cond_group": "used"}] * 5 + [{"cond_group": "new"}] * 3, {}, []
 
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
         shown.append(text)
@@ -173,7 +175,8 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
     asyncio.run(handlers.refresh_all_callback(upd, ctx))
     assert sorted(recalculated) == sorted([w1, w2]) and fetched == [1]
     assert any("(1/2)" in t for t in shown)
-    assert "✅ Ціни оновлено: 1 товар" in shown[-1] and "Не вдалося порахувати: iPhone" in shown[-1]
+    assert "✅ Ціни оновлено: 1 товар" in shown[-1] and "Не вдалося" not in shown[-1]
+    assert "📉 Замало оголошень: iPhone (8: вживані 5, нові 3 — треба 8 одного стану)" in shown[-1]
     assert ctx.bot_data["refresh_all_running"] is False
 
 

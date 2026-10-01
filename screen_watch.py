@@ -784,6 +784,18 @@ async def recalculate_median_callback(update: Update, context: ContextTypes.DEFA
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
 
 
+def _few_listings_note(watch, items):
+    """«📉 Замало оголошень: rog strix g15 (8: вживані 5, нові 3 — треба 8 одного стану)»."""
+    minimum = minimum_sample_size_for_query(watch["query"])
+    counts: dict = {}
+    for it in items or []:
+        counts[it["cond_group"]] = counts.get(it["cond_group"], 0) + 1
+    parts = ", ".join(f"{CONDITION_LABELS.get(c, c)} {n}" for c, n in sorted(counts.items(), key=lambda x: -x[1]))
+    found = f"{len(items or [])}: {parts}" if parts else "0"
+    return (f"📉 Замало оголошень: {html.escape(watch['label'])} "
+            f"({found} — треба {minimum} одного стану)")
+
+
 async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """menu:refresh_prices («💰 Оновити ціни», лише власник): свіжі ціни з eBay для
     всіх товарів власника (+ свіжі дані про ліміт запитів)."""
@@ -802,6 +814,7 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     watches = list_watches(chat_id=chat_id, active_only=True)
     done: list = []
     failed: list = []
+    few: list = []      # не помилка: оголошень замало, щоб порахувати ціну
     skipped: list = []
     context.bot_data["refresh_all_running"] = True
     try:
@@ -815,8 +828,11 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode=ParseMode.HTML,
             )
             try:
-                _, stats, _ = await _recalculate_watch_medians(watch, replace_existing=True)
-                (done if stats else failed).append(watch["label"])
+                items, stats, _ = await _recalculate_watch_medians(watch, replace_existing=True)
+                if stats:
+                    done.append(watch["label"])
+                else:
+                    few.append(_few_listings_note(watch, items))
             except Exception as e:
                 log.warning("Не вдалося оновити ціни для watch #%s: %s", watch["id"], e)
                 failed.append(watch["label"])
@@ -830,6 +846,7 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     notes = []
     if done:
         notes.append(f"✅ Ціни оновлено: {plural(len(done), 'товар', 'товари', 'товарів')}")
+    notes += few
     if failed:
         notes.append("⚠️ Не вдалося порахувати: " + html.escape(", ".join(failed)))
     if skipped:
