@@ -26,7 +26,7 @@ from settings import (
     SEARCH_RESERVE,
     log,
 )
-from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, laptop_spec, spec_matches, spec_parents
+from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, spec_matches, spec_parents
 from laptops import needs_aspects as laptop_needs_aspects
 from textparse import (
     COMPAT_ASPECTS,
@@ -38,6 +38,8 @@ from textparse import (
     spec_required_by_default,
 )
 from db import (
+    delete_listing_obs_by_ids,
+    get_all_listing_rows,
     list_watches,
     update_watch_categories,
     mark_market_stale,
@@ -266,9 +268,13 @@ def _apply_item_filters(w, items):
     # входять і аксесуари. Оголошення, яке сам продавець поклав у категорію
     # чохлів/запчастин, — не товар (хіба що користувач сам обрав таку категорію).
     wants_accessories = any(is_accessory_category(c["name"]) for c in get_watch_categories(w))
+    laptop_watch = is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)])
     kept = []
     for it in items:
         if it.get("item_id") in rejected:
+            continue
+        # Ноутбук: «RAM passend für ROG Strix G15» — запчастина, хоч у назві й модель ноутбука
+        if laptop_watch and looks_like_laptop_part(it["title"], it.get("category_names")):
             continue
         if not wants_accessories and any(is_accessory_category(n) for n in it.get("category_names") or []):
             continue
@@ -383,6 +389,22 @@ def _compute_group_stats(watch_id, items):
             "sale_source": source, "sample_size": len(clean),
         }
     return stats
+
+
+def prune_laptop_parts():
+    """Раз на добу: з історії ноутбуків прибрати запчастини, що потрапили туди раніше
+    (до появи фільтра) — інакше вони занижують ціни. Повертає кількість прибраних."""
+    removed = 0
+    for w in list_watches(active_only=True):
+        if not is_laptop(query=w["query"], category_names=[c["name"] for c in get_watch_categories(w)]):
+            continue
+        ids = [r["item_id"] for r in get_all_listing_rows(w["id"]) if looks_like_laptop_part(r.get("title") or "")]
+        if ids:
+            delete_listing_obs_by_ids(w["id"], ids)
+            mark_market_stale(w["id"])
+            removed += len(ids)
+            log.info("«%s»: прибрано з історії запчастин/аксесуарів: %s", w["label"], len(ids))
+    return removed
 
 
 def collapse_watch_categories():

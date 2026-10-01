@@ -209,6 +209,46 @@ def spec_matches(item_spec, group_spec):
     return group_spec == "*" or item_spec == group_spec or item_spec.startswith(group_spec + SEP)
 
 
+# ---------- запчастини й аксесуари «для ноутбука» ----------
+
+# «RAM passend für ASUS ROG Strix G15», «Netzteil für Lenovo Legion 5» — у назві модель
+# ноутбука, але це не ноутбук. Справжній ноутбук майже завжди називає процесор чи відеокарту.
+_FOR_PATTERN = re.compile(r"\b(für|fuer|passend|kompatibel|compatible|for|ersatz|replacement)\b", re.I)
+_PART_PATTERN = re.compile(
+    r"\b(so-?dimm|ddr[345]\w*|arbeitsspeicher|ram[\s-]?(modul|riegel|kit|upgrade)|speicher(modul|riegel)?|"
+    r"netzteil|ladeger\w*|ladekabel|charger|akku|batterie|battery|tastatur|keyboard|display|bildschirm|"
+    r"panel|lüfter|luefter|fan|kühler|scharnier\w*|hinge|gehäuse|cover|mainboard|motherboard|platine|"
+    r"webcam|lautsprecher|kabel|adapter|dockingstation|tasche|hülle|skin|folie|schutzfolie)\b", re.I)
+_DEVICE_WORD = re.compile(r"\b(laptop|notebook|macbook)\b", re.I)
+PART_CATEGORY_WORDS = ("arbeitsspeicher", "speicher", "komponenten", "teile", "netzteil", "akku", "zubehör",
+                       "lüfter", "kühl", "display", "tastatur", "mainboard", "gehäuse", "kabel", "adapter",
+                       "ladegerät", "ersatzteil", "taschen")
+
+
+def has_device_marker(title):
+    """Процесор, відеокарта чи чип Apple у назві — ознака самого ноутбука, а не запчастини."""
+    return bool(extract_cpu_token(title) or detect_gpu(title) not in (None, "iGPU"))
+
+
+def looks_like_laptop_part(title, category_names=()):
+    """Запчастина чи аксесуар для ноутбука, а не сам ноутбук: «für/passend/…» або слово
+    запчастини (RAM, Netzteil, Akku…) чи категорія комплектуючих — і жодного процесора/відеокарти."""
+    if has_device_marker(title):
+        return False
+    for_word = _FOR_PATTERN.search(title or "")
+    part_word = _PART_PATTERN.search(title or "")
+    if for_word and part_word:          # «Akku für Laptop», «RAM passend für ROG Strix»
+        return True
+    # Продавець сам поклав у категорію ноутбуків — це ноутбук, навіть якщо в назві лише
+    # «Display 144Hz» чи «Tastatur beleuchtet» (відкидаємо лише явне «… für/passend …» вище)
+    if any(w in (name or "").lower() for name in category_names or () for w in LAPTOP_CATEGORY_WORDS):
+        return False
+    # «Laptop … beleuchtete Tastatur» / «Notebook für Studenten» — сам ноутбук
+    if (for_word or part_word) and not _DEVICE_WORD.search(title or ""):
+        return True
+    return any(w in (name or "").lower() for name in category_names or () for w in PART_CATEGORY_WORDS)
+
+
 # ---------- ⚠️ попередження ----------
 
 _WARNINGS = [

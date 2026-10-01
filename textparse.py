@@ -133,6 +133,9 @@ LAPTOP_QUERY_TERMS = {
     "macbook", "thinkpad", "latitude", "inspiron", "vostro",
     "precision", "xps", "ideapad", "zenbook", "vivobook",
     "chromebook", "surface",
+    # ігрові й бізнесові лінійки — щоб «ROG Strix G15» теж перевірявся як ноутбук
+    "victus", "omen", "legion", "loq", "nitro", "predator", "katana", "rog", "tuf", "strix",
+    "zephyrus", "alienware", "aorus", "thinkbook", "elitebook", "probook",
 }
 
 

@@ -226,3 +226,52 @@ def test_category_picker_shows_parent_and_nested(no_category_tree):
     assert rows[0].startswith("☑️ 📂 Комп'ютери, планшети й мережа")
     assert rows[1].startswith("🔹 ↳ Комплектуючі") and rows[2].startswith("🔹 ↳ Ноутбуки й нетбуки")
     assert rows[3].startswith("⬜ Мобільні")                       # не вкладена — як і раніше
+
+
+# ---------- запчастини «для ноутбука» ----------
+
+@pytest.mark.parametrize("title, part", [
+    ("Samsung 32GB DDR4 3200MHz SO-DIMM RAM für ASUS ROG Strix G15 G513", True),
+    ("32GB 16GB RAM Speicher passend für Asus G513RM-HF222X ROG Strix G15 (2022)", True),
+    ("Netzteil für Lenovo Legion 5 230W", True),
+    ("Akku für Laptop MSI Katana GF66", True),
+    ("ASUS ROG Strix G15 Tastatur DE beleuchtet", True),
+    ("ASUS ROG Strix G15 G513RM Ryzen 7 6800H RTX 3060 16GB 1TB", False),
+    ("ASUS ROG Strix G15 Gaming Laptop beleuchtete Tastatur 16GB", False),
+    ("Lenovo Legion 5 Notebook mit Netzteil 16GB", False),
+    ("ROG Strix G15 Laptop für Gamer", False),
+    ("MacBook Pro 14 M3 Pro 18GB 512GB", False),
+])
+def test_laptop_part_detection(title, part):
+    assert laptops.looks_like_laptop_part(title) == part
+
+
+def test_part_category_without_cpu_is_part():
+    assert laptops.looks_like_laptop_part("ASUS ROG Strix G15 Gaming", ["Arbeitsspeicher (RAM)"])
+    # ноутбук не в тій категорії, але з процесором і відеокартою — лишається
+    assert not laptops.looks_like_laptop_part("ROG Strix G18 Ryzen9 8940HX RTX5060 32GB", ["CPU-Lüfter & Kühlkörper"])
+
+
+def test_parts_filtered_and_pruned_from_history():
+    wid = db.add_watch(1, "rog strix g15", "rog strix g15", "", "", 15)
+    w = db.get_watch(wid, 1)
+    items = [{"item_id": "ram", "title": "32GB RAM Speicher passend für Asus ROG Strix G15", "spec_group": "x"},
+             {"item_id": "lap", "title": "ROG Strix G15 Ryzen 7 RTX 3060 16GB", "spec_group": "x"}]
+    assert [it["item_id"] for it in market._apply_item_filters(w, items)] == ["lap"]
+    phone = db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15)       # не ноутбук — правило не діє
+    assert market._apply_item_filters(db.get_watch(phone, 1), [dict(items[0])])
+
+    db.update_listing_observations(wid, [
+        {"item_id": "ram", "title": items[0]["title"], "cond_group": "new", "total_price": 255},
+        {"item_id": "lap", "title": items[1]["title"], "cond_group": "used", "total_price": 700}])
+    assert market.prune_laptop_parts() == 1
+    assert [r["item_id"] for r in db.get_all_listing_rows(wid)] == ["lap"]
+
+
+def test_laptop_category_protects_short_titles():
+    nb = ["PC Notebooks & Netbooks", "Computer, Tablets & Netzwerk"]
+    assert not laptops.looks_like_laptop_part("ASUS ROG Strix G15 16GB 1TB Display 144Hz", nb)
+    assert not laptops.looks_like_laptop_part("ASUS ROG Strix G15 gebraucht", nb)
+    assert laptops.looks_like_laptop_part("RAM Speicher passend für ROG Strix G15", nb)   # явна запчастина
+    assert laptops.looks_like_laptop_part("ASUS ROG Strix G15 16GB 1TB Display 144Hz", ["Displays & LCD-Panels"])
+    assert not laptops.looks_like_laptop_part("ASUS ROG Strix G15 gebraucht", ["Sonstige"])

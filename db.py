@@ -1115,6 +1115,13 @@ def get_current_listings(watch_id):
         ).fetchall()]
 
 
+def get_all_listing_rows(watch_id):
+    """Усі спостереження товару (активні, зниклі, продані) — id і назва, для чистки історії."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT item_id, title FROM listing_obs WHERE watch_id = ?", (watch_id,)).fetchall()]
+
+
 def record_scan_stats(watch_id, fetched, kept, new_count):
     with get_conn() as conn:
         conn.execute(

@@ -25,7 +25,7 @@ from textparse import (
 )
 from db import get_market_stats, get_min_profit, get_rejected_ids, get_required_aspects, watch_category_ids
 from ebay_api import fetch_item_by_legacy_id, resolve_item_id
-from laptops import is_laptop, laptop_spec, laptop_warnings
+from laptops import is_laptop, laptop_spec, laptop_warnings, looks_like_laptop_part
 from market import _stat_for_item, estimate_resale_profit, max_buy_price, watch_requires_spec
 
 EU_COUNTRIES = {
@@ -170,6 +170,8 @@ def check_listing(watch, text):
     else:
         checks.append((OK, f"Характеристики: {spec}" if spec != "unspecified" else "Характеристики: ок"))
 
+    if laptop and looks_like_laptop_part(title, categories):
+        checks.append((FAIL, "Схоже на запчастину чи аксесуар для ноутбука (немає процесора й відеокарти в назві)"))
     # Ноутбуки: розкладка, блок живлення, BIOS… (лише попередження)
     if laptop:
         for warning in laptop_warnings(title, aspects):
