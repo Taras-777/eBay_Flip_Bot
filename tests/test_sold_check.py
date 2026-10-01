@@ -605,6 +605,24 @@ def test_listing_category_saved():
     assert (row["category_id"], row["category_name"]) == ("9355", "Handys & Smartphones")
 
 
+def test_listing_extra_fields_saved(fake_ebay):
+    import ebay_api
+    from conftest import listing
+    fake_ebay.listings = [listing("v1|7|0", "iPhone 15 Pro 256GB", 600, condition_id="2010",
+                                  buyingOptions=["FIXED_PRICE", "BEST_OFFER"],
+                                  itemLocation={"country": "DE", "postalCode": "76684"})]
+    it = ebay_api.search_active_items("iPhone 15 Pro", limit=1)[0]
+    assert (it["buying_options"], it["pickup_only"], it["country"]) == ("BEST_OFFER,FIXED_PRICE", True, "DE")
+    assert "76684" not in str(it)                                    # адресу продавця не зберігаємо
+    wid = db.add_watch(1, "iPhone", "iPhone", "", "", 15)
+    db.update_listing_observations(wid, [dict(it, cond_group="used", spec_group="256GB")])
+    with db.get_conn() as conn:
+        row = dict(conn.execute("SELECT buying_options, condition_id, shipping_cost, pickup_only, country "
+                                "FROM listing_obs WHERE item_id = 'v1|7|0'").fetchone())
+    assert row == {"buying_options": "BEST_OFFER,FIXED_PRICE", "condition_id": "2010", "shipping_cost": 0.0,
+                   "pickup_only": 1, "country": "DE"}
+
+
 def test_restore_sales_from_backup(monkeypatch, tmp_path, capsys):
     import backup
     import restore_sales

@@ -138,6 +138,12 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     checked_at INTEGER,
     category_id TEXT,     -- кінцева категорія eBay, де виставлено оголошення
     category_name TEXT,
+    -- лише для історії (на них поки не будуються функції):
+    buying_options TEXT,  -- FIXED_PRICE, BEST_OFFER, AUCTION через кому
+    condition_id TEXT,    -- точний стан eBay: 1000 Neu, 1500 Neu sonstige, 2000–2500 Generalüberholt, 3000 Gebraucht…
+    shipping_cost REAL,   -- найдешевша доставка (у price — уже разом з нею)
+    pickup_only INTEGER,  -- 1 — без доставки, лише самовивіз
+    country TEXT,         -- країна, звідки відправляють (лише країна, без адреси)
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -342,7 +348,9 @@ def init_db():
 
         obs_cols = {r["name"] for r in conn.execute("PRAGMA table_info(listing_obs)").fetchall()}
         for col, ddl in [("title", "TEXT"), ("url", "TEXT"), ("sold_check", "TEXT"), ("checked_at", "INTEGER"),
-                         ("category_id", "TEXT"), ("category_name", "TEXT")]:
+                         ("category_id", "TEXT"), ("category_name", "TEXT"), ("buying_options", "TEXT"),
+                         ("condition_id", "TEXT"), ("shipping_cost", "REAL"), ("pickup_only", "INTEGER"),
+                         ("country", "TEXT")]:
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
 
@@ -908,18 +916,26 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
             conn.execute(
                 """INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
                                             created_at, end_at, first_seen, last_seen, miss_count, status,
-                                            title, url, category_id, category_name)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?)
+                                            title, url, category_id, category_name, buying_options,
+                                            condition_id, shipping_cost, pickup_only, country)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(watch_id, item_id) DO UPDATE SET
                      cond_group=excluded.cond_group, spec_group=excluded.spec_group,
                      price=excluded.price, end_at=excluded.end_at, last_seen=excluded.last_seen,
                      miss_count=0, status='active', gone_at=NULL, sold_check=NULL,
                      title=excluded.title, url=excluded.url,
                      category_id=COALESCE(excluded.category_id, listing_obs.category_id),
-                     category_name=COALESCE(excluded.category_name, listing_obs.category_name)""",
+                     category_name=COALESCE(excluded.category_name, listing_obs.category_name),
+                     buying_options=COALESCE(excluded.buying_options, listing_obs.buying_options),
+                     condition_id=COALESCE(excluded.condition_id, listing_obs.condition_id),
+                     shipping_cost=COALESCE(excluded.shipping_cost, listing_obs.shipping_cost),
+                     pickup_only=COALESCE(excluded.pickup_only, listing_obs.pickup_only),
+                     country=COALESCE(excluded.country, listing_obs.country)""",
                 (watch_id, it["item_id"], it["cond_group"], it.get("spec_group", "unspecified"),
                  it["total_price"], it.get("created_at"), it.get("end_at"), now, now,
-                 it.get("title"), it.get("url"), it.get("category_id"), it.get("category_name")),
+                 it.get("title"), it.get("url"), it.get("category_id"), it.get("category_name"),
+                 it.get("buying_options"), it.get("condition_id") or None, it.get("shipping_cost"),
+                 None if it.get("pickup_only") is None else int(it["pickup_only"]), it.get("country")),
             )
 
         if window_start is None:

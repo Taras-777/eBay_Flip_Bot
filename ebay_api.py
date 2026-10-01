@@ -829,6 +829,10 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "url": it.get("itemWebUrl"),
                 "category_names": [c.get("categoryName") or "" for c in it.get("categories") or []],
                 **_item_category(it),
+                # Лише для історії (функції на них поки не будуються)
+                "buying_options": ",".join(sorted(buying_options)),
+                "pickup_only": not shipping_options,   # без варіантів доставки — лише самовивіз
+                "country": ((it.get("itemLocation") or {}).get("country") or None),
                 "condition": it.get("condition"),
                 "condition_id": str(it.get("conditionId") or ""),
                 "cond_group": cond_group,
