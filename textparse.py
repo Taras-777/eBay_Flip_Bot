@@ -650,13 +650,47 @@ CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type"}
 IPHONE_STORAGE = {"16GB", "32GB", "64GB", "128GB", "256GB", "512GB", "1TB", "2TB"}
 
 
+# Консолі: які об'єми справді бувають у моделі, і які видають ІНШУ модель
+# (825GB — PS5; 80–320GB — PS3). Решта чисел у назві (5GB гри, 16GB карта) — не конфігурація.
+CONSOLE_STORAGE = [
+    (re.compile(r"\bps\s?4\b|playstation\s?4\b", re.I), {"500GB", "1TB", "2TB"},
+     {"825GB", "80GB", "120GB", "160GB", "250GB", "320GB"}),
+    (re.compile(r"\bps\s?5\b|playstation\s?5\b", re.I), {"825GB", "1TB", "2TB"}, set()),
+]
+SIZE_ALIASES = {"1000GB": "1TB", "2000GB": "2TB", "1024GB": "1TB"}
+
+
+def console_family(text):
+    """(дозволені об'єми, «чужі» об'єми) для PS4/PS5, якщо в тексті рівно одна з них."""
+    found = [(valid, foreign) for pattern, valid, foreign in CONSOLE_STORAGE if pattern.search(text or "")]
+    return found[0] if len(found) == 1 else None
+
+
 def normalize_spec(title, spec):
-    """iPhone — лише за об'ємом пам'яті: «128GB+8GB» → «128GB». Кілька об'ємів у назві
-    (оголошення з варіантами «128/256/512GB») — конфігурація невідома."""
-    if not spec or spec == "unspecified" or "iphone" not in (title or "").lower():
+    """iPhone — лише за об'ємом пам'яті: «128GB+8GB» → «128GB». PS4/PS5 — лише справжні
+    об'єми моделі: «1TB+500GB», «5GB», «320GB» → невідома. Кілька об'ємів — конфігурація невідома."""
+    if not spec or spec == "unspecified":
         return spec
-    sizes = {t for t in spec.split("+") if t in IPHONE_STORAGE}
+    tokens = [SIZE_ALIASES.get(t, t) for t in spec.split("+")]
+    text = (title or "").lower()
+    if "iphone" in text:
+        allowed = IPHONE_STORAGE
+    else:
+        family = console_family(text)
+        if family is None:
+            return "+".join(sorted(set(tokens)))
+        allowed = family[0]
+    sizes = {t for t in tokens if t in allowed}
     return sizes.pop() if len(sizes) == 1 else "unspecified"
+
+
+def console_foreign(title, query):
+    """Оголошення іншої моделі консолі: у товарі «PS4» об'єм 825GB (PS5) чи 320GB (PS3)."""
+    family = console_family(query)
+    if family is None:
+        return False
+    sizes = {SIZE_ALIASES.get(f"{n}{u.upper()}", f"{n}{u.upper()}") for n, u in SPEC_SIZE_PATTERN.findall(title or "")}
+    return bool(sizes & family[1])
 
 
 def spec_key_from_aspects(title, aspects):

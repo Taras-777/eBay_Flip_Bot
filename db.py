@@ -1205,12 +1205,15 @@ def get_current_listings(watch_id):
         ).fetchall()]
 
 
-def get_spec_rows(title_word):
-    """Записи історії, у назві яких є слово (для переформатування конфігурацій)."""
+def get_spec_rows(title_word=None):
+    """Записи історії (у назві яких є слово, або всі) — для переформатування конфігурацій."""
+    sql = "SELECT watch_id, item_id, title, spec_group FROM listing_obs WHERE spec_group IS NOT NULL"
+    params = []
+    if title_word:
+        sql += " AND LOWER(title) LIKE ?"
+        params.append(f"%{title_word.lower()}%")
     with get_conn() as conn:
-        return [dict(r) for r in conn.execute(
-            "SELECT watch_id, item_id, title, spec_group FROM listing_obs "
-            "WHERE LOWER(title) LIKE ? AND spec_group IS NOT NULL", (f"%{title_word.lower()}%",)).fetchall()]
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
 def set_listing_spec(watch_id, item_id, spec_group):

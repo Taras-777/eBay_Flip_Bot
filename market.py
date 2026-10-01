@@ -34,6 +34,8 @@ from textparse import (
     _aspect_satisfied_by_title,
     extract_spec_key,
     normalize_spec,
+    console_foreign,
+    console_family,
     is_accessory_category,
     plural,
     spec_key_from_aspects,
@@ -258,6 +260,10 @@ def watch_requires_spec(w):
         # Ноутбук: клас визначається й без пам'яті в назві (з характеристик) — не відкидаємо
         if is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)]):
             return False
+        # PS4/PS5: пам'ять, якої в моделі не буває («64 GB» у характеристиках), — помилка продавця;
+        # оголошення лишається в «конфігурація невідома», а не відкидається
+        if console_family(w.get("query") or ""):
+            return False
         return spec_required_by_default(w["query"])
     return bool(value)
 
@@ -329,6 +335,8 @@ def _apply_item_filters(w, items):
     for it in items:
         if it.get("item_id") in rejected:
             continue
+        if console_foreign(it["title"], w.get("query") or ""):
+            continue   # у товарі «PS4» — PS5 (825GB) чи PS3 (320GB)
         if it.get("bid_is_price") and not _use_buy_it_now(it, bin_prices):
             continue   # ціна «купити зараз» невідома, а ставка ще зросте — не порівнюємо
         # Ноутбук: «RAM passend für ROG Strix G15» — запчастина, хоч у назві й модель ноутбука
@@ -468,20 +476,29 @@ def prune_laptop_parts():
 
 
 def normalize_saved_specs():
-    """Історія й кеш у новому форматі конфігурацій (iPhone — лише пам'ять: «128GB+8GB» → «128GB»).
+    """Історія й кеш у новому форматі конфігурацій (iPhone — лише пам'ять: «128GB+8GB» → «128GB»;
+    PS4/PS5 — лише справжні об'єми; 1000GB → 1TB) і без чужих моделей консолей (PS5 у товарі PS4).
     Раз на добу і після запуску; змінені товари перераховуються. Повертає кількість змінених записів."""
-    changed_watches, changed = set(), 0
-    for r in get_spec_rows("iphone"):
+    queries = {w["id"]: w["query"] for w in list_watches()}
+    changed_watches, changed, foreign = set(), 0, {}
+    for r in get_spec_rows(None):
+        if console_foreign(r["title"] or "", queries.get(r["watch_id"], "")):
+            foreign.setdefault(r["watch_id"], []).append(r["item_id"])
+            continue
         new = normalize_spec(r["title"], r["spec_group"])
         if new == r["spec_group"]:
             continue
         set_listing_spec(r["watch_id"], r["item_id"], new)
         changed_watches.add(r["watch_id"])
         changed += 1
+    for wid, ids in foreign.items():
+        delete_listing_obs_by_ids(wid, ids)
+        changed_watches.add(wid)
+        changed += len(ids)
     for w in changed_watches:
         mark_market_stale(w)
     if changed:
-        log.info("Конфігурації iPhone приведено до формату «лише пам'ять»: %s записів", changed)
+        log.info("Конфігурації приведено до нового формату / прибрано чужі моделі: %s записів", changed)
     return changed
 
 
