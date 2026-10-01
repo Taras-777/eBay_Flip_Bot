@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     url TEXT,
     sold_check TEXT,      -- перевірка через Trading API: pending/sold/unsold/active/unknown
     checked_at INTEGER,
+    category_id TEXT,     -- кінцева категорія eBay, де виставлено оголошення
+    category_name TEXT,
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -339,7 +341,8 @@ def init_db():
             conn.execute("ALTER TABLE seen_items ADD COLUMN last_seen_at INTEGER")
 
         obs_cols = {r["name"] for r in conn.execute("PRAGMA table_info(listing_obs)").fetchall()}
-        for col, ddl in [("title", "TEXT"), ("url", "TEXT"), ("sold_check", "TEXT"), ("checked_at", "INTEGER")]:
+        for col, ddl in [("title", "TEXT"), ("url", "TEXT"), ("sold_check", "TEXT"), ("checked_at", "INTEGER"),
+                         ("category_id", "TEXT"), ("category_name", "TEXT")]:
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
 
@@ -587,6 +590,18 @@ def reset_watch_market(watch_id):
         conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
 
 
+
+
+def reset_active_listings(watch_id):
+    """Після зміни категорій: продажі й зниклі лишаються (вони вже пройшли фільтри), а поточні
+    оголошення збираються заново — інакше лоти з прибраної категорії «зникли б» з пошуку
+    і бот прийняв би їх за продані. Повертає кількість прибраних активних."""
+    with get_conn() as conn:
+        removed = conn.execute("DELETE FROM listing_obs WHERE watch_id = ? AND status = 'active'",
+                               (watch_id,)).rowcount
+        conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (watch_id,))
+        conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
+    return removed
 
 
 def update_watch_exclude(watch_id, chat_id, exclude_text):
@@ -893,16 +908,18 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
             conn.execute(
                 """INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
                                             created_at, end_at, first_seen, last_seen, miss_count, status,
-                                            title, url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)
+                                            title, url, category_id, category_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?)
                    ON CONFLICT(watch_id, item_id) DO UPDATE SET
                      cond_group=excluded.cond_group, spec_group=excluded.spec_group,
                      price=excluded.price, end_at=excluded.end_at, last_seen=excluded.last_seen,
                      miss_count=0, status='active', gone_at=NULL, sold_check=NULL,
-                     title=excluded.title, url=excluded.url""",
+                     title=excluded.title, url=excluded.url,
+                     category_id=COALESCE(excluded.category_id, listing_obs.category_id),
+                     category_name=COALESCE(excluded.category_name, listing_obs.category_name)""",
                 (watch_id, it["item_id"], it["cond_group"], it.get("spec_group", "unspecified"),
                  it["total_price"], it.get("created_at"), it.get("end_at"), now, now,
-                 it.get("title"), it.get("url")),
+                 it.get("title"), it.get("url"), it.get("category_id"), it.get("category_name")),
             )
 
         if window_start is None:

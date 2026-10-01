@@ -45,7 +45,7 @@ from db import (
     list_watches,
     remove_watch,
     mark_market_stale,
-    reset_watch_market,
+    reset_active_listings,
     update_watch_categories,
     update_watch_min_price,
     update_watch_required_aspect,
@@ -535,7 +535,7 @@ async def _render_watch_categories(update, context, watch):
         "у різні місця.\n"
         "У дужках — кількість оголошень. ⚠️ — аксесуари й запчастини: зазвичай їх обирати не треба.\n"
         "Кожна додаткова категорія — ще один запит до eBay на кожну перевірку."
-        + "\nЯкщо прибрати категорію, ринок буде проаналізовано з нуля (додавання історію не чіпає)."
+        + "\nПісля зміни категорій продажі лишаються, а поточні оголошення бот збере заново."
         + (f"\n\n{CATEGORY_TREE_NOTE}"
            if any(o.get("parent") for o in context.user_data.get(f"cat_options_{watch_id}") or []) else ""),
         reply_markup=_category_keyboard(
@@ -604,8 +604,9 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         # Характеристики різних категорій різні — повертаємо автоматичний режим
         update_watch_required_aspect(watch_id, chat_id, None, None)
-        # Категорію прибрано/замінено — в історії могли бути оголошення з неї; рахуємо ринок заново
-        reset_watch_market(watch_id)
+        # Категорію прибрано/замінено: продажі лишаються, поточні оголошення бот збере заново
+        reset_active_listings(watch_id)
+        mark_market_stale(watch_id)
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
 
 

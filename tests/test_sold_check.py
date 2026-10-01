@@ -582,5 +582,43 @@ def test_adding_category_keeps_history(monkeypatch):
     assert [r["item_id"] for r in db.get_sold_listings(wid)] == ["s1"]  # продажі на місці
     assert db.get_market_stats(wid)[0]["updated_at"] == 0               # ринок перерахується найближчим циклом
 
+    db.update_listing_observations(wid, [{"item_id": "a1", "cond_group": "used", "spec_group": "500GB",
+                                          "total_price": 95, "category_id": "139971"}])
     press("done", {"171831"})                                           # прибрали стару категорію
-    assert db.get_sold_listings(wid) == [] and db.get_market_stats(wid) == []
+    assert [r["item_id"] for r in db.get_sold_listings(wid)] == ["s1"]  # продажі лишаються
+    assert db.get_current_listings(wid) == [] and db.get_market_stats(wid) == []   # поточні — заново
+
+
+def test_listing_category_saved():
+    import ebay_api
+    it = {"leafCategoryIds": ["9355"], "categories": [{"categoryId": "9355", "categoryName": "Handys & Smartphones"},
+                                                      {"categoryId": "15032", "categoryName": "Handys & Kommunikation"}]}
+    assert ebay_api._item_category(it) == {"category_id": "9355", "category_name": "Handys & Smartphones"}
+    assert ebay_api._item_category({}) == {"category_id": None, "category_name": None}
+    wid = db.add_watch(1, "iPhone", "iPhone", "", "", 15)
+    db.update_listing_observations(wid, [{"item_id": "p1", "cond_group": "used", "spec_group": "256GB",
+                                          "total_price": 600, **ebay_api._item_category(it)}])
+    db.update_listing_observations(wid, [{"item_id": "p1", "cond_group": "used", "spec_group": "256GB",
+                                          "total_price": 590}])            # без категорії — стара лишається
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT category_id, category_name FROM listing_obs WHERE item_id = 'p1'").fetchone()
+    assert (row["category_id"], row["category_name"]) == ("9355", "Handys & Smartphones")
+
+
+def test_restore_sales_from_backup(monkeypatch, tmp_path, capsys):
+    import backup
+    import restore_sales
+    import settings
+    monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
+    wid = db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15)
+    add_sale(wid, "s1", 600, "256GB", confirmed=True)
+    add_sale(wid, "s2", 620, "256GB", confirmed=True)
+    backup.make_backup()
+    db.reset_watch_market(wid)                         # так раніше стирала зміна категорії
+    add_sale(wid, "s3", 640, "256GB", confirmed=True)  # нове після копії — лишається
+    monkeypatch.setattr("sys.argv", ["restore_sales.py", "15 PRO"])
+    assert restore_sales.main() == 0
+    assert sorted(r["item_id"] for r in db.get_sold_listings(wid)) == ["s1", "s2", "s3"]
+    assert "повернуто продажів і зниклих: 2" in capsys.readouterr().out
+    assert restore_sales.main() == 0                   # повторний запуск нічого не дублює
+    assert len(db.get_sold_listings(wid)) == 3

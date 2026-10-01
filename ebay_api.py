@@ -828,6 +828,7 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "currency": "EUR",
                 "url": it.get("itemWebUrl"),
                 "category_names": [c.get("categoryName") or "" for c in it.get("categories") or []],
+                **_item_category(it),
                 "condition": it.get("condition"),
                 "condition_id": str(it.get("conditionId") or ""),
                 "cond_group": cond_group,
@@ -887,6 +888,14 @@ def _watch_search_kwargs(w):
         "exclude_terms": effective_exclude(w),
         "min_price": effective_min_price(w),
     }
+
+
+def _item_category(it):
+    """Кінцева категорія оголошення (id і назва) — з відповіді пошуку, без додаткових запитів."""
+    cats = it.get("categories") or []
+    leaf = next(iter(it.get("leafCategoryIds") or []), None) or (cats[0].get("categoryId") if cats else None)
+    name = next((c.get("categoryName") for c in cats if c.get("categoryId") == leaf), None)
+    return {"category_id": str(leaf) if leaf else None, "category_name": name or None}
 
 
 def search_in_categories(category_ids, sort="newlyListed", **kwargs):
