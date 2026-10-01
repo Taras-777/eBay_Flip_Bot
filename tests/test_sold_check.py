@@ -438,9 +438,9 @@ def test_remove_wrong_item_from_sales(monkeypatch):
 
     upd = make_update(f"sales:{w['id']}")
     asyncio.run(handlers.sales_callback(upd, MagicMock()))
-    assert f"srej:{w['id']}:0:case" in shown[-1][1] and "Продано: <b>6</b>" in shown[-1][0]
+    assert f"srej:{w['id']}:a:case" in shown[-1][1] and "Продано: <b>6</b>" in shown[-1][0]
 
-    upd = make_update(f"srej:{w['id']}:0:case")
+    upd = make_update(f"srej:{w['id']}:a:case")
     asyncio.run(handlers.sales_reject_callback(upd, MagicMock()))
     text = shown[-1][0]
     assert "❌ Прибрано" in text and "Продано: <b>5</b>" in text
@@ -449,17 +449,28 @@ def test_remove_wrong_item_from_sales(monkeypatch):
     assert stat["sale_price"] == 620 and stat["sale_source"] == "за 5 проданими"  # ціну перераховано одразу
 
 
-def test_sales_pagination():
+def test_sales_filter_by_config():
     import handlers
     w = sales_watch()
-    for i in range(10):
-        add_sale(w["id"], f"s{i}", 600 + i, "256GB")
+    for i in range(24):
+        add_sale(w["id"], f"a{i}", 450 + i, "128GB")
+    for i in range(9):
+        add_sale(w["id"], f"b{i}", 500 + i, "256GB")
     sold = db.get_sold_listings(w["id"])
-    text = handlers._sales_text(w, sold, page=1)
-    assert "(стор. 2/2)" in text and "9. " in text and "\n1. " not in text
-    kb = handlers._sales_keyboard(w["id"], sold, 1)
+    text = handlers._sales_text(w, sold)
+    assert "(показано 20 останніх з 33)" in text and "\n20. " in text and "\n21. " not in text
+    kb = handlers._sales_keyboard(w["id"], sold)
     labels = [b.text for r in kb.inline_keyboard for b in r]
-    assert "❌ 9" in labels and "◀️ Новіші" in labels and "❌ 1" not in labels
+    assert ["• Усі (33)", "128GB (24)", "256GB (9)"] == labels[:3]
+    assert "◀️ Новіші" not in labels and "Старіші ▶️" not in labels      # без гортання
+    flt = next(b.callback_data for r in kb.inline_keyboard for b in r if b.text == "256GB (9)").split(":")[2]
+    text = handlers._sales_text(w, sold, flt=flt)
+    assert "<b>Останні продажі</b> · 256GB:" in text and "· 128GB ·" not in text.split("Останні продажі")[1]
+    kb = handlers._sales_keyboard(w["id"], sold, flt)
+    labels = [b.text for r in kb.inline_keyboard for b in r]
+    assert "• 256GB (9)" in labels and "❌ 9" in labels and "❌ 10" not in labels
+    srej = [b.callback_data for r in kb.inline_keyboard for b in r if b.text == "❌ 1"][0]
+    assert srej.startswith(f"srej:{w['id']}:{flt}:")                         # після ❌ — той самий фільтр
 
 
 def test_watch_card_shows_tracking_summary(monkeypatch):

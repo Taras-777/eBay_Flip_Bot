@@ -155,7 +155,7 @@ def test_undo_sales_reject(monkeypatch):
     for i, price in enumerate([600, 610, 620, 630, 640]):
         add_sale(w["id"], f"ok{i}", price, "256GB")
     add_sale(w["id"], "case", 25, "256GB")
-    press(f"srej:{w['id']}:0:case")
+    press(f"srej:{w['id']}:a:case")
     assert "Продано: <b>5</b>" in shown[-1][0]
     press(f"undo:{_last_undo()['id']}")
     assert "Продано: <b>6</b>" in shown[-1][0] and "case" not in db.get_rejected_ids(w["id"])

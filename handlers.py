@@ -71,7 +71,12 @@ from screen_watch import (  # noqa: F401
     _learned_excluded,
 )
 from screen_sales import (  # noqa: F401
-    SALES_PER_PAGE,
+    SALES_LIST_MAX,
+    _sales_specs,
+    _flt_spec,
+    _filtered,
+    _listed,
+    _spec_label,
     _sales_text,
     _sales_keyboard,
     _show_sales,
