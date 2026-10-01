@@ -105,6 +105,25 @@ def _listed(ts):
     return f"{moment:%d.%m.%Y} ({plural(days, 'день', 'дні', 'днів')} тому)"
 
 
+def auction_note(current_bid=None, bid_count=None, end_at=None, as_of=""):
+    """«🔨 Ще й аукціон: ставка 556€ · 36 ставок · до кінця 18 год» — купити зараз за ціною
+    оголошення можна, але хтось може раніше виграти аукціон."""
+    parts = ["🔨 Ще й аукціон"]
+    details = []
+    if current_bid:
+        details.append(f"ставка {current_bid:.0f}€")
+    if bid_count:
+        details.append(plural(bid_count, "ставка", "ставки", "ставок"))
+    if end_at:
+        left = end_at - time.time()
+        if left > 0:
+            details.append(f"до кінця {left / 3600:.0f} год" if left >= 3600 else f"до кінця {left / 60:.0f} хв")
+        else:
+            details.append("аукціон уже закінчився")
+    text = parts[0] + (": " + " · ".join(details) if details else "")
+    return text + (f" {as_of}" if as_of else "") + "\n   купити зараз можна, поки аукціон не виграли"
+
+
 def _when(ts):
     moment = datetime.fromtimestamp(ts, LOCAL_TZ)
     days = (datetime.now(LOCAL_TZ).date() - moment.date()).days

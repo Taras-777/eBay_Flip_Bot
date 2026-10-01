@@ -194,6 +194,8 @@ async def check_one_watch(app: Application, w: dict):
             item_spec=it["spec_group"],
             sale_source=stat.get("sale_source"),
             sale_sample=stat.get("sample_size"),
+            auction=({"current_bid": it.get("current_bid"), "bid_count": it.get("bid_count"),
+                      "end_at": it.get("end_at")} if it.get("auction") else None),
         )
         seen_updates.append((it["item_id"], it["effective_price"], it["effective_price"]))
         new_deals.append((deal_id, it, stat))

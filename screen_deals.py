@@ -76,6 +76,8 @@ def _deal_card(n, d, sold=None):
     _, profit = estimate_resale_profit(sale, d["total_price"])
     new = "🆕 " if d["seen_at"] is None else ""
     offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
+    if d.get("watch_count"):
+        offer += f" · 👁 стежать: {d['watch_count']}"
     warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""
     for w in laptop_warnings(d["title"]):
         warn += f"\n{w}"
@@ -84,6 +86,9 @@ def _deal_card(n, d, sold=None):
         cut = (track["first_price"] - d["total_price"]) / track["first_price"] * 100
         warn += (f"\n📉 Продавець уже знизив ціну на {cut:.0f}% (було {track['first_price']:.0f}€) — "
                  "ймовірно, погодиться поторгуватись")
+    if d.get("auction"):
+        warn += "\n" + auction_note(d.get("current_bid"), d.get("bid_count"), d.get("end_at"),
+                                    as_of="(на момент знахідки)")
     basis = basis_line(d)
     listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
     return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
@@ -104,8 +109,9 @@ async def _render_deals(update, context, page=0, note=""):
     deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     # Перед показом — чи ці лоти ще продаються (вигідні розкуповують швидко)
     removed = await asyncio.to_thread(recheck_shown_deals, [d["id"] for d in deals]) if deals else 0
-    if removed:
+    if deals:   # свіжі дані після перевірки (зокрема «👁 стежать»)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
+    if removed:
         gone_note = f"🗑 Прибрано вже проданих чи знятих: {removed}"
         note = f"{note}\n{gone_note}" if note else gone_note
     if not deals and page > 0:
@@ -216,4 +222,5 @@ async def deals_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 from screen_common import (  # noqa: E402
     _listed,
     _when,
+    auction_note,
 )

@@ -52,6 +52,34 @@ def test_parse_errors():
     assert info == {"result": "unknown", "error": "21920397: Item is not accessible."}
 
 
+SOLD_XML = ('<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item>'
+            '<ItemID>298706741553</ItemID><ListingType>FixedPriceItem</ListingType><Quantity>3</Quantity>'
+            '<BestOfferDetails><BestOfferCount>4</BestOfferCount><BestOfferEnabled>true</BestOfferEnabled>'
+            '</BestOfferDetails><ListingDetails><EndTime>2026-10-01T12:00:00.000Z</EndTime></ListingDetails>'
+            '<SellingStatus><BidCount>0</BidCount><CurrentPrice currencyID="EUR">579.0</CurrentPrice>'
+            '<ConvertedCurrentPrice currencyID="EUR">579.0</ConvertedCurrentPrice><QuantitySold>1</QuantitySold>'
+            '<ListingStatus>Completed</ListingStatus></SellingStatus></Item></GetItemResponse>')
+
+
+def test_sale_details_saved(monkeypatch):
+    info = trading_api.parse_get_item(SOLD_XML)
+    assert info["result"] == "sold" and info["details"] == {
+        "sold_price": 579.0, "sold_at": 1790856000, "bid_count": 0, "offer_count": 4, "quantity": 3,
+        "listing_type": "FixedPriceItem", "watch_count": None}
+    assert trading_api.parse_get_item(xml_item())["details"]["sold_price"] is None   # полів немає — None
+
+    for wid in (1, 2):   # той самий лот у двох товарах (спільний ринок)
+        db.update_listing_observations(wid, [{"item_id": "v1|9|0", "cond_group": "used", "spec_group": "256GB",
+                                              "total_price": 590}])
+    with db.get_conn() as conn:
+        conn.execute("UPDATE listing_obs SET status = 'gone', sold_check = 'pending', gone_at = ?", (int(time.time()),))
+    monkeypatch.setattr(trading_api, "get_item_status", lambda item_id: info)
+    trading_api._run_checks([(db.apply_sold_check, (1, "v1|9|0")), (db.apply_sold_check, (2, "v1|9|0"))])
+    with db.get_conn() as conn:
+        rows = [dict(r) for r in conn.execute("SELECT sold_check, sold_price, offer_count, quantity FROM listing_obs")]
+    assert rows == [{"sold_check": "sold", "sold_price": 579.0, "offer_count": 4, "quantity": 3}] * 2
+
+
 def test_legacy_item_id():
     assert trading_api.legacy_item_id("v1|298706741553|0") == "298706741553"
     assert trading_api.legacy_item_id("298706741553") == "298706741553"

@@ -84,7 +84,7 @@ def test_background_recheck_removes_gone(monkeypatch):
     _, ids = _deals(3)
     status = {"v1|0|0": True, "v1|1|0": False, "v1|2|0": None}
     asked = []
-    monkeypatch.setattr(deal_check, "listing_available", lambda item: asked.append(item) or status[item])
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (asked.append(item) or status[item], None))
 
     assert deal_check.recheck_deals() == 0 and asked == []     # щойно знайдені — ще свіжі
     _age_checks(31 * 60)
@@ -99,14 +99,14 @@ def test_below_min_profit_not_checked(monkeypatch):
     wid = db.add_watch(1, "iPhone", "iPhone", "", "", 15)
     db.add_deal(wid, "v1|x|0", "iPhone", 480, "EUR", 580, 20, "u", False)   # прибуток 6€ — не видно
     _age_checks(DAY)
-    monkeypatch.setattr(deal_check, "listing_available", lambda item: 1 / 0)
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (1 / 0, None))
     assert deal_check.recheck_deals() == 0
 
 
 def test_opening_inbox_rechecks_page(monkeypatch):
     _, ids = _deals(3)
     _age_checks(11 * 60)
-    monkeypatch.setattr(deal_check, "listing_available", lambda item: item != "v1|0|0")
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (item != "v1|0|0", None))
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
@@ -153,3 +153,106 @@ def test_trading_breakdown(monkeypatch):
     assert db.get_api_calls_today("trading:watch") == 2
     assert db.get_api_calls_today("trading:discovery") == 1
     assert callable(account._connected_text)
+
+
+# ---------- 👁 скільки людей стежать ----------
+
+def test_watchers_shown_in_deal_card(monkeypatch):
+    import trading_api
+    xml = ('<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>'
+           '<WatchCount>23</WatchCount><SellingStatus><QuantitySold>0</QuantitySold>'
+           '<ListingStatus>Active</ListingStatus></SellingStatus></Item></GetItemResponse>')
+    info = trading_api.parse_get_item(xml)
+    assert info["result"] == "active" and info["details"]["watch_count"] == 23
+    monkeypatch.setattr(deal_check, "is_connected", lambda: True)
+    monkeypatch.setattr(deal_check, "trading_calls_today", lambda: (0, None))
+    monkeypatch.setattr(deal_check, "get_item_status", lambda item: info)
+    assert deal_check.listing_state("v1|0|0") == (True, 23)
+
+    _, ids = _deals(1)
+    _age_checks(11 * 60)
+    handlers_mod, shown, press = _screen(monkeypatch)
+    upd, ctx = press("deals:0")
+    asyncio.run(handlers_mod.deals_callback(upd, ctx))
+    assert "👁 стежать: 23" in shown[-1][0] and db.get_deal(ids[0])["watch_count"] == 23
+
+
+def test_shop_listing_sold_quantity_saved(fake_ebay, monkeypatch):
+    import ebay_api
+    from conftest import FakeResponse
+    monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(
+        {"localizedAspects": [{"name": "Speicherkapazität", "value": "256 GB"}],
+         "estimatedAvailabilities": [{"estimatedSoldQuantity": 14, "estimatedAvailableQuantity": 6}]}))
+    assert ebay_api.fetch_item_aspects("v1|shop|0") == {"speicherkapazität": "256 GB"}
+    db.save_cached_spec("v1|shop|0", "256GB", {"speicherkapazität": "256 GB"})   # як після читання характеристик
+    with db.get_conn() as conn:
+        row = dict(conn.execute("SELECT spec_group, est_sold, est_available FROM item_specs").fetchone())
+    assert row == {"spec_group": "256GB", "est_sold": 14, "est_available": 6}
+
+
+# ---------- 🔨 «аукціон + купити зараз» ----------
+
+def test_auction_with_buy_now_marked(fake_ebay, monkeypatch):
+    import ebay_api
+    from conftest import listing
+    fake_ebay.listings = [
+        listing("v1|bin|0", "iPhone 16 Pro 128GB", 810, buyingOptions=["AUCTION", "FIXED_PRICE"],
+                currentBidPrice={"value": "556.00", "currency": "EUR"}, bidCount=36),
+        listing("v1|bid|0", "iPhone 16 Pro 128GB", 300, buyingOptions=["AUCTION", "FIXED_PRICE"],
+                currentBidPrice={"value": "300.00", "currency": "EUR"}, bidCount=2),
+        listing("v1|plain|0", "iPhone 16 Pro 128GB", 600)]
+    items = {it["item_id"]: it for it in ebay_api.search_active_items("iPhone 16 Pro", limit=10)}
+    assert items["v1|bin|0"]["auction"] and items["v1|bin|0"]["current_bid"] == 556 and items["v1|bin|0"]["bid_count"] == 36
+    assert not items["v1|bin|0"]["bid_is_price"] and items["v1|bid|0"]["bid_is_price"]
+    assert items["v1|plain|0"]["auction"] is False
+
+    import market
+    w = {"id": db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 15), "query": "iPhone 16 Pro"}
+    kept = [it["item_id"] for it in market._apply_item_filters(w, list(items.values()))]
+    assert "v1|bid|0" not in kept and "v1|bin|0" in kept          # ціна-ставка ще зросте — не порівнюємо
+
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    db.add_deal(wid, "v1|a|0", "PS5 Slim", 300, "EUR", 620, 40, "u", False,
+                auction={"current_bid": 210, "bid_count": 5, "end_at": int(time.time() + 5 * 3600)})
+    handlers_mod, shown, press = _screen(monkeypatch)
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (True, None))
+    upd, ctx = press("deals:0")
+    asyncio.run(handlers_mod.deals_callback(upd, ctx))
+    assert "🔨 Ще й аукціон: ставка 210€ · 5 ставок · до кінця 5 год (на момент знахідки)" in shown[-1][0]
+
+
+def test_buy_it_now_price_used_for_buying(fake_ebay, monkeypatch):
+    import ebay_api
+    import ebay_user
+    import market
+    import trading_api
+    from conftest import listing
+    fake_ebay.listings = [listing("v1|bid|0", "iPhone 16 Pro 128GB", 300, buyingOptions=["AUCTION", "FIXED_PRICE"],
+                                  currentBidPrice={"value": "300.00", "currency": "EUR"}, bidCount=2)]
+    items = ebay_api.search_active_items("iPhone 16 Pro", limit=10)
+    w = {"id": db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 15), "query": "iPhone 16 Pro"}
+    asked = []
+    monkeypatch.setattr(ebay_user, "is_connected", lambda: True)
+    monkeypatch.setattr(trading_api, "fetch_buy_it_now", lambda item_id: asked.append(item_id) or 810.0)
+    kept = market._apply_item_filters(w, items)
+    assert [(it["price"], it["total_price"], it["auction"]) for it in kept] == [(810.0, 810.0, True)]
+    market._apply_item_filters(w, ebay_api.search_active_items("iPhone 16 Pro", limit=10))
+    assert asked == ["v1|bid|0"]                                   # друге звернення — з кешу
+    xml = ('<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>'
+           '<BuyItNowPrice currencyID="EUR">810.0</BuyItNowPrice></Item></GetItemResponse>')
+    assert trading_api.parse_buy_it_now(xml) == 810.0
+
+
+def test_auctions_not_in_market_stats(fake_ebay):
+    import market
+    from conftest import listing
+    from test_scheduler import consoles
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    db.update_listing_observations(wid, [{"item_id": "auc", "cond_group": "used", "spec_group": "1TB",
+                                          "total_price": 200}])          # записане до цієї зміни
+    fake_ebay.listings = consoles() + [listing("auc", "Sony PlayStation 5 Slim 1TB", 200,
+                                               buyingOptions=["AUCTION", "FIXED_PRICE"], bidCount=3)]
+    items, _, present = market._fetch_market_items(db.get_watch(wid, 1))
+    assert "auc" in present and "auc" not in [it["item_id"] for it in items]
+    with db.get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM listing_obs WHERE item_id = 'auc'").fetchone()["c"] == 0

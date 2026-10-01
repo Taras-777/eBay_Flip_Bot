@@ -24,6 +24,7 @@ from settings import (
     RESALE_SHIPPING_EUR,
     SALE_PRICE_PERCENTILE,
     SEARCH_RESERVE,
+    TRADING_DAILY_BUDGET,
     log,
 )
 from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, spec_matches, spec_parents
@@ -41,6 +42,9 @@ from textparse import (
 from db import (
     delete_listing_obs_by_ids,
     get_all_listing_rows,
+    get_bin_prices,
+    save_bin_price,
+    record_api_call,
     get_spec_rows,
     set_listing_spec,
     list_watches,
@@ -65,7 +69,7 @@ from db import (
     watch_category_ids,
 )
 from shared_market import MANUAL_CACHE_SECONDS, MARKET_CACHE_SECONDS, market_page, own_filter
-from ebay_api import collapse_categories
+from ebay_api import collapse_categories, trading_calls_today
 from ebay_api import (
     browse_budget_left,
     fetch_item_aspects,
@@ -258,6 +262,51 @@ def watch_requires_spec(w):
     return bool(value)
 
 
+MAX_BIN_LOOKUPS = 20   # ціни «купити зараз» через Trading API за один виклик фільтрів
+
+
+def _buy_it_now_prices(items):
+    """«Аукціон + купити зараз», де пошук віддав як ціну ставку: ціна «купити зараз» —
+    з кешу або через Trading API (окремий ліміт, лише з входом в акаунт). {item_id: ціна}."""
+    if not items:
+        return {}
+    prices = get_bin_prices([it["item_id"] for it in items])
+    missing = [it["item_id"] for it in items if it["item_id"] not in prices][:MAX_BIN_LOOKUPS]
+    if not missing:
+        return prices
+    from ebay_user import is_connected   # тут, щоб не було циклу імпортів
+    from trading_api import fetch_buy_it_now
+    if not is_connected():
+        return prices
+    for item_id in missing:
+        if trading_calls_today()[0] >= TRADING_DAILY_BUDGET:
+            break
+        record_api_call("trading:watch")
+        try:
+            price = fetch_buy_it_now(item_id)
+        except Exception as e:
+            log.debug("Не вдалося дізнатися ціну «купити зараз» для %s: %s", item_id, e)
+            continue
+        if price:
+            save_bin_price(item_id, price)
+            prices[item_id] = price
+    return prices
+
+
+def _use_buy_it_now(it, bin_prices):
+    """Ціна оголошення = «купити зараз» (аукціон — лише бонус). False — ціна невідома."""
+    price = bin_prices.get(it["item_id"])
+    if not price:
+        return False
+    delta = price - (it.get("current_bid") or it["price"])
+    ratio = it["effective_price"] / it["total_price"] if it.get("total_price") else 1
+    it["price"] = price
+    it["total_price"] += delta
+    it["effective_price"] = it["total_price"] * ratio
+    it["bid_is_price"] = False
+    return True
+
+
 def _apply_item_filters(w, items):
     """
     Жорсткі фільтри лотів:
@@ -275,10 +324,13 @@ def _apply_item_filters(w, items):
     # чохлів/запчастин, — не товар (хіба що користувач сам обрав таку категорію).
     wants_accessories = any(is_accessory_category(c["name"]) for c in get_watch_categories(w))
     laptop_watch = is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)])
+    bin_prices = _buy_it_now_prices([it for it in items if it.get("bid_is_price") and it.get("item_id") not in rejected])
     kept = []
     for it in items:
         if it.get("item_id") in rejected:
             continue
+        if it.get("bid_is_price") and not _use_buy_it_now(it, bin_prices):
+            continue   # ціна «купити зараз» невідома, а ставка ще зросте — не порівнюємо
         # Ноутбук: «RAM passend für ROG Strix G15» — запчастина, хоч у назві й модель ноутбука
         if laptop_watch and looks_like_laptop_part(it["title"], it.get("category_names")):
             continue
@@ -341,6 +393,12 @@ def _fetch_market_items(w, max_age=MARKET_CACHE_SECONDS):
             window_starts.append(min(cat_created))
     window_start = max(window_starts) if window_starts else None
     items = own_filter(w, items)   # особисті фільтри (стан, мін. ціна, виключені слова)
+    # «Аукціон + купити зараз» — не в статистику: невідомо, за ставкою чи за «купити зараз» продадуть
+    # (у present_ids вони лишаються — тож не «зникнуть» і не стануть продажем)
+    auction_ids = [it["item_id"] for it in items if it.get("auction") and it.get("item_id")]
+    if auction_ids and w.get("id"):
+        delete_listing_obs_by_ids(w["id"], auction_ids)   # записані раніше — інакше потім «продаж»
+    items = [it for it in items if not it.get("auction")]
     _annotate_items(items, max_lookups=MAX_SPEC_LOOKUPS_PER_MARKET_SCAN, watch=w)
     return _apply_item_filters(w, items), window_start, seen_ids
 

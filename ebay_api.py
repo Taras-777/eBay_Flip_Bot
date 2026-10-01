@@ -52,6 +52,7 @@ from db import (
     record_api_call,
     set_meta,
     save_category_aspects,
+    save_item_availability,
 )
 
 
@@ -366,10 +367,24 @@ def fetch_item_aspects(item_id):
     if resp.status_code == 404:
         return {}
     resp.raise_for_status()
+    data = resp.json()
+    _save_availability(item_id, data)
     return {
         (a.get("name") or "").strip().lower(): a.get("value") or ""
-        for a in resp.json().get("localizedAspects") or []
+        for a in data.get("localizedAspects") or []
     }
+
+
+def _save_availability(item_id, data):
+    """Оголошення магазину з кількома штуками: скільки продано й лишилось (без нових запитів)."""
+    avail = next(iter(data.get("estimatedAvailabilities") or []), None) or {}
+    sold, left = avail.get("estimatedSoldQuantity"), avail.get("estimatedAvailableQuantity")
+    if sold is None and left is None:
+        return
+    try:
+        save_item_availability(item_id, sold, left)
+    except Exception as e:   # лише історія — пошук характеристик не ламаємо
+        log.debug("Не вдалося зберегти кількість для %s: %s", item_id, e)
 
 
 ITEM_ID_PATTERN = re.compile(r"/itm/(?:[^/?#]+/)?(\d{9,15})")
@@ -839,6 +854,8 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "created_at": _parse_ebay_ts(it.get("itemCreationDate")),
                 # варіантне оголошення (кілька кольорів/обсягів) — ціна стрибає між варіантами
                 "is_variation": bool(it.get("itemGroupHref") or it.get("itemGroupType")),
+                # «Аукціон + купити зараз»: поточна ставка й кількість ставок (позначка 🔨)
+                **_auction_info(it, buying_options, exchange_rate, price),
                 "end_at": _parse_ebay_ts(it.get("itemEndDate")),
                 "seller_feedback_score": feedback_score,
                 "seller_feedback_pct": feedback_pct,
@@ -892,6 +909,24 @@ def _watch_search_kwargs(w):
         "exclude_terms": effective_exclude(w),
         "min_price": effective_min_price(w),
     }
+
+
+def _auction_info(it, buying_options, exchange_rate, price):
+    if "AUCTION" not in buying_options:
+        return {"auction": False}
+    try:
+        raw_bid = float((it.get("currentBidPrice") or {}).get("value"))
+    except (TypeError, ValueError):
+        raw_bid = None
+    bid = raw_bid * exchange_rate if raw_bid is not None else None
+    try:
+        bids = int(it.get("bidCount")) if it.get("bidCount") is not None else None
+    except (TypeError, ValueError):
+        bids = None
+    # Якщо eBay віддав як ціну саму ставку (а не «купити зараз») — ціна оголошення ненадійна:
+    # ставка ще зросте, тож таке оголошення не порівнюємо з ринком
+    return {"auction": True, "current_bid": bid, "bid_count": bids,
+            "bid_is_price": raw_bid is not None and abs(raw_bid - price) < 0.01}
 
 
 def _item_category(it):

@@ -24,7 +24,7 @@ from ebay_api import _watch_search_kwargs, search_in_categories
 from market import _annotate_items, _apply_item_filters
 from panel import _ack_callback, show_panel
 from access import require_access
-from screen_common import _listed
+from screen_common import _listed, auction_note
 from laptops import laptop_warnings
 from undo import record as undo_record, short
 
@@ -217,6 +217,8 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         cond = f" · стан: {html.escape(it['condition'])}" if it.get("condition") else ""
         listed = f"\n📅 виставлено {_listed(it['created_at'])}" if it.get("created_at") else ""
         listed += "".join(f"\n{w}" for w in laptop_warnings(it["title"]))
+        if it.get("auction"):
+            listed += "\n" + auction_note(it.get("current_bid"), it.get("bid_count"), it.get("end_at"))
         lines.append(f"<b>{i}. {html.escape(it['title'][:160])}</b>\n"
                      f"💶 {it['price']:.0f} {html.escape(it['currency'])}{cond}{listed}")
         row = []

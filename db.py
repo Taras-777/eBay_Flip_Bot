@@ -69,7 +69,12 @@ CREATE TABLE IF NOT EXISTS item_specs (
     item_id TEXT PRIMARY KEY,
     spec_group TEXT NOT NULL,
     fetched_at INTEGER NOT NULL,
-    aspects_json TEXT
+    aspects_json TEXT,
+    -- з тієї самої відповіді (лише для історії): оголошення магазинів з кількома штуками
+    est_sold INTEGER,       -- скільки штук уже продано (estimatedSoldQuantity)
+    est_available INTEGER,  -- скільки лишилось
+    availability_at INTEGER,
+    bin_price REAL          -- ціна «купити зараз» для «аукціон + купити зараз» (Trading API)
 );
 
 -- Кеш характеристик категорії з Taxonomy API
@@ -144,6 +149,14 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     shipping_cost REAL,   -- найдешевша доставка (у price — уже разом з нею)
     pickup_only INTEGER,  -- 1 — без доставки, лише самовивіз
     country TEXT,         -- країна, звідки відправляють (лише країна, без адреси)
+    -- з перевірки продажу (та сама відповідь GetItem, без додаткових запитів):
+    sold_price REAL,      -- фінальна ціна без доставки
+    sold_at INTEGER,      -- точний час завершення
+    bid_count INTEGER,    -- кількість ставок (оголошення «аукціон + купити зараз»)
+    offer_count INTEGER,  -- скільки пропозицій ціни надіслали продавцю
+    quantity INTEGER,     -- кількість штук в оголошенні (магазини)
+    listing_type TEXT,    -- FixedPriceItem / Chinese (аукціон)
+    watch_count INTEGER,  -- скільки людей стежили за оголошенням на момент перевірки
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -220,7 +233,12 @@ CREATE TABLE IF NOT EXISTS deals (
     checked_at INTEGER,    -- коли востаннє перевіряли, чи воно ще продається
     item_spec TEXT,        -- власна конфігурація оголошення (spec_group — група, з якої взято ціну)
     sale_source TEXT,      -- на чому базується «продати»: «за 7 проданими» / «за поточними оголошеннями»
-    sale_sample INTEGER    -- скільки оголошень у групі
+    sale_sample INTEGER,   -- скільки оголошень у групі
+    watch_count INTEGER,   -- скільки людей стежать (з перевірки «ще продається?»)
+    auction INTEGER DEFAULT 0,  -- «аукціон + купити зараз»
+    current_bid REAL,      -- ставка на момент знахідки
+    bid_count INTEGER,
+    end_at INTEGER         -- коли закінчується
 );
 
 -- «📉 Знизили ціну»: перша й поточна ціна кожного оголошення товару
@@ -350,7 +368,9 @@ def init_db():
         for col, ddl in [("title", "TEXT"), ("url", "TEXT"), ("sold_check", "TEXT"), ("checked_at", "INTEGER"),
                          ("category_id", "TEXT"), ("category_name", "TEXT"), ("buying_options", "TEXT"),
                          ("condition_id", "TEXT"), ("shipping_cost", "REAL"), ("pickup_only", "INTEGER"),
-                         ("country", "TEXT")]:
+                         ("country", "TEXT"), ("sold_price", "REAL"), ("sold_at", "INTEGER"),
+                         ("bid_count", "INTEGER"), ("offer_count", "INTEGER"), ("quantity", "INTEGER"),
+                         ("listing_type", "TEXT"), ("watch_count", "INTEGER")]:
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
 
@@ -360,7 +380,9 @@ def init_db():
             conn.execute("UPDATE deals SET seen_at = created_at")  # старі — вже бачені в чаті
         for col, ddl in [("cond_group", "TEXT"), ("spec_group", "TEXT"),
                          ("listed_at", "INTEGER"), ("checked_at", "INTEGER"),
-                         ("item_spec", "TEXT"), ("sale_source", "TEXT"), ("sale_sample", "INTEGER")]:
+                         ("item_spec", "TEXT"), ("sale_source", "TEXT"), ("sale_sample", "INTEGER"),
+                         ("watch_count", "INTEGER"), ("auction", "INTEGER DEFAULT 0"), ("current_bid", "REAL"),
+                         ("bid_count", "INTEGER"), ("end_at", "INTEGER")]:
             if deal_cols and col not in deal_cols:
                 conn.execute(f"ALTER TABLE deals ADD COLUMN {col} {ddl}")
 
@@ -381,6 +403,10 @@ def init_db():
             conn.execute("ALTER TABLE rejected_items ADD COLUMN reason TEXT NOT NULL DEFAULT 'wrong'")
 
         spec_cols = {r["name"] for r in conn.execute("PRAGMA table_info(item_specs)").fetchall()}
+        for col, ddl in (("est_sold", "INTEGER"), ("est_available", "INTEGER"), ("availability_at", "INTEGER"),
+                         ("bin_price", "REAL")):
+            if spec_cols and col not in spec_cols:
+                conn.execute(f"ALTER TABLE item_specs ADD COLUMN {col} {ddl}")
         if "aspects_json" not in spec_cols:
             conn.execute("ALTER TABLE item_specs ADD COLUMN aspects_json TEXT")
 
@@ -1003,14 +1029,32 @@ def get_pending_sold_checks(limit, watch_id=None):
         ).fetchall()]
 
 
-def apply_sold_check(watch_id, item_id, result):
+SALE_DETAIL_FIELDS = ("sold_price", "sold_at", "bid_count", "offer_count", "quantity", "listing_type",
+                      "watch_count")
+
+
+def apply_sold_check(watch_id, item_id, result, details=None):
+    """details — деталі завершення з GetItem (лише для історії). Якщо їх немає (лот уже
+    перевіряли для іншого товару), беремо з того запису."""
     status, mark = SOLD_CHECK_OUTCOMES.get(result, (None, "unknown"))
     with get_conn() as conn:
-        conn.execute(
+        updated = conn.execute(
             """UPDATE listing_obs SET sold_check = ?, checked_at = ?, status = COALESCE(?, status)
                WHERE watch_id = ? AND item_id = ? AND sold_check = 'pending'""",
             (mark, int(time.time()), status, watch_id, item_id),
-        )
+        ).rowcount
+        if not updated:
+            return
+        if details is None:
+            row = conn.execute(
+                "SELECT " + ", ".join(SALE_DETAIL_FIELDS) + " FROM listing_obs WHERE item_id = ? "
+                "AND watch_id != ? AND sold_check IS NOT NULL AND sold_check != 'pending' LIMIT 1",
+                (item_id, watch_id)).fetchone()
+            details = dict(row) if row else {}
+        values = [details.get(f) for f in SALE_DETAIL_FIELDS]
+        if any(v is not None for v in values):
+            conn.execute("UPDATE listing_obs SET " + ", ".join(f"{f} = ?" for f in SALE_DETAIL_FIELDS)
+                         + " WHERE watch_id = ? AND item_id = ?", (*values, watch_id, item_id))
 
 
 def sold_check_stats(days=7):
@@ -1266,6 +1310,37 @@ def save_cached_spec(item_id, spec_group, aspects=None):
         )
 
 
+def save_item_availability(item_id, sold, available):
+    """«Продано N штук» з характеристик оголошення — лише для історії."""
+    now = int(time.time())
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO item_specs (item_id, spec_group, fetched_at, est_sold, est_available, availability_at)
+               VALUES (?, 'unspecified', ?, ?, ?, ?)
+               ON CONFLICT(item_id) DO UPDATE SET est_sold = excluded.est_sold,
+                 est_available = excluded.est_available, availability_at = excluded.availability_at""",
+            (item_id, now, sold, available, now))
+
+
+def get_bin_prices(item_ids):
+    """Збережені ціни «купити зараз» → {item_id: ціна}."""
+    ids = [i for i in item_ids if i]
+    if not ids:
+        return {}
+    with get_conn() as conn:
+        rows = conn.execute("SELECT item_id, bin_price FROM item_specs WHERE bin_price IS NOT NULL AND item_id IN ("
+                            + ",".join("?" * len(ids)) + ")", ids).fetchall()
+    return {r["item_id"]: r["bin_price"] for r in rows}
+
+
+def save_bin_price(item_id, price):
+    now = int(time.time())
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO item_specs (item_id, spec_group, fetched_at, bin_price) VALUES (?, 'unspecified', ?, ?)
+               ON CONFLICT(item_id) DO UPDATE SET bin_price = excluded.bin_price""", (item_id, now, price))
+
+
 def get_cached_category_aspects(category_id):
     since = int(time.time()) - CATEGORY_ASPECTS_CACHE_DAYS * 86400
     with get_conn() as conn:
@@ -1296,18 +1371,20 @@ def save_category_aspects(category_id, aspects):
 
 def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
              has_best_offer=False, cond_group=None, spec_group=None, listed_at=None,
-             item_spec=None, sale_source=None, sale_sample=None):
+             item_spec=None, sale_source=None, sale_sample=None, auction=None):
+    """auction — {'current_bid', 'bid_count', 'end_at'} для «аукціон + купити зараз»."""
     now = int(time.time())
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO deals
                (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
                 has_best_offer, status, created_at, cond_group, spec_group, listed_at, checked_at,
-                item_spec, sale_source, sale_sample)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                item_spec, sale_source, sale_sample, auction, current_bid, bid_count, end_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url,
              int(suspicious), int(has_best_offer), now, cond_group, spec_group, listed_at, now,
-             item_spec, sale_source, sale_sample),
+             item_spec, sale_source, sale_sample, int(auction is not None),
+             (auction or {}).get("current_bid"), (auction or {}).get("bid_count"), (auction or {}).get("end_at")),
         )
         return cur.lastrowid
 
@@ -1444,14 +1521,16 @@ def get_deals_to_recheck(limit, stale_seconds, deal_ids=None):
         return [dict(r) for r in conn.execute(sql, params + [limit]).fetchall()]
 
 
-def mark_deal_checked(deal_id, gone=False):
-    """Результат перевірки: gone=True — лот продано/знято, пропозиція зникає зі списку."""
+def mark_deal_checked(deal_id, gone=False, watch_count=None):
+    """Результат перевірки: gone=True — лот продано/знято, пропозиція зникає зі списку.
+    watch_count — скільки людей стежать (None — eBay не сказав, лишаємо попереднє)."""
     with get_conn() as conn:
         if gone:
             conn.execute("UPDATE deals SET status = 'gone', checked_at = ? WHERE id = ? AND status = 'new'",
                          (int(time.time()), deal_id))
         else:
-            conn.execute("UPDATE deals SET checked_at = ? WHERE id = ?", (int(time.time()), deal_id))
+            conn.execute("UPDATE deals SET checked_at = ?, watch_count = COALESCE(?, watch_count) WHERE id = ?",
+                         (int(time.time()), watch_count, deal_id))
 
 
 def mark_deals_seen(deal_ids):
@@ -1794,7 +1873,7 @@ def get_pending_discovery_checks(limit):
         ).fetchall()]
 
 
-def apply_discovery_check(candidate, item_id, result):
+def apply_discovery_check(candidate, item_id, result, details=None):
     """Як apply_sold_check, але для «💡 Що перепродавати»: знятий чи ще активний лот
     перестає вважатися проданим."""
     status, mark = SOLD_CHECK_OUTCOMES.get(result, (None, "unknown"))

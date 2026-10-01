@@ -57,7 +57,7 @@ def test_card_explains_price(monkeypatch):
     db.upsert_market_stats(wid, "used", "*", 650, 30, sale_price=600, sale_source="за поточними оголошеннями")
     db.add_deal(wid, "v1|a|0", "iPhone 16 Pro 256GB Schwarz", 400, "EUR", 600, 30, "u", False,
                 cond_group="used", spec_group="*")
-    monkeypatch.setattr(deal_check, "listing_available", lambda item: True)
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (True, None))
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
@@ -75,7 +75,7 @@ def test_card_explains_price(monkeypatch):
 def test_reprice_note_on_screen(monkeypatch):
     wid = _laptop_watch()
     _old_deal(wid, "MSI Katana GF76 i7-11800H RTX 3050 Ti 16GB", 750)
-    monkeypatch.setattr(deal_check, "listing_available", lambda item: 1 / 0)   # невигідні не перевіряємо
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (1 / 0, None))   # невигідні не перевіряємо
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))

@@ -11,6 +11,7 @@ Trading API повертає й завершені оголошення (до 90
 """
 
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 from defusedxml.ElementTree import fromstring as safe_fromstring
 
@@ -71,7 +72,8 @@ def parse_get_item(xml_text):
     item = root.find("e:Item", NS)
     listing_status = _text(item, "e:SellingStatus/e:ListingStatus")
     sold_text = _text(item, "e:SellingStatus/e:QuantitySold")
-    info = {"listing_status": listing_status, "quantity_sold": int(sold_text) if sold_text else None}
+    info = {"listing_status": listing_status, "quantity_sold": int(sold_text) if sold_text else None,
+            "details": _sale_details(item)}
     if listing_status == "Active":
         info["result"] = "active"
     elif sold_text is None:
@@ -81,14 +83,50 @@ def parse_get_item(xml_text):
     return info
 
 
+def _num(text, cast=float):
+    try:
+        return cast(text) if text is not None else None
+    except ValueError:
+        return None
+
+
+def _ts(text):
+    """«2026-10-01T12:34:56.000Z» → unix-час."""
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()) if text else None
+    except ValueError:
+        return None
+
+
+def _sale_details(item):
+    """Деталі завершення з тієї самої відповіді GetItem — лише для історії (додаткових запитів немає).
+    sold_price — фінальна ціна без доставки, у валюті сайту (EUR)."""
+    price = _text(item, "e:SellingStatus/e:ConvertedCurrentPrice") or _text(item, "e:SellingStatus/e:CurrentPrice")
+    return {
+        "sold_price": _num(price),
+        "sold_at": _ts(_text(item, "e:ListingDetails/e:EndTime")),
+        "bid_count": _num(_text(item, "e:SellingStatus/e:BidCount"), int),
+        "offer_count": _num(_text(item, "e:BestOfferDetails/e:BestOfferCount"), int),
+        "quantity": _num(_text(item, "e:Quantity"), int),
+        "listing_type": _text(item, "e:ListingType"),
+        "watch_count": _num(_text(item, "e:WatchCount"), int),   # скільки людей стежать
+    }
+
+
 def get_item_status(item_id):
     """Статус оголошення в eBay. Кидає UserAuthError, якщо вхід в акаунт недійсний."""
     body = (
         '<?xml version="1.0" encoding="utf-8"?>'
         '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
         f"<ItemID>{legacy_item_id(item_id)}</ItemID>"
+        "<IncludeWatchCount>true</IncludeWatchCount>"
         "<OutputSelector>Item.ItemID</OutputSelector>"
         "<OutputSelector>Item.SellingStatus</OutputSelector>"
+        "<OutputSelector>Item.ListingDetails.EndTime</OutputSelector>"
+        "<OutputSelector>Item.BestOfferDetails</OutputSelector>"
+        "<OutputSelector>Item.Quantity</OutputSelector>"
+        "<OutputSelector>Item.ListingType</OutputSelector>"
+        "<OutputSelector>Item.WatchCount</OutputSelector>"
         "</GetItemRequest>"
     )
     resp = _request_with_retries(
@@ -110,6 +148,41 @@ def get_item_status(item_id):
         raise
     except ET.ParseError:
         raise RuntimeError(f"Trading API: незрозуміла відповідь (HTTP {resp.status_code})")
+
+
+def fetch_buy_it_now(item_id):
+    """Ціна «купити зараз» оголошення «аукціон + купити зараз» (EUR) або None."""
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+        f"<ItemID>{legacy_item_id(item_id)}</ItemID>"
+        "<OutputSelector>Item.ItemID</OutputSelector>"
+        "<OutputSelector>Item.BuyItNowPrice</OutputSelector>"
+        "<OutputSelector>Item.ListingDetails.ConvertedBuyItNowPrice</OutputSelector>"
+        "</GetItemRequest>"
+    )
+    resp = _request_with_retries(
+        "POST", TRADING_URL,
+        headers={
+            "X-EBAY-API-CALL-NAME": "GetItem",
+            "X-EBAY-API-SITEID": SITE_ID_DE,
+            "X-EBAY-API-COMPATIBILITY-LEVEL": COMPATIBILITY_LEVEL,
+            "X-EBAY-API-IAF-TOKEN": get_user_access_token(),
+            "Content-Type": "text/xml; charset=utf-8",
+        },
+        data=body.encode("utf-8"), timeout=20,
+    )
+    record_api_call("trading")
+    return parse_buy_it_now(resp.text)
+
+
+def parse_buy_it_now(xml_text):
+    root = safe_fromstring(xml_text)
+    item = root.find("e:Item", NS)
+    if item is None:
+        return None
+    price = _num(_text(item, "e:ListingDetails/e:ConvertedBuyItNowPrice") or _text(item, "e:BuyItNowPrice"))
+    return price if price else None   # 0 — «купити зараз» уже недоступне
 
 
 def _purpose(apply):
@@ -138,7 +211,7 @@ def _run_checks(queue):
             continue
         if info.get("error"):
             log.info("eBay не віддав статус оголошення %s (%s) — рахую за зникненням", item_id, info["error"])
-        apply(owner, item_id, info["result"])
+        apply(owner, item_id, info["result"], info.get("details"))
         counts[info["result"]] = counts.get(info["result"], 0) + 1
     return counts
 

@@ -43,38 +43,45 @@ def trading_breakdown_lines():
     return lines
 
 
-def listing_available(item_id):
-    """True — ще продається, False — продано/знято, None — не вдалося дізнатися."""
+def listing_state(item_id):
+    """(доступне, скільки стежать): доступне — True / False (продано, знято) / None (не вдалося
+    дізнатися); скільки стежать — лише через Trading API, інакше None."""
     if is_connected() and trading_calls_today()[0] < TRADING_DAILY_BUDGET:
         record_api_call("trading:deals")
         try:
-            result = get_item_status(item_id)["result"]
-            if result == "active":
-                return True
-            if result in GONE_RESULTS:
-                return False
+            info = get_item_status(item_id)
+            watchers = (info.get("details") or {}).get("watch_count")
+            if info["result"] == "active":
+                return True, watchers
+            if info["result"] in GONE_RESULTS:
+                return False, watchers
         except UserAuthError:
             pass   # вхід недійсний — спробуємо через Browse
         except Exception as e:
             log.debug("Trading API не відповів про %s: %s", item_id, e)
     if browse_budget_left() <= SEARCH_RESERVE:
-        return None   # Browse бережемо для пошуку нових лотів
+        return None, None   # Browse бережемо для пошуку нових лотів
     record_api_call("browse:deals")
     try:
-        return fetch_item_by_legacy_id(legacy_item_id(item_id)) is not None
+        return fetch_item_by_legacy_id(legacy_item_id(item_id)) is not None, None
     except Exception as e:
         log.debug("Browse не відповів про %s: %s", item_id, e)
-        return None
+        return None, None
+
+
+def listing_available(item_id):
+    """True — ще продається, False — продано/знято, None — не вдалося дізнатися."""
+    return listing_state(item_id)[0]
 
 
 def _check(rows):
     """rows: [{'id', 'item_id'}] → скільки пропозицій прибрано як проданих/знятих."""
     removed = 0
     for row in rows:
-        available = listing_available(row["item_id"])
+        available, watchers = listing_state(row["item_id"])
         if available is None:
             continue
-        mark_deal_checked(row["id"], gone=not available)
+        mark_deal_checked(row["id"], gone=not available, watch_count=watchers)
         removed += not available
     return removed
 
