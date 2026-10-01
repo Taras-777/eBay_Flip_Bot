@@ -28,6 +28,7 @@ from panel import _ack_callback, show_panel
 from access import require_access
 from sales import sales_note
 from deal_check import recheck_shown_deals
+from deal_reprice import basis_line, reprice_deals
 from laptops import laptop_warnings
 from undo import record as undo_record, short
 
@@ -83,16 +84,23 @@ def _deal_card(n, d, sold=None):
         cut = (track["first_price"] - d["total_price"]) / track["first_price"] * 100
         warn += (f"\n📉 Продавець уже знизив ціну на {cut:.0f}% (було {track['first_price']:.0f}€) — "
                  "ймовірно, погодиться поторгуватись")
+    basis = basis_line(d)
     listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
     return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
             f"{html.escape(d['title'][:90])}\n{listed}"
-            f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток ~<b>{profit:.0f}€</b>{offer}{warn}\n"
+            f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток ~<b>{profit:.0f}€</b>{offer}\n"
+            + (f"{html.escape(basis)}\n" if basis else "") + (f"{warn.lstrip()}\n" if warn else "")
             + (f"{html.escape(note)}\n" if note else "") +
             f'<a href="{html.escape(d["url"])}">🔗 Відкрити на eBay</a>')
 
 
 async def _render_deals(update, context, page=0, note=""):
     chat_id = update.effective_chat.id
+    # «Продати» — за теперішньою статистикою ринку, а не за тією, що була в момент знахідки
+    repriced = await asyncio.to_thread(reprice_deals, chat_id)
+    if repriced:
+        reprice_note = (f"🔄 Ціни продажу перераховано за свіжими даними — прибрано невигідних: {repriced}")
+        note = f"{note}\n{reprice_note}" if note else reprice_note
     deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     # Перед показом — чи ці лоти ще продаються (вигідні розкуповують швидко)
     removed = await asyncio.to_thread(recheck_shown_deals, [d["id"] for d in deals]) if deals else 0

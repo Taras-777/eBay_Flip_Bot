@@ -209,7 +209,10 @@ CREATE TABLE IF NOT EXISTS deals (
     cond_group TEXT,       -- група статистики (стан, конфігурація), за якою пропозиція вигідна
     spec_group TEXT,
     listed_at INTEGER,     -- коли оголошення виставили на eBay
-    checked_at INTEGER     -- коли востаннє перевіряли, чи воно ще продається
+    checked_at INTEGER,    -- коли востаннє перевіряли, чи воно ще продається
+    item_spec TEXT,        -- власна конфігурація оголошення (spec_group — група, з якої взято ціну)
+    sale_source TEXT,      -- на чому базується «продати»: «за 7 проданими» / «за поточними оголошеннями»
+    sale_sample INTEGER    -- скільки оголошень у групі
 );
 
 -- «📉 Знизили ціну»: перша й поточна ціна кожного оголошення товару
@@ -345,7 +348,8 @@ def init_db():
             conn.execute("ALTER TABLE deals ADD COLUMN seen_at INTEGER")
             conn.execute("UPDATE deals SET seen_at = created_at")  # старі — вже бачені в чаті
         for col, ddl in [("cond_group", "TEXT"), ("spec_group", "TEXT"),
-                         ("listed_at", "INTEGER"), ("checked_at", "INTEGER")]:
+                         ("listed_at", "INTEGER"), ("checked_at", "INTEGER"),
+                         ("item_spec", "TEXT"), ("sale_source", "TEXT"), ("sale_sample", "INTEGER")]:
             if deal_cols and col not in deal_cols:
                 conn.execute(f"ALTER TABLE deals ADD COLUMN {col} {ddl}")
 
@@ -1243,18 +1247,60 @@ def save_category_aspects(category_id, aspects):
 # ---------- deals ----------
 
 def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
-             has_best_offer=False, cond_group=None, spec_group=None, listed_at=None):
+             has_best_offer=False, cond_group=None, spec_group=None, listed_at=None,
+             item_spec=None, sale_source=None, sale_sample=None):
     now = int(time.time())
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO deals
                (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
-                has_best_offer, status, created_at, cond_group, spec_group, listed_at, checked_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?)""",
+                has_best_offer, status, created_at, cond_group, spec_group, listed_at, checked_at,
+                item_spec, sale_source, sale_sample)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url,
-             int(suspicious), int(has_best_offer), now, cond_group, spec_group, listed_at, now),
+             int(suspicious), int(has_best_offer), now, cond_group, spec_group, listed_at, now,
+             item_spec, sale_source, sale_sample),
         )
         return cur.lastrowid
+
+
+def get_open_deals(chat_id=None):
+    """Усі пропозиції «🔥» без рішення (незалежно від мін. прибутку) — для переоцінки.
+    chat_id=None — усіх користувачів. Поле chat_id — власник товару."""
+    since = int(time.time()) - DEALS_INBOX_DAYS * 86400
+    sql = ("SELECT d.*, w.chat_id AS chat_id FROM deals d JOIN watches w ON w.id = d.watch_id "
+           "WHERE w.active = 1 AND d.status = 'new' AND d.created_at >= ?")
+    params = [since]
+    if chat_id is not None:
+        sql += " AND w.chat_id = ?"
+        params.append(chat_id)
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def update_deal_price(deal_id, sale_price, discount_pct, cond_group, spec_group, item_spec,
+                      sale_source, sale_sample):
+    """Переоцінка пропозиції за свіжою статистикою ринку."""
+    with get_conn() as conn:
+        conn.execute(
+            """UPDATE deals SET median_price = ?, discount_pct = ?, cond_group = ?, spec_group = ?,
+               item_spec = ?, sale_source = ?, sale_sample = ? WHERE id = ?""",
+            (sale_price, discount_pct, cond_group, spec_group, item_spec, sale_source, sale_sample, deal_id))
+
+
+def get_listing_groups(watch_id, item_ids):
+    """item_id → (стан, конфігурація) з історії оголошень товару."""
+    ids = [i for i in item_ids if i]
+    result = {}
+    with get_conn() as conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            for r in conn.execute(
+                    "SELECT item_id, cond_group, spec_group FROM listing_obs WHERE watch_id = ? AND item_id IN ("
+                    + ",".join("?" * len(chunk)) + ")", [watch_id, *chunk]):
+                if r["cond_group"]:
+                    result[r["item_id"]] = (r["cond_group"], r["spec_group"] or "unspecified")
+    return result
 
 
 def set_deal_status(deal_id, status):

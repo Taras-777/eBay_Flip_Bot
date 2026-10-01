@@ -64,6 +64,7 @@ from sales import is_slow_seller, price_drops, sales_note
 from shared_market import deal_scan
 from netstatus import is_down, mark_down, mark_up
 from deal_check import recheck_deals
+from deal_reprice import reprice_deals
 from markdowns import run_markdown_scan
 from backup import daily_backup
 
@@ -189,6 +190,9 @@ async def check_one_watch(app: Application, w: dict):
             cond_group=stat["cond_group"],
             spec_group=stat["spec_group"],
             listed_at=it.get("created_at"),
+            item_spec=it["spec_group"],
+            sale_source=stat.get("sale_source"),
+            sale_sample=stat.get("sample_size"),
         )
         seen_updates.append((it["item_id"], it["effective_price"], it["effective_price"]))
         new_deals.append((deal_id, it, stat))
@@ -201,6 +205,16 @@ async def check_one_watch(app: Application, w: dict):
     # Самі пропозиції — у «🔥 Вигідні пропозиції»; сповіщення — одне на цикл (check_all_watches)
     app.bot_data.setdefault("new_deals_by_chat", {}).setdefault(w["chat_id"], []).extend(
         (deal_id, it, stat, w) for deal_id, it, stat in new_deals)
+
+
+def _refresh_deals():
+    """Спершу переоцінка за свіжою статистикою (без запитів до eBay) — тоді перевірка,
+    чи лоти ще продаються, не витрачає запити на пропозиції, що вже невигідні."""
+    try:
+        reprice_deals()
+    except Exception as e:
+        log.warning("Не вдалося переоцінити вигідні пропозиції: %s", e)
+    return recheck_deals()
 
 
 _error_notice = {"last": 0.0}
@@ -324,7 +338,7 @@ async def scheduler_loop(app: Application):
             # «🔥 Вигідні пропозиції»: чи лоти ще продаються — продані/зняті зникають зі списку
             task = app.bot_data.get("deal_check_task")
             if task is None or task.done():
-                app.bot_data["deal_check_task"] = asyncio.create_task(asyncio.to_thread(recheck_deals))
+                app.bot_data["deal_check_task"] = asyncio.create_task(asyncio.to_thread(_refresh_deals))
 
             # Резервна копія бази — раз на добу (окремим потоком, не заважає перевіркам)
             task = app.bot_data.get("backup_task")
