@@ -32,6 +32,7 @@ from textparse import (
     COMPAT_ASPECTS,
     _aspect_satisfied_by_title,
     extract_spec_key,
+    normalize_spec,
     is_accessory_category,
     plural,
     spec_key_from_aspects,
@@ -40,6 +41,8 @@ from textparse import (
 from db import (
     delete_listing_obs_by_ids,
     get_all_listing_rows,
+    get_spec_rows,
+    set_listing_spec,
     list_watches,
     update_watch_categories,
     mark_market_stale,
@@ -210,7 +213,7 @@ def _annotate_items(items, max_lookups=0, watch=None):
                     it["aspects"] = aspects
                     continue
             elif it["spec_group"] == "unspecified":
-                it["spec_group"] = spec
+                it["spec_group"] = normalize_spec(it["title"], spec)   # кеш міг бути в старому форматі
             if aspects is not None:
                 it["aspects"] = aspects
                 continue
@@ -408,6 +411,24 @@ def prune_laptop_parts():
             removed += len(ids)
             log.info("«%s»: прибрано з історії запчастин/аксесуарів: %s", w["label"], len(ids))
     return removed
+
+
+def normalize_saved_specs():
+    """Історія й кеш у новому форматі конфігурацій (iPhone — лише пам'ять: «128GB+8GB» → «128GB»).
+    Раз на добу і після запуску; змінені товари перераховуються. Повертає кількість змінених записів."""
+    changed_watches, changed = set(), 0
+    for r in get_spec_rows("iphone"):
+        new = normalize_spec(r["title"], r["spec_group"])
+        if new == r["spec_group"]:
+            continue
+        set_listing_spec(r["watch_id"], r["item_id"], new)
+        changed_watches.add(r["watch_id"])
+        changed += 1
+    for w in changed_watches:
+        mark_market_stale(w)
+    if changed:
+        log.info("Конфігурації iPhone приведено до формату «лише пам'ять»: %s записів", changed)
+    return changed
 
 
 def collapse_watch_categories():

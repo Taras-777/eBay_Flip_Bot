@@ -1152,6 +1152,21 @@ def get_current_listings(watch_id):
         ).fetchall()]
 
 
+def get_spec_rows(title_word):
+    """Записи історії, у назві яких є слово (для переформатування конфігурацій)."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT watch_id, item_id, title, spec_group FROM listing_obs "
+            "WHERE LOWER(title) LIKE ? AND spec_group IS NOT NULL", (f"%{title_word.lower()}%",)).fetchall()]
+
+
+def set_listing_spec(watch_id, item_id, spec_group):
+    with get_conn() as conn:
+        conn.execute("UPDATE listing_obs SET spec_group = ? WHERE watch_id = ? AND item_id = ?",
+                     (spec_group, watch_id, item_id))
+        conn.execute("UPDATE item_specs SET spec_group = ? WHERE item_id = ?", (spec_group, item_id))
+
+
 def get_all_listing_rows(watch_id):
     """Усі спостереження товару (активні, зниклі, продані) — id і назва, для чистки історії."""
     with get_conn() as conn:

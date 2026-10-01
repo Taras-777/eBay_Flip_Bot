@@ -646,6 +646,19 @@ LAPTOP_STORAGE_ASPECTS = {"ssd-speicherkapazität", "ssd capacity", "festplatten
 CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type"}
 
 
+# Об'єм пам'яті iPhone. Оперативна (6GB, 8GB) у моделі одна й та сама — ціну не змінює
+IPHONE_STORAGE = {"16GB", "32GB", "64GB", "128GB", "256GB", "512GB", "1TB", "2TB"}
+
+
+def normalize_spec(title, spec):
+    """iPhone — лише за об'ємом пам'яті: «128GB+8GB» → «128GB». Кілька об'ємів у назві
+    (оголошення з варіантами «128/256/512GB») — конфігурація невідома."""
+    if not spec or spec == "unspecified" or "iphone" not in (title or "").lower():
+        return spec
+    sizes = {t for t in spec.split("+") if t in IPHONE_STORAGE}
+    return sizes.pop() if len(sizes) == 1 else "unspecified"
+
+
 def spec_key_from_aspects(title, aspects):
     """Конфігурація з назви, доповнена характеристиками лота (формат той
     самий, що й у extract_spec_key: напр. "16GB+512GB+M1PRO")."""
@@ -662,7 +675,7 @@ def spec_key_from_aspects(title, aspects):
             cpu = extract_cpu_token(value)
     if cpu:
         tokens.add(cpu)
-    return "+".join(sorted(tokens)) if tokens else "unspecified"
+    return normalize_spec(title, "+".join(sorted(tokens)) if tokens else "unspecified")
 
 
 def extract_spec_key(title: str) -> str:
@@ -677,7 +690,7 @@ def extract_spec_key(title: str) -> str:
 
     if not tokens:
         return "unspecified"
-    return "+".join(sorted(tokens))
+    return normalize_spec(title, "+".join(sorted(tokens)))
 
 
 CONDITION_LABELS = {"new": "нові", "used": "вживані", "unknown": "стан невідомий"}
