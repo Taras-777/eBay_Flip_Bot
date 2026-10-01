@@ -130,6 +130,7 @@ def test_paging_row_sits_right_above_navigation(screen):
     assert screen.rows[-3] == ["➡️ Наступні 10"]
     assert screen.rows[-2:] == [["◀️ До товару"], ["🏠 Меню"]]
     assert screen.rows[0][1:] == ["🙈 Сховати", "❌ Інший товар"]
+    assert screen.rows[0][0].startswith("🔗 1. ") and screen.rows[0][0].endswith("€")   # лише номер і ціна
     assert "Показано <b>1–10</b> з 25" in screen.text
 
 

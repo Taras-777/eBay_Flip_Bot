@@ -222,7 +222,7 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         row = []
         if it.get("url"):
             row.append(InlineKeyboardButton(
-                f"🔗 {it['price']:.0f}€ · {_short_listing_label(it['title'], state.get('query', ''))}",
+                f"🔗 {i}. {it['price']:.0f}€",
                 url=it["url"]))
         if it.get("item_id"):
             row.append(InlineKeyboardButton("🙈 Сховати", callback_data=f"hidel:{watch_id}:{i - 1}"))
