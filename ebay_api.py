@@ -42,7 +42,9 @@ from textparse import (
     _title_matches_search,
     condition_group_from_item,
 )
+from laptops import is_laptop
 from db import (
+    get_watch_categories,
     get_api_calls_today,
     get_auto_min_price,
     get_cached_category_aspects,
@@ -858,13 +860,31 @@ def effective_min_price(w):
     return get_auto_min_price(w["id"]) if w.get("id") else None
 
 
+# Ноутбуки: продавці пам'яті виставляють сотні оголошень «RAM passend für <модель ноутбука>»,
+# які забивають перші сторінки видачі. Відсікаємо їх уже в запиті до eBay (слова, яких
+# у назві справжнього ноутбука не буває).
+LAPTOP_SEARCH_EXCLUDE = "passend sodimm arbeitsspeicher speicherriegel"
+
+
+def effective_exclude(w):
+    """Виключені слова товару + (для ноутбуків) LAPTOP_SEARCH_EXCLUDE."""
+    words = w.get("exclude") or ""
+    try:
+        cats = [c["name"] for c in get_watch_categories(w)]
+    except Exception:
+        cats = []
+    if is_laptop(query=w.get("query") or "", category_names=cats):
+        words = f"{words} {LAPTOP_SEARCH_EXCLUDE}".strip()
+    return words
+
+
 def _watch_search_kwargs(w):
     """Параметри пошуку, збережені для конкретного відстеження (без категорій —
     їх перебирає search_in_categories)."""
     return {
         "query": w["query"],
         "condition_ids": w["condition_ids"],
-        "exclude_terms": w["exclude"],
+        "exclude_terms": effective_exclude(w),
         "min_price": effective_min_price(w),
     }
 

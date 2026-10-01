@@ -19,7 +19,7 @@ import time
 from settings import log
 from textparse import _search_tokens, condition_group_from_item
 from db import copy_listing_history, get_watch_categories, list_watches, watch_category_ids
-from ebay_api import effective_min_price, search_active_items, search_in_categories
+from ebay_api import effective_exclude, effective_min_price, search_active_items, search_in_categories
 
 MARKET_CACHE_SECONDS = 45 * 60   # ринкове сканування (раз на годину) — ділиться в межах 45 хв
 MANUAL_CACHE_SECONDS = 5 * 60    # ручне «Оновити ціни» — не старіше 5 хв
@@ -56,7 +56,7 @@ def shared_search_kwargs(w):
     group = siblings(w)
     conds = [_conditions(s) for s in group]
     condition_ids = "" if any(not c for c in conds) else ",".join(sorted(set().union(*conds)))
-    excludes = [_search_tokens(s.get("exclude") or "") for s in group]
+    excludes = [_search_tokens(effective_exclude(s)) for s in group]
     common_exclude = set.intersection(*excludes) if excludes else set()
     mins = [effective_min_price(s) for s in group]
     min_price = None if any(not m for m in mins) else min(mins)

@@ -275,3 +275,13 @@ def test_laptop_category_protects_short_titles():
     assert laptops.looks_like_laptop_part("RAM Speicher passend für ROG Strix G15", nb)   # явна запчастина
     assert laptops.looks_like_laptop_part("ASUS ROG Strix G15 16GB 1TB Display 144Hz", ["Displays & LCD-Panels"])
     assert not laptops.looks_like_laptop_part("ASUS ROG Strix G15 gebraucht", ["Sonstige"])
+
+
+def test_laptop_search_excludes_ram_spam_and_needs_no_spec():
+    import ebay_api
+    lap = db.get_watch(db.add_watch(1, "MSI Katana", "MSI Katana", "broken", "", 15), 1)
+    phone = db.get_watch(db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "broken", "", 15), 1)
+    assert ebay_api._watch_search_kwargs(lap)["exclude_terms"] == "broken passend sodimm arbeitsspeicher speicherriegel"
+    assert ebay_api._watch_search_kwargs(phone)["exclude_terms"] == "broken"
+    assert not market.watch_requires_spec(lap)          # клас ноутбука бот визначить і без пам'яті в назві
+    assert market.watch_requires_spec(phone)

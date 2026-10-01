@@ -248,6 +248,9 @@ def _annotate_items(items, max_lookups=0, watch=None):
 def watch_requires_spec(w):
     value = w.get("require_spec")
     if value is None:
+        # Ноутбук: клас визначається й без пам'яті в назві (з характеристик) — не відкидаємо
+        if is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)]):
+            return False
         return spec_required_by_default(w["query"])
     return bool(value)
 
