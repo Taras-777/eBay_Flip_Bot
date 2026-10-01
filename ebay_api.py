@@ -127,7 +127,10 @@ def _retry_after_seconds(response):
 
 def _request_with_retries(method, url, **kwargs):
     """Виконує HTTP-запит з обмеженим retry для тимчасових помилок."""
-    if (url == SEARCH_URL or url.startswith(ITEM_URL)) and _hard_limit_reached():
+    browse = url == SEARCH_URL or url.startswith(ITEM_URL)
+    if browse and time.time() < _rate_pause["until"]:
+        raise RateLimited("eBay просить зменшити частоту запитів — пауза")
+    if browse and _hard_limit_reached():
         raise BudgetExhausted("Денний ліміт запитів eBay вичерпано — чекаю на скидання")
     for attempt in range(1, NETWORK_MAX_ATTEMPTS + 1):
         try:
@@ -163,6 +166,12 @@ def _request_with_retries(method, url, **kwargs):
             return response
 
         if attempt == NETWORK_MAX_ATTEMPTS:
+            if response.status_code == 429 and browse:
+                # Ліміт ще не скинувся або забагато запитів поспіль — не збій: пауза, без сповіщень
+                _rate_pause["until"] = time.time() + RATE_LIMIT_PAUSE_SECONDS
+                log.warning("eBay: 429 Too Many Requests — пауза в пошуку на %s хв",
+                            RATE_LIMIT_PAUSE_SECONDS // 60)
+                raise RateLimited("eBay: 429 Too Many Requests")
             log.error(
                 "HTTP %s для %s %s після %s спроб",
                 response.status_code, method, url, attempt,
@@ -238,6 +247,14 @@ _rate_limit_cache = {"data": None, "fetched_at": 0, "own_at_fetch": 0}
 
 class BudgetExhausted(RuntimeError):
     """Денний ліміт Browse API майже вичерпано — запит не надсилаємо до скидання."""
+
+
+class RateLimited(BudgetExhausted):
+    """eBay відповів 429 Too Many Requests — пауза в запитах Browse на RATE_LIMIT_PAUSE_SECONDS."""
+
+
+RATE_LIMIT_PAUSE_SECONDS = 10 * 60
+_rate_pause = {"until": 0.0}
 
 
 def _own_calls_since_fetch():

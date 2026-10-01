@@ -91,3 +91,21 @@ def test_trading_count_resets_with_ebay_not_utc_day():
     assert ebay_api.trading_calls_today() == (3, True)
     ebay_api._trading_limit_cache.update(fetched_at=0)                      # даних eBay немає — свій лічильник
     assert ebay_api.trading_calls_today() == (379, False)
+
+
+def test_429_pauses_browse_without_error(monkeypatch):
+    responses = []
+
+    def request(*a, **k):
+        responses.append(1)
+        return SimpleNamespace(status_code=429, headers={"Retry-After": "0"})
+
+    monkeypatch.setattr(ebay_api, "_http_session", lambda: SimpleNamespace(request=request))
+    monkeypatch.setattr(ebay_api.time, "sleep", lambda s: None)
+    with pytest.raises(ebay_api.RateLimited):
+        ebay_api._request_with_retries("GET", ebay_api.SEARCH_URL)
+    assert len(responses) == ebay_api.NETWORK_MAX_ATTEMPTS
+    with pytest.raises(ebay_api.BudgetExhausted):                  # під час паузи — без запитів до eBay
+        ebay_api._request_with_retries("GET", ebay_api.SEARCH_URL)
+    assert len(responses) == ebay_api.NETWORK_MAX_ATTEMPTS
+    ebay_api._rate_pause["until"] = 0

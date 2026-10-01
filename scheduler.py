@@ -352,8 +352,9 @@ async def scheduler_loop(app: Application):
                 interval = max(interval, LOW_BUDGET_INTERVAL_MINUTES)
                 # Прокинутись одразу після скидання ліміту eBay, а не чекати повні 30 хв
                 until_reset = seconds_until_reset()
-                if until_reset is not None and 0 < until_reset + 60 < interval * 60:
-                    interval = (until_reset + 60) / 60
+                # +3 хв: одразу о 09:00 eBay ще може відповідати 429 — ліміт скидається не миттєво
+                if until_reset is not None and 0 < until_reset + 180 < interval * 60:
+                    interval = (until_reset + 180) / 60
                 log.info("Бюджет eBay майже вичерпано (лишилось %s) — наступна перевірка через %.0f хв",
                          left, interval)
             await asyncio.sleep(interval * 60)
