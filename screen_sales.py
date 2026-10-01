@@ -294,7 +294,9 @@ async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT
         "header": header,
         "items": [
             {"item_id": r["item_id"], "title": r["title"] or "без назви", "price": r["price"],
-             "currency": "€", "condition": None, "url": r["url"]}
+             "currency": "€", "condition": None, "url": r["url"],
+             "auction": "AUCTION" in (r.get("buying_options") or ""), "current_bid": r.get("current_bid"),
+             "bid_count": r.get("bid_count"), "end_at": r.get("end_at")}
             for r in top
         ],
         "nav": [("◀️ До конфігурацій", f"configs:{watch_id}"), ("📌 До товару", f"watch_details:{watch_id}")],

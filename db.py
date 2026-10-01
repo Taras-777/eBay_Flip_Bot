@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS listing_obs (
     quantity INTEGER,     -- кількість штук в оголошенні (магазини)
     listing_type TEXT,    -- FixedPriceItem / Chinese (аукціон)
     watch_count INTEGER,  -- скільки людей стежили за оголошенням на момент перевірки
+    current_bid REAL,     -- «аукціон + купити зараз»: поточна ставка
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -370,7 +371,7 @@ def init_db():
                          ("condition_id", "TEXT"), ("shipping_cost", "REAL"), ("pickup_only", "INTEGER"),
                          ("country", "TEXT"), ("sold_price", "REAL"), ("sold_at", "INTEGER"),
                          ("bid_count", "INTEGER"), ("offer_count", "INTEGER"), ("quantity", "INTEGER"),
-                         ("listing_type", "TEXT"), ("watch_count", "INTEGER")]:
+                         ("listing_type", "TEXT"), ("watch_count", "INTEGER"), ("current_bid", "REAL")]:
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
 
@@ -943,8 +944,8 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                 """INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
                                             created_at, end_at, first_seen, last_seen, miss_count, status,
                                             title, url, category_id, category_name, buying_options,
-                                            condition_id, shipping_cost, pickup_only, country)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            condition_id, shipping_cost, pickup_only, country, current_bid, bid_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(watch_id, item_id) DO UPDATE SET
                      cond_group=excluded.cond_group, spec_group=excluded.spec_group,
                      price=excluded.price, end_at=excluded.end_at, last_seen=excluded.last_seen,
@@ -956,18 +957,21 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                      condition_id=COALESCE(excluded.condition_id, listing_obs.condition_id),
                      shipping_cost=COALESCE(excluded.shipping_cost, listing_obs.shipping_cost),
                      pickup_only=COALESCE(excluded.pickup_only, listing_obs.pickup_only),
-                     country=COALESCE(excluded.country, listing_obs.country)""",
+                     country=COALESCE(excluded.country, listing_obs.country),
+                     current_bid=excluded.current_bid,
+                     bid_count=COALESCE(excluded.bid_count, listing_obs.bid_count)""",
                 (watch_id, it["item_id"], it["cond_group"], it.get("spec_group", "unspecified"),
                  it["total_price"], it.get("created_at"), it.get("end_at"), now, now,
                  it.get("title"), it.get("url"), it.get("category_id"), it.get("category_name"),
                  it.get("buying_options"), it.get("condition_id") or None, it.get("shipping_cost"),
-                 None if it.get("pickup_only") is None else int(it["pickup_only"]), it.get("country")),
+                 None if it.get("pickup_only") is None else int(it["pickup_only"]), it.get("country"),
+                 it.get("current_bid"), it.get("bid_count")),
             )
 
         if window_start is None:
             return new_count
         rows = conn.execute(
-            """SELECT item_id, miss_count, end_at, first_seen, created_at FROM listing_obs
+            """SELECT item_id, miss_count, end_at, first_seen, created_at, buying_options FROM listing_obs
                WHERE watch_id = ? AND status = 'active' AND created_at IS NOT NULL AND created_at >= ?""",
             (watch_id, window_start),
         ).fetchall()
@@ -977,18 +981,22 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
             misses = r["miss_count"] + 1
             if r["end_at"] and r["end_at"] <= now:
                 status = "ended"  # закінчився строк оголошення — це не продаж
+            elif "AUCTION" in (r["buying_options"] or "") and misses >= GONE_MISS_THRESHOLD:
+                status = "ended"  # «аукціон + купити зараз»: невідомо, за якою ціною — не продаж для статистики
             elif misses >= GONE_MISS_THRESHOLD:
                 age_days = (now - (r["created_at"] or r["first_seen"])) / 86400
                 status = "gone" if age_days <= GONE_MAX_LISTING_DAYS else "ended"
             else:
                 status = "active"
             # Зниклий лот ставимо в чергу на перевірку «справді продано?» (Trading API)
+            # Аукціон на перевірку «продано?» не ставимо — у статистику він однаково не йде
+            check = "active" if "AUCTION" in (r["buying_options"] or "") else status
             conn.execute(
                 """UPDATE listing_obs SET miss_count = ?, status = ?,
                      gone_at = CASE WHEN ? != 'active' THEN ? ELSE gone_at END,
                      sold_check = CASE WHEN ? != 'active' THEN 'pending' ELSE sold_check END
                    WHERE watch_id = ? AND item_id = ?""",
-                (misses, status, status, now, status, watch_id, r["item_id"]),
+                (misses, status, status, now, check, watch_id, r["item_id"]),
             )
     return new_count
 
@@ -1190,7 +1198,8 @@ def get_current_listings(watch_id):
     since = int(time.time()) - 2 * MARKET_REFRESH_MINUTES * 60
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
-            """SELECT item_id, cond_group, spec_group, price, title, url FROM listing_obs
+            """SELECT item_id, cond_group, spec_group, price, title, url, buying_options, current_bid,
+                      bid_count, end_at FROM listing_obs
                WHERE watch_id = ? AND status = 'active' AND last_seen >= ? AND price IS NOT NULL""",
             (watch_id, since),
         ).fetchall()]

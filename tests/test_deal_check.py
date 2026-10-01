@@ -243,16 +243,28 @@ def test_buy_it_now_price_used_for_buying(fake_ebay, monkeypatch):
     assert trading_api.parse_buy_it_now(xml) == 810.0
 
 
-def test_auctions_not_in_market_stats(fake_ebay):
+def test_auctions_listed_but_not_in_stats(fake_ebay):
     import market
     from conftest import listing
     from test_scheduler import consoles
     wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
-    db.update_listing_observations(wid, [{"item_id": "auc", "cond_group": "used", "spec_group": "1TB",
-                                          "total_price": 200}])          # записане до цієї зміни
-    fake_ebay.listings = consoles() + [listing("auc", "Sony PlayStation 5 Slim 1TB", 200,
-                                               buyingOptions=["AUCTION", "FIXED_PRICE"], bidCount=3)]
-    items, _, present = market._fetch_market_items(db.get_watch(wid, 1))
-    assert "auc" in present and "auc" not in [it["item_id"] for it in items]
+    auction = listing("auc", "Sony PlayStation 5 Slim 1TB", 200, buyingOptions=["AUCTION", "FIXED_PRICE"],
+                      currentBidPrice={"value": "120.00", "currency": "EUR"}, bidCount=3)
+    fake_ebay.listings = consoles() + [auction]
+    items, window, present = market._fetch_market_items(db.get_watch(wid, 1))
+    assert "auc" in [it["item_id"] for it in items]                         # у списках для купівлі є
+    stats = market._compute_group_stats(wid, items)
+    plain = market._compute_group_stats(wid, [it for it in items if it["item_id"] != "auc"])
+    assert stats == plain                                                   # у статистиці — ні
+    db.update_listing_observations(wid, items, window, present)
+    row = next(r for r in db.get_current_listings(wid) if r["item_id"] == "auc")
+    assert (row["current_bid"], row["bid_count"], "AUCTION" in row["buying_options"]) == (120.0, 3, True)
+
+    # аукціон зник — це не продаж і не черга перевірки «продано?»
+    import settings
+    for _ in range(settings.GONE_MISS_THRESHOLD):
+        db.update_listing_observations(wid, items[:-1], window, {it["item_id"] for it in items[:-1]})
     with db.get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) AS c FROM listing_obs WHERE item_id = 'auc'").fetchone()["c"] == 0
+        r = dict(conn.execute("SELECT status, sold_check FROM listing_obs WHERE item_id = 'auc'").fetchone())
+    assert r == {"status": "ended", "sold_check": None}
+    assert "auc" not in [x["item_id"] for x in db.get_sold_listings(wid)]

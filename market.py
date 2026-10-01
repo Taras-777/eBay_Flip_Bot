@@ -393,12 +393,6 @@ def _fetch_market_items(w, max_age=MARKET_CACHE_SECONDS):
             window_starts.append(min(cat_created))
     window_start = max(window_starts) if window_starts else None
     items = own_filter(w, items)   # особисті фільтри (стан, мін. ціна, виключені слова)
-    # «Аукціон + купити зараз» — не в статистику: невідомо, за ставкою чи за «купити зараз» продадуть
-    # (у present_ids вони лишаються — тож не «зникнуть» і не стануть продажем)
-    auction_ids = [it["item_id"] for it in items if it.get("auction") and it.get("item_id")]
-    if auction_ids and w.get("id"):
-        delete_listing_obs_by_ids(w["id"], auction_ids)   # записані раніше — інакше потім «продаж»
-    items = [it for it in items if not it.get("auction")]
     _annotate_items(items, max_lookups=MAX_SPEC_LOOKUPS_PER_MARKET_SCAN, watch=w)
     return _apply_item_filters(w, items), window_start, seen_ids
 
@@ -419,6 +413,8 @@ def _compute_group_stats(watch_id, items):
     """
     groups = {}
     for it in items:
+        if it.get("auction"):
+            continue   # «аукціон + купити зараз»: у списках для купівлі є, у статистиці — ні
         groups.setdefault((it["cond_group"], "*"), []).append(it["total_price"])
         # Ноутбук з невідомою відеокартою — лише в «усі конфігурації»: група «GPU ?» — суміш усього
         if it["spec_group"] != "unspecified" and not it["spec_group"].startswith(UNKNOWN_GPU):
@@ -524,6 +520,8 @@ def refresh_sale_prices(watch_id):
     напр. після того, як користувач прибрав чужий лот зі статистики продажів."""
     active = {}
     for r in get_current_listings(watch_id):
+        if "AUCTION" in (r.get("buying_options") or ""):
+            continue
         active.setdefault(r["cond_group"], []).append(r)
     for s in get_market_stats(watch_id):
         cond, spec = s["cond_group"], s["spec_group"]
