@@ -52,6 +52,7 @@ from db import (
     upsert_user_request,
     watch_category_ids,
 )
+from ebay_api import category_descendants, collapse_categories, mark_parent_categories
 from ebay_api import (
     aspect_options_for_categories,
     browse_budget_left,
@@ -518,6 +519,7 @@ async def change_category_callback(update: Update, context: ContextTypes.DEFAULT
     current = get_watch_categories(watch)
     known = {o["id"] for o in options}
     options += [{"id": c["id"], "name": c["name"], "count": 0} for c in current if c["id"] not in known]
+    await asyncio.to_thread(mark_parent_categories, options)
     context.user_data[f"cat_options_{watch_id}"] = options
     context.user_data[f"cat_selected_{watch_id}"] = {c["id"] for c in current}
     await _render_watch_categories(update, context, watch)
@@ -533,7 +535,9 @@ async def _render_watch_categories(update, context, watch):
         "у різні місця.\n"
         "У дужках — кількість оголошень. ⚠️ — аксесуари й запчастини: зазвичай їх обирати не треба.\n"
         "Кожна додаткова категорія — ще один запит до eBay на кожну перевірку."
-        + "\nПісля збереження ринок буде проаналізовано з нуля.",
+        + "\nЯкщо прибрати категорію, ринок буде проаналізовано з нуля (додавання історію не чіпає)."
+        + (f"\n\n{CATEGORY_TREE_NOTE}"
+           if any(o.get("parent") for o in context.user_data.get(f"cat_options_{watch_id}") or []) else ""),
         reply_markup=_category_keyboard(
             context.user_data.get(f"cat_options_{watch_id}") or [], f"setcat:{watch_id}:",
             context.user_data.get(f"cat_selected_{watch_id}") or set(), extra_rows=[back_row],
@@ -566,10 +570,10 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if not selected:
             await query_cb.answer("Познач хоча б одну категорію або обери «Усі категорії».", show_alert=True)
             return
-        new_ids = set(selected)
-        update_watch_categories(
-            watch_id, chat_id, [{"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected],
-        )
+        chosen = await asyncio.to_thread(
+            collapse_categories, [{"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected])
+        new_ids = {c["id"] for c in chosen}
+        update_watch_categories(watch_id, chat_id, chosen)
     else:
         try:
             cat_id = options[int(choice)]["id"]
@@ -582,7 +586,17 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data.pop(f"cat_selected_{watch_id}", None)
     # Категорії лише ДОДАНО (або «усі категорії» замість обмеження): старі оголошення й
     # продажі лишаються правдивими — зберігаємо історію, ринок просто перерахується з ширшою вибіркою
-    only_added = (not new_ids) or (old_ids and old_ids <= new_ids)
+    removed = old_ids - new_ids
+    if removed and new_ids:
+        # Прибрана категорія входила в залишену батьківську — по суті нічого не прибрано
+        try:
+            inside = set()
+            for cid in new_ids:
+                inside |= await asyncio.to_thread(category_descendants, cid)
+            removed -= inside
+        except Exception as e:
+            log.debug("Не вдалося перевірити вкладеність категорій: %s", e)
+    only_added = (not new_ids) or not removed
     if new_ids == old_ids:
         pass
     elif only_added:
@@ -880,6 +894,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Імпорти з інших екранів — унизу, щоб модулі могли посилатися один на одного
 from screen_common import (  # noqa: E402
+    CATEGORY_TREE_NOTE,
     ASPECT_CHOICE_TEXT,
     _aspect_keyboard,
     _category_keyboard,

@@ -20,14 +20,26 @@ def _category_keyboard(options, prefix, selected=(), extra_rows=None):
     f'{prefix}done' — зберегти вибір, f'{prefix}all' — без обмеження категорією.
     Категорії аксесуарів/запчастин позначені ⚠️ і показані останніми."""
     rows = []
+    by_id = {o["id"]: o for o in options}
+    children = {o["id"] for o in options if o.get("parent") in by_id}
+    has_children = {o["parent"] for o in options if o.get("parent") in by_id}
     order = sorted(range(len(options)), key=lambda i: is_accessory_category(options[i]["name"]))
-    for idx in order:
+    # Вкладені категорії — одразу під своєю батьківською
+    order = [i for i in order if options[i]["id"] not in children]
+    nested = []
+    for i in order:
+        nested.append(i)
+        nested += [j for j in range(len(options)) if options[j].get("parent") == options[i]["id"]]
+    for idx in nested:
         opt = options[idx]
         shown = category_label(opt["name"])
-        label = shown if len(shown) <= 34 else shown[:31] + "…"
-        mark = "☑️" if opt["id"] in selected else "⬜"
+        label = shown if len(shown) <= 30 else shown[:27] + "…"
+        covered = opt["id"] in children and opt["parent"] in selected
+        mark = "☑️" if opt["id"] in selected else ("🔹" if covered else "⬜")
+        tree = "📂 " if opt["id"] in has_children else ("↳ " if opt["id"] in children else "")
         warn = " ⚠️" if is_accessory_category(opt["name"]) else ""
-        rows.append([InlineKeyboardButton(f"{mark} {label} ({opt['count']}){warn}", callback_data=f"{prefix}{idx}")])
+        rows.append([InlineKeyboardButton(f"{mark} {tree}{label} ({opt['count']}){warn}",
+                                          callback_data=f"{prefix}{idx}")])
     rows.append([InlineKeyboardButton(f"✅ Готово ({len(selected)} обрано)", callback_data=f"{prefix}done")])
     rows.append([InlineKeyboardButton("🌐 Усі категорії (без обмеження)", callback_data=f"{prefix}all")])
     for row in extra_rows or []:
@@ -52,6 +64,12 @@ def _aspect_keyboard(watch_id, options, selected, extra_rows=None):
     for row in extra_rows or []:
         rows.append(row)
     return InlineKeyboardMarkup(rows)
+
+
+CATEGORY_TREE_NOTE = (
+    "📂 — батьківська категорія: вже містить усі вкладені (↳). Достатньо позначити її — "
+    "🔹 означає, що вкладена вже охоплена, окремо її позначати не треба."
+)
 
 
 ASPECT_CHOICE_TEXT = (

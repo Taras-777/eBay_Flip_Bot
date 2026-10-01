@@ -181,18 +181,24 @@ ASPECT_LOOKUP_ENABLED = True
 ASPECT_LOOKUP_ALL = True
 
 
-MAX_SPEC_LOOKUPS_PER_MARKET_SCAN = 150
+MAX_SPEC_LOOKUPS_PER_MARKET_SCAN = 50
 
 
 MAX_SPEC_LOOKUPS_PER_DEAL_SCAN = 40
 
 
-MAX_SPEC_LOOKUPS_PER_DAY = 3500
+MAX_SPEC_LOOKUPS_PER_DAY = 1500
 
 
 # Бюджет Browse API (пошук + характеристики). Ліміт eBay — 5000/добу;
 # бот тримається нижче із запасом, щоб не отримати блокування (HTTP 429).
 DAILY_BROWSE_BUDGET = 4500
+# Жорстка межа: коли за даними eBay лишається стільки запитів — бот більше не шле
+# жодного запиту Browse до скидання ліміту (решта — запас для перевірок вручну не потрібен)
+HARD_STOP_REMAINING = 25
+# Рівномірний розподіл: інтервал пошуку нових оголошень бот сам збільшує (до цього
+# максимуму), щоб запитів вистачило до скидання ліміту, і зменшує, коли запас є
+MAX_CHECK_INTERVAL_MINUTES = 60
 
 
 SEARCH_RESERVE = 300          # стільки запитів завжди лишаємо для самого пошуку

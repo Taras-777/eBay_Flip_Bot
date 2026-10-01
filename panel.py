@@ -14,8 +14,8 @@ from telegram.ext import ContextTypes
 
 from markdowns import markdown_counts
 from undo import attach_offer, menu_offer, undo_button
-from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import count_unseen_deals, get_last_prices_update, get_scan_summary, list_users, sold_confirmed_today
+from settings import CHECK_INTERVAL_MINUTES, LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
+from db import count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, sold_confirmed_today
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, trading_calls_today
 from version import get_version
@@ -91,6 +91,18 @@ def prices_updated_line(user_id):
     return line
 
 
+def pace_line():
+    """Якщо бот рідше шукає нові оголошення, щоб вистачило ліміту, — сказати про це."""
+    try:
+        minutes = float(get_meta("check_interval") or CHECK_INTERVAL_MINUTES)
+    except ValueError:
+        return ""
+    if minutes <= CHECK_INTERVAL_MINUTES:
+        return ""
+    return (f"\n⏱ Нові оголошення шукаю раз на {minutes:.0f} хв (замість {CHECK_INTERVAL_MINUTES}) — "
+            "щоб ліміту вистачило до скидання")
+
+
 def main_menu_text(user_id=None):
     """Текст головного меню; власник додатково бачить використання eBay API.
     Внизу — коли оновлювались ціни й версія бота (змінюється сама після оновлення коду)."""
@@ -104,7 +116,7 @@ def main_menu_text(user_id=None):
             log.debug("Не вдалося визначити час оновлення цін: %s", e)
     if user_id is not None and is_owner(user_id):
         try:
-            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line(sold_checks_line())}{prices}{footer}"
+            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line(sold_checks_line())}{pace_line()}{prices}{footer}"
         except Exception as e:
             log.debug("Не вдалося сформувати рядок використання API: %s", e)
     return MAIN_MENU_TEXT + prices + footer

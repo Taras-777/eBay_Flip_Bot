@@ -400,3 +400,19 @@ def test_aspect_names_translated_for_display():
     assert aspect_label("Unbekanntes Merkmal") == "Unbekanntes Merkmal"          # без перекладу — як є
     assert aspects_label(["Marke", "Modell"]) == "Бренд (Marke), Модель (Modell)"
 
+
+
+def test_laptop_skips_aspect_step_and_keeps_only_parent_category(screen, monkeypatch, no_category_tree):
+    no_category_tree["58058"] = {"175672"}
+    asked = []
+    patch_ui(monkeypatch, "aspect_options_for_categories", lambda ids, q: asked.append(1) or list(ASPECTS))
+    patch_ui(monkeypatch, "suggest_min_price", lambda q, ids: None)
+    ctx = _new_watch_context(({"id": "58058", "name": "Computer, Tablets & Netzwerk"},
+                              {"id": "175672", "name": "Notebooks & Netbooks"}))
+    ctx.user_data["new_watch_query"] = "MSI Katana"
+    run(handlers.addwatch_category_choice(make_update("cat:done"), ctx))
+    assert asked == []                                                     # крок характеристик пропущено
+    watch = db.list_watches(chat_id=1)[0]
+    assert db.get_required_aspects(watch) == [] and watch["require_spec"] == 0
+    assert [c["id"] for c in db.get_watch_categories(watch)] == ["58058"]  # лише батьківська
+    assert "💻 Ноутбук" in screen.text

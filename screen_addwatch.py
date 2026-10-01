@@ -9,6 +9,8 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import DEFAULT_CONDITION_IDS, MIN_PRICE_SUGGESTION_PCT, log
+from ebay_api import collapse_categories, mark_parent_categories
+from laptops import is_laptop
 from textparse import aspect_label, aspects_label, category_label, plural
 from db import (
     add_watch,
@@ -53,6 +55,7 @@ NEW_WATCH_KEYS = (
     "new_watch_categories", "new_watch_category_selected",
     "new_watch_category_options", "new_watch_min_price", "suggested_min_price",
     "new_watch_aspect_options", "new_watch_aspect_selected", "new_watch_required_aspect", "new_watch_require_spec",
+    "new_watch_laptop",
     "new_watch_shared_from",
 )
 
@@ -156,6 +159,7 @@ async def _ask_categories(update, context):
         # Категорій не знайшлось — продовжуємо без обмеження категорією
         return await _propose_min_price(update, context)
 
+    await asyncio.to_thread(mark_parent_categories, options)
     context.user_data["new_watch_category_options"] = options
     context.user_data["new_watch_category_selected"] = set()
     await _render_new_watch_categories(update, context)
@@ -172,7 +176,8 @@ async def _render_new_watch_categories(update, context):
         "і натисни «✅ Готово». Кілька категорій корисні, коли продавці кладуть той самий товар "
         "у різні місця.\n"
         "У дужках — кількість оголошень. ⚠️ — аксесуари й запчастини: зазвичай їх обирати не треба.\n"
-        "Кожна додаткова категорія — ще один запит до eBay на кожну перевірку.",
+        "Кожна додаткова категорія — ще один запит до eBay на кожну перевірку."
+        + (f"\n\n{CATEGORY_TREE_NOTE}" if any(o.get("parent") for o in options) else ""),
         reply_markup=_category_keyboard(
             options, "cat:", selected,
             extra_rows=[[InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")]],
@@ -211,7 +216,15 @@ async def addwatch_category_choice(update: Update, context: ContextTypes.DEFAULT
 async def _propose_aspects(update, context):
     """Крок після категорій: які характеристики мають бути заповнені в оголошенні."""
     query = context.user_data["new_watch_query"]
-    category_ids = [c["id"] for c in context.user_data.get("new_watch_categories") or []]
+    categories = context.user_data.get("new_watch_categories") or []
+    category_ids = [c["id"] for c in categories]
+    if is_laptop(query=query, category_names=[c["name"] for c in categories]):
+        # Ноутбук: клас (відеокарта · процесор · RAM) бот визначає сам; обов'язкові характеристики
+        # лише відкидали б оголошення з неправильною категорією — пропускаємо цей крок
+        context.user_data["new_watch_laptop"] = True
+        context.user_data["new_watch_required_aspect"] = None
+        context.user_data["new_watch_require_spec"] = 0
+        return await _propose_min_price(update, context)
     await show_panel(
         update, context,
         f"🔎 «{html.escape(query)}»\n\nДізнаюсь характеристики категорії в eBay…",
@@ -354,9 +367,11 @@ async def addwatch_custom_min_price(update: Update, context: ContextTypes.DEFAUL
 
 async def _finalize_watch(update, context):
     query = context.user_data["new_watch_query"]
-    categories = context.user_data.get("new_watch_categories") or []
+    # Батьківська категорія вже охоплює вкладені — лишаємо лише її
+    categories = await asyncio.to_thread(collapse_categories, context.user_data.get("new_watch_categories") or [])
     category_name = ", ".join(category_label(c["name"]) for c in categories)
     min_price = context.user_data.get("new_watch_min_price") or 0
+    laptop = context.user_data.get("new_watch_laptop")
     required_aspect = context.user_data.get("new_watch_required_aspect")
     require_spec = context.user_data.get("new_watch_require_spec")
     _clear_new_watch(context)
@@ -385,6 +400,9 @@ async def _finalize_watch(update, context):
                       f"(продажів: {watch_obs_summary(wid)['sold']}) — ціни порахуються за кілька хвилин")
     if category_name:
         extras.append(f"🗂️ Категорії: {html.escape(category_name)}")
+    if laptop:
+        extras.append("💻 Ноутбук: процесор, відеокарту й RAM бот визначає сам — "
+                      "обов'язкові характеристики не потрібні")
     if min_price:
         extras.append(f"💶 Мінімальна ціна: {min_price:.0f}€")
     aspects = get_required_aspects({"required_aspect": required_aspect})
@@ -444,6 +462,7 @@ async def addwatch_menu_interrupt(update: Update, context: ContextTypes.DEFAULT_
 
 # Імпорти з інших екранів — унизу, щоб модулі могли посилатися один на одного
 from screen_common import (  # noqa: E402
+    CATEGORY_TREE_NOTE,
     ASPECT_CHOICE_TEXT,
     _category_keyboard,
     _ebay_configured,

@@ -142,3 +142,87 @@ def test_unknown_gpu_items_read_first(monkeypatch):
              {"item_id": "unknown", "title": "MSI Katana 15 B13VFK"}]
     market._annotate_items(items, max_lookups=1, watch=db.get_watch(wid, 1))
     assert fetched == ["unknown"]
+
+
+# ---------- батьківська й вкладена категорії ----------
+
+COMPUTER = {"id": "58058", "name": "Computer, Tablets & Netzwerk"}
+NOTEBOOKS = {"id": "175672", "name": "Notebooks & Netbooks"}
+
+
+def test_collapse_keeps_only_parent(no_category_tree):
+    import ebay_api
+    no_category_tree["58058"] = {"175672", "177"}
+    assert ebay_api.collapse_categories([COMPUTER, NOTEBOOKS]) == [COMPUTER]
+    assert ebay_api.collapse_categories([NOTEBOOKS, {"id": "9355", "name": "Handys"}]) == \
+        [NOTEBOOKS, {"id": "9355", "name": "Handys"}]                    # не вкладені — обидві лишаються
+
+
+def test_search_skips_nested_category(no_category_tree, monkeypatch):
+    import ebay_api
+    no_category_tree["58058"] = {"175672"}
+    searched = []
+    monkeypatch.setattr(ebay_api, "search_active_items",
+                        lambda category_id=None, stats=None, **kw: searched.append(category_id) or [])
+    ebay_api.search_in_categories(["58058", "175672"], query="x")
+    assert searched == ["58058"]                                          # один запит замість двох
+
+
+def test_existing_watch_categories_collapsed_without_losing_history(no_category_tree):
+    no_category_tree["58058"] = {"175672"}
+    from test_sold_check import add_sale
+    wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15, categories=[COMPUTER, NOTEBOOKS])
+    add_sale(wid, "s1", 900, "RTX 4060", confirmed=True)
+    assert market.collapse_watch_categories() == 1
+    assert db.get_watch_categories(db.get_watch(wid, 1)) == [COMPUTER]
+    assert [r["item_id"] for r in db.get_sold_listings(wid)] == ["s1"]  # історія на місці
+    assert market.collapse_watch_categories() == 0
+
+
+def test_removing_nested_category_in_editor_keeps_history(no_category_tree, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    import access
+    import handlers
+    from conftest import patch_ui
+    from test_sold_check import add_sale, make_update
+    no_category_tree["58058"] = {"175672"}
+    wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15, categories=[COMPUTER, NOTEBOOKS])
+    add_sale(wid, "s1", 900, "RTX 4060", confirmed=True)
+    monkeypatch.setattr(access, "is_owner", lambda uid: True)
+    patch_ui(monkeypatch, "_show_watch_details", AsyncMock())
+    ctx = MagicMock()
+    ctx.user_data = {f"cat_options_{wid}": [COMPUTER, NOTEBOOKS], f"cat_selected_{wid}": {"58058"}}
+    asyncio.run(handlers.set_category_callback(make_update(f"setcat:{wid}:done"), ctx))
+    assert [r["item_id"] for r in db.get_sold_listings(wid)] == ["s1"]
+
+
+def test_category_descendants_parses_subtree(no_category_tree, monkeypatch):
+    import ebay_api
+    from conftest import FakeResponse
+    payload = {"categorySubtreeNode": {"category": {"categoryId": "58058"}, "childCategoryTreeNodes": [
+        {"category": {"categoryId": "175672"}, "childCategoryTreeNodes": [{"category": {"categoryId": "177"}}]},
+        {"category": {"categoryId": "171485"}}]}}
+    monkeypatch.setattr(ebay_api, "_get_access_token", lambda: "T")
+    monkeypatch.setattr(ebay_api, "get_category_tree_id", lambda: "77")
+    calls = []
+    monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: calls.append(1) or FakeResponse(payload))
+    assert no_category_tree.real("58058") == {"175672", "177", "171485"}
+    assert no_category_tree.real("58058") == {"175672", "177", "171485"} and len(calls) == 1   # з кешу
+
+
+def test_category_picker_shows_parent_and_nested(no_category_tree):
+    import ebay_api
+    import screen_common
+    no_category_tree["58058"] = {"175672", "175673", "171485"}
+    no_category_tree["175673"] = {"171485"}
+    options = [{"id": "175673", "name": "Computer-Komponenten & -Teile", "count": 6943},
+               {"id": "58058", "name": "Computer, Tablets & Netzwerk", "count": 9400},
+               {"id": "175672", "name": "Notebooks & Netbooks", "count": 332},
+               {"id": "9355", "name": "Handys & Smartphones", "count": 5}]
+    ebay_api.mark_parent_categories(options)
+    assert options[2]["parent"] == "58058" and options[0]["parent"] == "58058" and "parent" not in options[3]
+    rows = [r[0].text for r in screen_common._category_keyboard(options, "cat:", {"58058"}).inline_keyboard]
+    assert rows[0].startswith("☑️ 📂 Комп'ютери, планшети й мережа")
+    assert rows[1].startswith("🔹 ↳ Комплектуючі") and rows[2].startswith("🔹 ↳ Ноутбуки й нетбуки")
+    assert rows[3].startswith("⬜ Мобільні")                       # не вкладена — як і раніше

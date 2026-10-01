@@ -15,6 +15,7 @@ from settings import (
     DEAL_SCAN_LIMIT,
     ERROR_NOTICE_INTERVAL,
     LOW_BUDGET_INTERVAL_MINUTES,
+    MAX_CHECK_INTERVAL_MINUTES,
     MARKET_REFRESH_MINUTES,
     MAX_SPEC_LOOKUPS_PER_DEAL_SCAN,
     LAPTOP_SALES_WINDOW_DAYS,
@@ -25,6 +26,8 @@ from settings import (
     log,
 )
 from db import (
+    get_api_calls_today,
+    set_meta,
     add_deal,
     bulk_upsert_seen_items,
     cleanup_old_listing_obs,
@@ -37,12 +40,13 @@ from db import (
     get_sold_listings,
     list_watches,
 )
-from ebay_api import browse_budget_left, fetch_browse_rate_limit, seconds_until_reset
+from ebay_api import BudgetExhausted, browse_budget_left, fetch_browse_rate_limit, seconds_until_reset
 from market import (
     _annotate_items,
     _apply_item_filters,
     _recalculate_watch_medians,
     _stat_for_item,
+    collapse_watch_categories,
     laptop_unknown,
     max_buy_price,
 )
@@ -66,16 +70,25 @@ from backup import daily_backup
 async def check_all_watches(app: Application):
     watches = list_watches(active_only=True)
     semaphore = asyncio.Semaphore(WATCH_CONCURRENCY)
+    skipped: list = []
 
     async def check(w):
         async with semaphore:
+            # Ліміт закінчився посеред циклу — решту товарів перевіримо після скидання
+            if browse_budget_left() <= 0:
+                skipped.append(w["id"])
+                return
             try:
                 await check_one_watch(app, w)
+            except BudgetExhausted:
+                skipped.append(w["id"])
             except Exception as e:
                 log.exception("Помилка при перевірці watch #%s: %s", w["id"], e)
                 await _notify_median_error(app, w, e)
 
     await asyncio.gather(*(check(w) for w in watches))
+    if skipped:
+        log.warning("Ліміт запитів eBay вичерпано — пропущено товарів: %s (до скидання ліміту)", len(skipped))
 
     # Нові вигідні пропозиції — одне сповіщення на чат за весь цикл перевірки
     for chat_id, found in app.bot_data.pop("new_deals_by_chat", {}).items():
@@ -237,6 +250,39 @@ async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+def pace_interval(app, left, now=None):
+    """Інтервал між циклами пошуку (хв). Бот міряє, скільки запитів Browse він зробив за
+    останню годину, і порівнює з тим, скільки можна витрачати на годину до скидання ліміту:
+    витрачає більше — інтервал ×1.5 (до MAX_CHECK_INTERVAL_MINUTES), помітно менше — ÷1.5
+    (до CHECK_INTERVAL_MINUTES). Так ліміту вистачає на всю добу, а не до другої ночі."""
+    now = now or time.time()
+    pace = app.bot_data.setdefault("pace", {"interval": float(CHECK_INTERVAL_MINUTES), "samples": []})
+    used = get_api_calls_today("browse")
+    samples = pace["samples"]
+    if samples and used < samples[-1][1]:
+        samples.clear()   # власний лічильник почав нову добу
+    samples.append((now, used))
+    while samples and samples[0][0] < now - 3600:
+        samples.pop(0)
+    first_t, first_used = samples[0]
+    span = now - first_t
+    if span >= 20 * 60:
+        rate = (used - first_used) / span * 3600            # запитів на годину зараз
+        hours = max(0.5, (seconds_until_reset() or 12 * 3600) / 3600)
+        allowed = max(left, 0) / hours                       # можна на годину, щоб дотягнути
+        interval = pace["interval"]
+        if rate > allowed:
+            interval = min(MAX_CHECK_INTERVAL_MINUTES, interval * 1.5)
+        elif rate < allowed * 0.6:
+            interval = max(CHECK_INTERVAL_MINUTES, interval / 1.5)
+        if interval != pace["interval"]:
+            log.info("Запитів eBay ~%.0f/год, можна ~%.0f/год до скидання — пошук нових оголошень раз на %.0f хв",
+                     rate, allowed, interval)
+        pace["interval"] = interval
+    set_meta("check_interval", f"{pace['interval']:.0f}")
+    return pace["interval"]
+
+
 async def scheduler_loop(app: Application):
     try:
         await asyncio.sleep(5)
@@ -291,6 +337,7 @@ async def scheduler_loop(app: Application):
                     removed = await asyncio.to_thread(cleanup_old_seen_items)
                     removed_obs = await asyncio.to_thread(cleanup_old_listing_obs)
                     await asyncio.to_thread(purge_deleted_watches)
+                    await asyncio.to_thread(collapse_watch_categories)
                     if removed or removed_obs:
                         log.info("Очищено застарілих записів: seen_items %s, listing_obs %s",
                                  removed, removed_obs)
@@ -298,10 +345,11 @@ async def scheduler_loop(app: Application):
                     log.warning("Не вдалося очистити seen_items: %s", e)
                 last_cleanup_at = now
 
-            # Бюджет на межі — перевіряємо рідше, щоб дотягнути до скидання ліміту
+            # Рівномірно на добу: інтервал підлаштовується, щоб запитів вистачило до скидання
             left = browse_budget_left()
-            interval = CHECK_INTERVAL_MINUTES if left >= SEARCH_RESERVE else LOW_BUDGET_INTERVAL_MINUTES
-            if interval != CHECK_INTERVAL_MINUTES:
+            interval = pace_interval(app, left)
+            if left < SEARCH_RESERVE:
+                interval = max(interval, LOW_BUDGET_INTERVAL_MINUTES)
                 # Прокинутись одразу після скидання ліміту eBay, а не чекати повні 30 хв
                 until_reset = seconds_until_reset()
                 if until_reset is not None and 0 < until_reset + 60 < interval * 60:

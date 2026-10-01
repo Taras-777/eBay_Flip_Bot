@@ -4,6 +4,7 @@
 """
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import base64
 import config
 import re
@@ -19,6 +20,7 @@ from urllib.parse import quote
 
 from settings import (
     BEST_OFFER_ASSUMED_DISCOUNT_PCT,
+    HARD_STOP_REMAINING,
     DAILY_BROWSE_BUDGET,
     DEFAULT_CONDITION_IDS,
     DELIVERY_COUNTRY,
@@ -44,7 +46,9 @@ from db import (
     get_api_calls_today,
     get_auto_min_price,
     get_cached_category_aspects,
+    get_meta,
     record_api_call,
+    set_meta,
     save_category_aspects,
 )
 
@@ -123,6 +127,8 @@ def _retry_after_seconds(response):
 
 def _request_with_retries(method, url, **kwargs):
     """Виконує HTTP-запит з обмеженим retry для тимчасових помилок."""
+    if (url == SEARCH_URL or url.startswith(ITEM_URL)) and _hard_limit_reached():
+        raise BudgetExhausted("Денний ліміт запитів eBay вичерпано — чекаю на скидання")
     for attempt in range(1, NETWORK_MAX_ATTEMPTS + 1):
         try:
             response = _http_session().request(method, url, **kwargs)
@@ -227,7 +233,25 @@ def _get_access_token():
 ANALYTICS_RATE_LIMIT_URL = "https://api.ebay.com/developer/analytics/v1_beta/rate_limit/"
 
 
-_rate_limit_cache = {"data": None, "fetched_at": 0}
+_rate_limit_cache = {"data": None, "fetched_at": 0, "own_at_fetch": 0}
+
+
+class BudgetExhausted(RuntimeError):
+    """Денний ліміт Browse API майже вичерпано — запит не надсилаємо до скидання."""
+
+
+def _own_calls_since_fetch():
+    """Скільки запитів Browse бот зробив після останніх даних eBay (вони не оновлюються щохвилини)."""
+    return max(0, get_api_calls_today("browse") - _rate_limit_cache.get("own_at_fetch", 0))
+
+
+def _hard_limit_reached():
+    data = _rate_limit_cache["data"]
+    if data and data.get("reset") and time.time() >= data["reset"]:
+        return False   # ліміт уже скинувся
+    if data and time.time() - _rate_limit_cache["fetched_at"] < 3 * 3600:
+        return data["remaining"] - _own_calls_since_fetch() <= HARD_STOP_REMAINING
+    return get_api_calls_today("browse") >= DAILY_BROWSE_BUDGET + 400
 
 
 def fetch_browse_rate_limit():
@@ -262,7 +286,7 @@ def fetch_browse_rate_limit():
         "count": int(daily.get("count") if daily.get("count") is not None else max(limit - remaining, 0)),
         "reset": _parse_ebay_ts(daily.get("reset")),
     }
-    _rate_limit_cache.update(data=data, fetched_at=time.time())
+    _rate_limit_cache.update(data=data, fetched_at=time.time(), own_at_fetch=get_api_calls_today("browse"))
     try:
         fetch_trading_rate_limit(token)
     except Exception as e:
@@ -298,9 +322,12 @@ def fetch_trading_rate_limit(token=None):
 
 
 def trading_calls_today():
-    """Запити Trading API сьогодні: дані eBay (свіжіші за 30 хв), інакше — власний лічильник."""
+    """Запити Trading API сьогодні: дані eBay (свіжіші за 30 хв), інакше — власний лічильник.
+    Дані eBay — головні: вони враховують усі копії бота і скидаються разом з лімітом eBay
+    (о 09:00 за Берліном), а власний лічильник веде добу за UTC (з 02:00) і після скидання
+    ліміту ще кілька годин показував би вчорашні запити."""
     if _trading_limit_cache["count"] is not None and time.time() - _trading_limit_cache["fetched_at"] < 30 * 60:
-        return max(_trading_limit_cache["count"], get_api_calls_today("trading")), True
+        return _trading_limit_cache["count"], True
     return get_api_calls_today("trading"), False
 
 
@@ -432,6 +459,74 @@ def fetch_category_aspects(category_id):
     return aspects
 
 
+def category_descendants(category_id):
+    """Усі підкатегорії категорії (getCategorySubtree) — множина id. Кешується назавжди:
+    дерево категорій eBay майже не змінюється. Порожня множина — підкатегорій немає або eBay не відповів."""
+    key = f"cat_desc:{category_id}"
+    cached = get_meta(key)
+    if cached is not None:
+        try:
+            return set(json.loads(cached))
+        except ValueError:
+            pass
+    token = _get_access_token()
+    resp = _request_with_retries(
+        "GET", f"{TAXONOMY_BASE}/category_tree/{get_category_tree_id()}/get_category_subtree",
+        headers={"Authorization": "Bearer " + token},
+        params={"category_id": str(category_id)},
+        timeout=30,
+    )
+    if resp.status_code in (400, 404):
+        set_meta(key, "[]")
+        return set()
+    resp.raise_for_status()
+    found = set()
+    stack = [(resp.json().get("categorySubtreeNode") or {})]
+    while stack:
+        node = stack.pop()
+        for child in node.get("childCategoryTreeNodes") or []:
+            cid = str((child.get("category") or {}).get("categoryId") or "")
+            if cid:
+                found.add(cid)
+            stack.append(child)
+    set_meta(key, json.dumps(sorted(found)))
+    return found
+
+
+def collapse_categories(categories):
+    """[{id, name}] без категорій, що входять в іншу вибрану (Notebooks ⊂ Computer, Tablets & Netzwerk):
+    батьківська й так охоплює вкладену, а кожна зайва категорія — ще запит до eBay при кожному скануванні.
+    Якщо eBay не відповів — список як є."""
+    if len(categories) < 2:
+        return list(categories)
+    ids = [str(c["id"]) for c in categories]
+    try:
+        covered = set()
+        for cid in ids:
+            covered |= category_descendants(cid) & set(ids)
+    except Exception as e:
+        log.debug("Не вдалося перевірити вкладеність категорій: %s", e)
+        return list(categories)
+    return [c for c in categories if str(c["id"]) not in covered]
+
+
+def mark_parent_categories(options):
+    """Позначає в списку категорій вкладеність: option["parent"] — id найближчої вибраної
+    категорії, що її містить (для показу «📂 батьківська / ↳ вкладена»). Змінює список на місці."""
+    if len(options) < 2:
+        return options
+    try:
+        desc = {str(o["id"]): category_descendants(o["id"]) for o in options}
+    except Exception as e:
+        log.debug("Не вдалося дізнатися вкладеність категорій: %s", e)
+        return options
+    for o in options:
+        holders = [p for p, d in desc.items() if str(o["id"]) in d]
+        if holders:
+            o["parent"] = min(holders, key=lambda p: len(desc[p]))   # найближча (найменша) батьківська
+    return options
+
+
 def find_leaf_category(query, category_id):
     """
     getItemAspectsForCategory працює лише з КІНЦЕВИМИ категоріями. Якщо обрана
@@ -501,7 +596,8 @@ def browse_budget_left():
         # бюджету, доки наступний запит getRateLimits не покаже точну цифру
         return DAILY_BROWSE_BUDGET // 2
     if data and time.time() - _rate_limit_cache["fetched_at"] < 30 * 60:
-        return data["remaining"] - max(data["limit"] - DAILY_BROWSE_BUDGET, 0)
+        # Дані eBay + запити, які бот зробив уже після них
+        return data["remaining"] - _own_calls_since_fetch() - max(data["limit"] - DAILY_BROWSE_BUDGET, 0)
     return DAILY_BROWSE_BUDGET - get_api_calls_today("browse")
 
 
@@ -762,7 +858,10 @@ def search_in_categories(category_ids, sort="newlyListed", **kwargs):
     окремо й об'єднуємо без дублікатів. Без категорій — один запит без обмеження.
     Кожна додаткова категорія = ще один запит до eBay.
     """
-    cids = list(category_ids) or [None]
+    cids = list(category_ids)
+    if len(cids) > 1:   # вкладена категорія вже входить у батьківську — шукати в ній вдруге не треба
+        cids = [c["id"] for c in collapse_categories([{"id": c} for c in cids])]
+    cids = cids or [None]
     stats = kwargs.pop("stats", None)
 
     def _one(cid):

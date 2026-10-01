@@ -30,7 +30,7 @@ import settings  # noqa: E402
 def temp_db(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DB_PATH", str(tmp_path / "test.sqlite3"))
     db.init_db()
-    ebay_api._rate_limit_cache.update(data=None, fetched_at=0)
+    ebay_api._rate_limit_cache.update(data=None, fetched_at=0, own_at_fetch=0)
     ebay_api._trading_limit_cache.update(count=None, fetched_at=0)
     import shared_market
     shared_market._cache.clear()
@@ -104,3 +104,24 @@ def patch_ui(monkeypatch, name, value):
             monkeypatch.setattr(module, name, value)
             patched = True
     assert patched, f"{name} немає в жодному модулі екранів"
+
+
+@pytest.fixture(autouse=True)
+def no_category_tree(monkeypatch):
+    """Дерево категорій eBay у тестах — порожнє (без мережі); тести вкладеності підміняють його самі."""
+    import importlib
+
+    class Tree(dict):
+        real = staticmethod(ebay_api.category_descendants)   # справжня функція — для її власного тесту
+
+    tree = Tree()
+
+    def descendants(cid):
+        return set(tree.get(str(cid), ()))
+
+    monkeypatch.setattr(ebay_api, "category_descendants", descendants)
+    for name in ("screen_watch", "handlers"):
+        mod = importlib.import_module(name)
+        if hasattr(mod, "category_descendants"):
+            monkeypatch.setattr(mod, "category_descendants", descendants)
+    return tree

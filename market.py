@@ -38,6 +38,8 @@ from textparse import (
     spec_required_by_default,
 )
 from db import (
+    list_watches,
+    update_watch_categories,
     mark_market_stale,
     prune_listing_obs,
     get_current_listings,
@@ -58,6 +60,7 @@ from db import (
     watch_category_ids,
 )
 from shared_market import MANUAL_CACHE_SECONDS, MARKET_CACHE_SECONDS, market_page, own_filter
+from ebay_api import collapse_categories
 from ebay_api import (
     browse_budget_left,
     fetch_item_aspects,
@@ -380,6 +383,24 @@ def _compute_group_stats(watch_id, items):
             "sale_source": source, "sample_size": len(clean),
         }
     return stats
+
+
+def collapse_watch_categories():
+    """Раз на добу: якщо в товару вибрані і батьківська, і вкладена категорія
+    (Computer, Tablets & Netzwerk + Notebooks), лишаємо лише батьківську — історія не змінюється.
+    Викликати з потоку. Повертає кількість змінених товарів."""
+    changed = 0
+    for w in list_watches(active_only=True):
+        cats = get_watch_categories(w)
+        if len(cats) < 2:
+            continue
+        kept = collapse_categories(cats)
+        if len(kept) < len(cats):
+            update_watch_categories(w["id"], w["chat_id"], kept)
+            changed += 1
+            log.info("«%s»: прибрано вкладені категорії, лишились %s", w["label"],
+                     ", ".join(c["name"] for c in kept))
+    return changed
 
 
 def apply_filters_to_history(w):
