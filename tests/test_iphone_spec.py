@@ -30,11 +30,15 @@ def test_saved_history_normalized():
 
 
 def test_console_storage_only():
-    assert extract_spec_key("Sony PlayStation 4 Slim 500GB + 2 Controller + FIFA (50GB)") == "500GB"
-    assert extract_spec_key("PS4 Pro 1000GB schwarz") == "1TB"
+    assert extract_spec_key("Sony PlayStation 4 Slim 500GB + 2 Controller + FIFA (50GB)") == "500GB · Slim"
+    assert extract_spec_key("PS4 Pro 1000GB schwarz") == "1TB · Pro"
+    assert extract_spec_key("PS4 Slim 500GB + 2 Controller") == "500GB · Slim"
+    assert extract_spec_key("PS4 500GB CUH-1216A") == "500GB · Fat"
+    assert extract_spec_key("PS4 500GB schwarz") == "500GB"                               # модель не названа
     assert extract_spec_key("PS4 Pro 1TB (500GB auf 1TB aufgerüstet)") == "unspecified"   # два об'єми
     assert extract_spec_key("PS4 Konsole + 5GB Spiel") == "unspecified"
     assert extract_spec_key("PlayStation 5 Slim 1TB") == "1TB"
+    assert extract_spec_key("PS5 Digital Edition 825GB") == "825GB · Digital"
     assert extract_spec_key("Xbox One 500GB") == "500GB"                                  # інші — як було
 
 
@@ -55,7 +59,7 @@ def test_other_console_model_dropped():
     assert market.normalize_saved_specs() == 2
     with db.get_conn() as conn:
         rows = dict(conn.execute("SELECT item_id, spec_group FROM listing_obs").fetchall())
-    assert rows == {"x": "1TB"}                                        # PS5 прибрано з історії PS4
+    assert rows == {"x": "1TB · Pro"}                                        # PS5 прибрано з історії PS4
 
 
 def test_console_unknown_storage_kept():
@@ -70,3 +74,10 @@ def test_console_unknown_storage_kept():
     assert market.watch_requires_spec(w5) is False
     wx = {"id": db.add_watch(1, "Xbox", "Xbox Series X", "", "", 15), "query": "Xbox Series X"}
     assert market.watch_requires_spec(wx) is True                                     # інші консолі — як було
+
+
+def test_bundle_marker():
+    from textparse import is_bundle
+    assert is_bundle("PS4 Slim 500GB + 2 Controller") and is_bundle("PS4 mit 3 Spielen") and is_bundle("PS4 + Spiel")
+    assert not is_bundle("PS4 Konsole mit Controller")                 # один геймпад — стандартний комплект
+    assert not is_bundle("iPhone 15 Pro 256GB inkl. Hülle") and not is_bundle("PS4 Spielekonsole")

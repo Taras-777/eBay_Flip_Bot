@@ -657,31 +657,70 @@ CONSOLE_STORAGE = [
      {"825GB", "80GB", "120GB", "160GB", "250GB", "320GB"}),
     (re.compile(r"\bps\s?5\b|playstation\s?5\b", re.I), {"825GB", "1TB", "2TB"}, set()),
 ]
+# Модель консолі — ціна залежить від неї не менше, ніж від диска. Лише явно вказана в назві
+# (слово або номер моделі CUH-…); інакше група лише за об'ємом.
+CONSOLE_MODELS = [
+    [("Pro", re.compile(r"\bpro\b|cuh-?7\d", re.I)), ("Slim", re.compile(r"\bslim\b|cuh-?2\d", re.I)),
+     ("Fat", re.compile(r"\bfat\b|\bclassic\b|cuh-?1\d", re.I))],
+    [("Pro", re.compile(r"\bpro\b", re.I)), ("Digital", re.compile(r"\bdigital\b", re.I)),
+     ("Disc", re.compile(r"\bdisc\b|\bdisk\b|laufwerk|blu-?ray", re.I))],
+]
 SIZE_ALIASES = {"1000GB": "1TB", "2000GB": "2TB", "1024GB": "1TB"}
+SPEC_SEP = " · "   # той самий роздільник, що й у класах ноутбуків: «500GB · Slim» → ширша група «500GB»
+
+
+def _console_index(text):
+    found = [i for i, (pattern, _, _) in enumerate(CONSOLE_STORAGE) if pattern.search(text or "")]
+    return found[0] if len(found) == 1 else None
 
 
 def console_family(text):
     """(дозволені об'єми, «чужі» об'єми) для PS4/PS5, якщо в тексті рівно одна з них."""
-    found = [(valid, foreign) for pattern, valid, foreign in CONSOLE_STORAGE if pattern.search(text or "")]
+    i = _console_index(text)
+    return None if i is None else CONSOLE_STORAGE[i][1:]
+
+
+def console_model(title):
+    """«Slim», «Pro», «Digital»… — якщо в назві названо рівно одну модель."""
+    i = _console_index(title)
+    if i is None:
+        return None
+    found = [name for name, pattern in CONSOLE_MODELS[i] if pattern.search(title)]
     return found[0] if len(found) == 1 else None
 
 
 def normalize_spec(title, spec):
     """iPhone — лише за об'ємом пам'яті: «128GB+8GB» → «128GB». PS4/PS5 — лише справжні
-    об'єми моделі: «1TB+500GB», «5GB», «320GB» → невідома. Кілька об'ємів — конфігурація невідома."""
+    об'єми моделі плюс модель, якщо вона названа: «500GB · Slim»; «1TB+500GB», «5GB», «320GB» →
+    невідома. Кілька об'ємів — конфігурація невідома."""
     if not spec or spec == "unspecified":
         return spec
-    tokens = [SIZE_ALIASES.get(t, t) for t in spec.split("+")]
+    tokens = [SIZE_ALIASES.get(t, t) for t in spec.split(SPEC_SEP)[0].split("+")]
     text = (title or "").lower()
     if "iphone" in text:
-        allowed = IPHONE_STORAGE
-    else:
-        family = console_family(text)
-        if family is None:
-            return "+".join(sorted(set(tokens)))
-        allowed = family[0]
-    sizes = {t for t in tokens if t in allowed}
-    return sizes.pop() if len(sizes) == 1 else "unspecified"
+        sizes = {t for t in tokens if t in IPHONE_STORAGE}
+        return sizes.pop() if len(sizes) == 1 else "unspecified"
+    family = console_family(text)
+    if family is None:
+        return "+".join(sorted(set(tokens)))
+    sizes = {t for t in tokens if t in family[0]}
+    if len(sizes) != 1:
+        return "unspecified"
+    model = console_model(title or "")
+    return sizes.pop() + (SPEC_SEP + model if model else "")
+
+
+# Комплект: консоль з геймпадами чи іграми — дорожча за «лише консоль»
+BUNDLE_PATTERN = re.compile(
+    r"\bbundle\b"
+    r"|\b(2|3|4|zwei|drei|vier)\s*x?\s*(controller|kontroller|gamepads?|joy-?cons?)\b"   # один геймпад — стандарт
+    r"|\b(\d+|zwei|drei|vier)\s*x?\s*(spiele|games)\b"
+    r"|(\binkl\.?|\binklusive|\bmit|\bund|\bwith|\+)\s*(\d+\s+)?(spiel(e|en)?|games?)\b",
+    re.I)
+
+
+def is_bundle(title):
+    return bool(BUNDLE_PATTERN.search(title or ""))
 
 
 def console_foreign(title, query):

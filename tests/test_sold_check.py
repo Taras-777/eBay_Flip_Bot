@@ -337,7 +337,8 @@ def test_sales_screen_groups_by_configuration():
     text = handlers._sales_text(w, db.get_sold_listings(w["id"]))
     assert "Продано: <b>3</b>" in text and "підтверджено eBay: 1" in text
     assert "За останні 7 днів: <b>2</b>" in text
-    assert "<b>256GB</b> — 2 продажі (✅1)" in text and "620€" in text  # медіана 600 і 640
+    # свіжий продаж (600€, сьогодні) важить більше за продаж 3 дні тому (640€)
+    assert "<b>256GB</b> — 2 продажі (✅1)" in text and "типова ціна <b>600€</b>" in text
     assert "<b>128GB</b> — 1 продаж" in text
     assert text.index("256GB</b>") < text.index("128GB</b>")  # спершу найпопулярніша
     assert 'href="https://www.ebay.de/itm/a"' in text
@@ -668,3 +669,19 @@ def test_restore_sales_from_backup(monkeypatch, tmp_path, capsys):
     assert "повернуто продажів і зниклих: 2" in capsys.readouterr().out
     assert restore_sales.main() == 0                   # повторний запуск нічого не дублює
     assert len(db.get_sold_listings(wid)) == 3
+
+
+def test_recent_sales_weigh_more():
+    import market
+    now = 1_000_000_000
+    rows = [{"price": p, "gone_at": now - d * 86400} for p, d in
+            [(100, 50), (100, 45), (100, 40), (120, 1), (120, 0)]]
+    assert market.recent_median(rows, now=now) == 120          # ринок підріс — свіжі продажі переважають
+    assert market.recent_median([{"price": 600, "gone_at": now}, {"price": 640, "gone_at": now}], now=now) == 620
+    assert market.typical_range([61, 75, 80, 88, 90, 95, 105, 177]) is not None
+
+
+def test_sales_range_text():
+    import screen_sales
+    assert screen_sales._range_text([61, 75, 80, 85, 88, 90, 95, 105, 110, 177]).startswith(", зазвичай ")
+    assert screen_sales._range_text([100, 120]) == ", 100–120€"

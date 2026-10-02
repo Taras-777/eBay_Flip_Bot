@@ -4,7 +4,6 @@
 
 import asyncio
 import html
-import statistics
 import time
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -12,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from settings import SOLD_LOOKBACK_DAYS, LOCAL_TZ, is_owner
-from textparse import CONDITION_LABELS, _search_tokens, plural
+from textparse import CONDITION_LABELS, _search_tokens, is_bundle, plural
 from learning import learned_words_note, reject_and_learn
 from undo import record as undo_record, short
 from laptops import spec_matches
@@ -25,7 +24,7 @@ from db import (
     watch_obs_summary,
     get_watch,
 )
-from market import refresh_sale_prices, filter_outliers
+from market import recent_median, refresh_sale_prices, typical_range
 from panel import _ack_callback, show_panel
 from access import require_access
 from ebay_user import is_connected
@@ -67,6 +66,15 @@ def _listed(sold, flt):
     return _filtered(sold, spec)[:SALES_LIST_MAX], spec
 
 
+def _range_text(prices):
+    """«, зазвичай 75–105€ (усі 61–177€)» — середня половина продажів і повний розкид."""
+    rng = typical_range(prices)
+    full = f"{min(prices):.0f}–{max(prices):.0f}€"
+    if not rng or (round(rng[0]) == round(min(prices)) and round(rng[1]) == round(max(prices))):
+        return f", {full}"
+    return f", зазвичай {rng[0]:.0f}–{rng[1]:.0f}€ (усі {full})"
+
+
 def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
     """Статистика продажів товару за конфігураціями (з таблиці спостережень, без запитів до eBay)."""
     title = f"📈 <b>{html.escape(watch['label'])}: продажі за {SOLD_LOOKBACK_DAYS} днів</b>"
@@ -98,13 +106,12 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
             current_cond = cond
             lines.append(f"\n<b>{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())}</b>")
         prices = [r["price"] for r in rows]
-        clean = filter_outliers(prices) or prices
         spec_txt = "конфігурація не вказана" if spec == "unspecified" else spec
         n_confirmed = sum(1 for r in rows if r["sold_check"] == "sold")
         lines.append(
             f"• <b>{html.escape(spec_txt)}</b> — {plural(len(rows), 'продаж', 'продажі', 'продажів')}"
             + (f" (✅{n_confirmed})" if n_confirmed else "")
-            + (f"\n  💶 типова ціна <b>{statistics.median(clean):.0f}€</b>, {min(prices):.0f}–{max(prices):.0f}€"
+            + (f"\n  💶 типова ціна <b>{recent_median(rows):.0f}€</b>" + _range_text(prices)
                if min(prices) != max(prices) else f"\n  💶 ціна <b>{prices[0]:.0f}€</b>")
             + (f"\n  ⏱ продається {speed_text(summarize(rows)['median_days'])}"
                if summarize(rows)["median_days"] is not None else "")
@@ -124,9 +131,11 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
         mark = {"sold": "✅ ", "pending": "⏳ "}.get(r["sold_check"], "")
         name = html.escape((r["title"] or "оголошення")[:45])
         link = f'<a href="{html.escape(r["url"])}">{name}</a>' if r["url"] else name
-        lines.append(f"{n}. {mark}{date}{html.escape(spec)} · <b>{r['price']:.0f}€</b> — {link}")
+        bundle = " 📦" if is_bundle(r["title"]) else ""
+        lines.append(f"{n}. {mark}{date}{html.escape(spec)} · <b>{r['price']:.0f}€</b>{bundle} — {link}")
 
     lines.append("\n<i>Ціна — з доставкою, остання, яку бачив бот. ✅ — продаж підтвердив eBay; "
+                 "📦 — комплект (додаткові геймпади чи ігри); "
                  "⏳ — ще в черзі на перевірку; без позначки — eBay не відповів, оцінка за "
                  "зникненням (оголошення зникло задовго до кінця строку). "
                  "Чужий товар у списку — натисни ❌ з його номером, і він більше не впливатиме на ціни.</i>")

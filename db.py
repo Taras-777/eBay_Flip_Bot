@@ -1083,19 +1083,24 @@ def _sold_filter():
     return " AND COALESCE(sold_check, '') != 'pending'" if get_meta("ebay_user_refresh_token") else ""
 
 
-def get_gone_prices(watch_id, cond_group, spec_group=None):
-    """Ціни лотів, які зникли з видачі за останні SOLD_LOOKBACK_DAYS днів."""
+def get_gone_rows(watch_id, cond_group, spec_group=None):
+    """Ціни й час зникнення лотів за останні SOLD_LOOKBACK_DAYS днів → [{'price', 'gone_at'}]."""
     since = int(time.time()) - SOLD_LOOKBACK_DAYS * 86400
-    q = ("SELECT price FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND cond_group = ?"
-         + _sold_filter())
+    q = ("SELECT price, gone_at FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? "
+         "AND cond_group = ?" + _sold_filter())
     params = [watch_id, since, cond_group]
     if spec_group is not None:
-        # Ноутбуки: ширший клас («RTX 4060») включає вужчі («RTX 4060 · i7 13 gen · 16GB»)
+        # Ширша група («RTX 4060», «500GB») включає вужчі («RTX 4060 · i7 13 gen», «500GB · Slim»)
         q += " AND (spec_group = ? OR spec_group LIKE ? ESCAPE '\\')"
         like = spec_group.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + " · %"
         params += [spec_group, like]
     with get_conn() as conn:
-        return [r["price"] for r in conn.execute(q, params).fetchall() if r["price"]]
+        return [dict(r) for r in conn.execute(q, params).fetchall() if r["price"]]
+
+
+def get_gone_prices(watch_id, cond_group, spec_group=None):
+    """Ціни лотів, які зникли з видачі за останні SOLD_LOOKBACK_DAYS днів."""
+    return [r["price"] for r in get_gone_rows(watch_id, cond_group, spec_group)]
 
 
 def get_sold_listings(watch_id, days=SOLD_LOOKBACK_DAYS):

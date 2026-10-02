@@ -30,6 +30,7 @@ from sales import sales_note
 from deal_check import recheck_shown_deals
 from deal_reprice import basis_line, reprice_deals
 from laptops import laptop_warnings
+from textparse import is_bundle
 from undo import record as undo_record, short
 
 
@@ -76,6 +77,8 @@ def _deal_card(n, d, sold=None):
     _, profit = estimate_resale_profit(sale, d["total_price"])
     new = "🆕 " if d["seen_at"] is None else ""
     offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
+    if is_bundle(d["title"]):
+        offer += " · 📦 комплект"
     if d.get("watch_count"):
         offer += f" · 👁 стежать: {d['watch_count']}"
     warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""

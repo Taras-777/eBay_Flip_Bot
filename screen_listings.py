@@ -26,6 +26,7 @@ from panel import _ack_callback, show_panel
 from access import require_access
 from screen_common import _listed, auction_note
 from laptops import laptop_warnings
+from textparse import is_bundle
 from undo import record as undo_record, short
 
 
@@ -215,6 +216,8 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         lines.append("Підходящих оголошень не лишилось.")
     for i, it in enumerate(shown, start + 1):
         cond = f" · стан: {html.escape(it['condition'])}" if it.get("condition") else ""
+        if is_bundle(it["title"]):
+            cond += " · 📦 комплект"
         listed = f"\n📅 виставлено {_listed(it['created_at'])}" if it.get("created_at") else ""
         listed += "".join(f"\n{w}" for w in laptop_warnings(it["title"]))
         if it.get("auction"):

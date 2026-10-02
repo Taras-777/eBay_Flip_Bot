@@ -19,6 +19,7 @@ from settings import (
 )
 from laptops import SEP as LAPTOP_SEP, spec_matches
 from textparse import plural
+from market import recent_median
 from db import get_meta, get_price_history, set_meta
 
 
@@ -52,7 +53,7 @@ def summarize(rows):
     return {
         "count": len(rows),
         "week": sum(1 for r in rows if r["gone_at"] >= week_ago),
-        "median_price": statistics.median(r["price"] for r in rows),
+        "median_price": recent_median(rows),   # свіжі продажі важать більше
         "median_days": statistics.median(durations) if durations else None,
     }
 
