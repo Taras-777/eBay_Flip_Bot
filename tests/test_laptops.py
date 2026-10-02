@@ -285,3 +285,39 @@ def test_laptop_search_excludes_ram_spam_and_needs_no_spec():
     assert ebay_api._watch_search_kwargs(phone)["exclude_terms"] == "broken"
     assert not market.watch_requires_spec(lap)          # клас ноутбука бот визначить і без пам'яті в назві
     assert market.watch_requires_spec(phone)
+
+
+def test_trademark_symbols_in_aspects():
+    from laptops import laptop_spec
+    aspects = {"grafikprozessor": "GeForce RTX™ 5050", "prozessor": "Intel® Core™ i5-13420H",
+               "arbeitsspeichergröße": "16 GB"}
+    assert laptop_spec("HP Victus Gaming 15-fa2357ng Gaming Notebook", aspects, query="HP Victus") \
+        == "RTX 5050 · i5 13 gen · 16GB"
+
+
+def test_old_laptop_history_reclassified():
+    import db
+    import market
+    wid = db.add_watch(1, "HP Victus", "HP Victus", "", "", 15, categories=[{"id": "175672", "name": "Notebooks"}])
+    db.update_listing_observations(wid, [
+        {"item_id": "a", "title": "HP Victus 15 Ryzen 5 RTX 4060 16GB", "spec_group": "16GB+RYZEN5",
+         "cond_group": "used", "total_price": 750},
+        {"item_id": "b", "title": "HP Victus Gaming 15-fa2357ng Gaming Notebook", "spec_group": "GPU ? · i5 13 gen · 16GB",
+         "cond_group": "used", "total_price": 849}])
+    db.save_cached_spec("b", "GPU ? · i5 13 gen · 16GB", {"grafikprozessor": "GeForce RTX™ 5050",
+                                                         "prozessor": "Intel® Core™ i5-13420H",
+                                                         "arbeitsspeichergröße": "16 GB"})
+    assert market.normalize_saved_specs() == 2
+    with db.get_conn() as conn:
+        specs = dict(conn.execute("SELECT item_id, spec_group FROM listing_obs").fetchall())
+    assert specs["b"] == "RTX 5050 · i5 13 gen · 16GB" and specs["a"].startswith("RTX 4060")
+
+
+def test_cpu_generation_from_aspects_when_title_vague():
+    from laptops import laptop_spec
+    aspects = {"grafikprozessor": "NVIDIA® GeForce RTX™ 3050", "prozessor": "Intel® Core™ i5-12450H",
+               "arbeitsspeichergröße": "16 GB"}
+    assert laptop_spec("MSI Katana 17 Gaming-Notebook (RTX-30-SERIE) i5", aspects, query="MSI Katana") \
+        == "RTX 3050 · i5 12 gen · 16GB"
+    assert laptop_spec("MSI Katana Laptop, 17,3\", Windows 11, Intel Core i7, NVIDIA GeForce RTX 5070",
+                       query="MSI Katana") == "RTX 5070 · i7"

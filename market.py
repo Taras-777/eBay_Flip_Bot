@@ -5,6 +5,7 @@
 
 import asyncio
 import statistics
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from settings import (
@@ -21,6 +22,7 @@ from settings import (
     MIN_PROFIT_EUR,
     MIN_SAMPLE_SIZE,
     MIN_SOLD_SAMPLE,
+    SOLD_HALF_LIFE_DAYS,
     RESALE_SHIPPING_EUR,
     SALE_PRICE_PERCENTILE,
     SEARCH_RESERVE,
@@ -57,7 +59,7 @@ from db import (
     delete_market_stats_except,
     get_api_calls_today,
     get_cached_specs,
-    get_gone_prices,
+    get_gone_rows,
     get_market_stats,
     get_rejected_ids,
     get_required_aspects,
@@ -103,6 +105,35 @@ def percentile(values, pct):
     k = (len(ordered) - 1) * pct / 100
     lo, hi = int(k), min(int(k) + 1, len(ordered) - 1)
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
+
+
+def recent_median(rows, now=None):
+    """Типова ціна продажів: медіана без викидів, де свіжі продажі важать більше
+    (продаж SOLD_HALF_LIFE_DAYS днів тому — удвічі менше за сьогоднішній). rows: [{'price', 'gone_at'}]."""
+    rows = [r for r in rows if r.get("price")]
+    if not rows:
+        return None
+    clean = filter_outliers([r["price"] for r in rows]) or [r["price"] for r in rows]
+    lo, hi = min(clean), max(clean)
+    kept = sorted((r for r in rows if lo <= r["price"] <= hi), key=lambda r: r["price"])
+    now = now or time.time()
+    weights = [0.5 ** (max(0.0, now - (r.get("gone_at") or now)) / 86400 / SOLD_HALF_LIFE_DAYS) for r in kept]
+    half, acc = sum(weights) / 2, 0.0
+    for i, (r, w) in enumerate(zip(kept, weights)):
+        acc += w
+        if abs(acc - half) < 1e-9 and i + 1 < len(kept):
+            return (r["price"] + kept[i + 1]["price"]) / 2   # рівно посередині — як звичайна медіана
+        if acc > half:
+            return r["price"]
+    return kept[-1]["price"]
+
+
+def typical_range(prices):
+    """Де лежить середня половина цін (25–75%) — без викидів. None, якщо цін замало."""
+    clean = filter_outliers(prices) or prices
+    if len(clean) < 4:
+        return None
+    return percentile(clean, 25), percentile(clean, 75)
 
 
 def max_buy_price(sale_price, min_profit=None):
@@ -444,9 +475,10 @@ def _compute_group_stats(watch_id, items):
         if len(clean) < MIN_SAMPLE_SIZE:
             continue
         median_price = statistics.median(clean)
-        gone = filter_outliers(get_gone_prices(watch_id, cond, None if spec == "*" else spec))
+        gone_rows = get_gone_rows(watch_id, cond, None if spec == "*" else spec)
+        gone = filter_outliers([r["price"] for r in gone_rows])
         if len(gone) >= MIN_SOLD_SAMPLE:
-            sale_price = min(statistics.median(gone), median_price)
+            sale_price = min(recent_median(gone_rows), median_price)
             source = f"за {plural(len(gone), 'проданим', 'проданими', 'проданими')}"
         else:
             sale_price = percentile(clean, SALE_PRICE_PERCENTILE)
@@ -477,15 +509,30 @@ def prune_laptop_parts():
 
 def normalize_saved_specs():
     """Історія й кеш у новому форматі конфігурацій (iPhone — лише пам'ять: «128GB+8GB» → «128GB»;
-    PS4/PS5 — лише справжні об'єми; 1000GB → 1TB) і без чужих моделей консолей (PS5 у товарі PS4).
+    PS4/PS5 — справжні об'єми й модель; 1000GB → 1TB; ноутбуки — клас за назвою й характеристиками,
+    зокрема старі записи «16GB+RYZEN5» і «GPU ?»), без чужих моделей консолей (PS5 у товарі PS4).
     Раз на добу і після запуску; змінені товари перераховуються. Повертає кількість змінених записів."""
-    queries = {w["id"]: w["query"] for w in list_watches()}
+    watches = {w["id"]: w for w in list_watches()}
+    laptop_ids = {wid for wid, w in watches.items()
+                  if is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)])}
+    rows = get_spec_rows(None)
+    cached = {}
+    laptop_items = [r["item_id"] for r in rows if r["watch_id"] in laptop_ids]
+    for start in range(0, len(laptop_items), 500):
+        cached.update(get_cached_specs(laptop_items[start:start + 500]))
     changed_watches, changed, foreign = set(), 0, {}
-    for r in get_spec_rows(None):
-        if console_foreign(r["title"] or "", queries.get(r["watch_id"], "")):
+    for r in rows:
+        watch = watches.get(r["watch_id"]) or {}
+        if console_foreign(r["title"] or "", watch.get("query") or ""):
             foreign.setdefault(r["watch_id"], []).append(r["item_id"])
             continue
-        new = normalize_spec(r["title"], r["spec_group"])
+        if r["watch_id"] in laptop_ids:
+            entry = cached.get(r["item_id"])
+            new = laptop_spec(r["title"] or "", entry[1] if entry else None, query=watch.get("query") or "")
+            if new == "unspecified" and r["spec_group"] not in (None, "unspecified") and not entry:
+                continue   # без характеристик краще лишити як є, ніж стерти
+        else:
+            new = normalize_spec(r["title"], r["spec_group"])
         if new == r["spec_group"]:
             continue
         set_listing_spec(r["watch_id"], r["item_id"], new)
@@ -542,9 +589,10 @@ def refresh_sale_prices(watch_id):
         active.setdefault(r["cond_group"], []).append(r)
     for s in get_market_stats(watch_id):
         cond, spec = s["cond_group"], s["spec_group"]
-        gone = filter_outliers(get_gone_prices(watch_id, cond, None if spec == "*" else spec))
+        gone_rows = get_gone_rows(watch_id, cond, None if spec == "*" else spec)
+        gone = filter_outliers([r["price"] for r in gone_rows])
         if len(gone) >= MIN_SOLD_SAMPLE:
-            sale = min(statistics.median(gone), s["median_price"])
+            sale = min(recent_median(gone_rows), s["median_price"])
             source = f"за {plural(len(gone), 'проданим', 'проданими', 'проданими')}"
         elif "продан" in (s["sale_source"] or ""):
             prices = filter_outliers([r["price"] for r in active.get(cond, [])

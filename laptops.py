@@ -81,14 +81,23 @@ def is_laptop(title="", category_names=(), query=""):
     return bool(tokens & {"macbook"}) or bool(_search_tokens(query) & LAPTOP_LINE_TERMS)
 
 
+_TRADEMARKS = re.compile(r"[™®©℠]")
+
+
+def _plain(text):
+    """«GeForce RTX™ 5050», «Intel® Core™ i5» → без знаків торгових марок (інакше шаблони не збігаються)."""
+    return _TRADEMARKS.sub(" ", text or "")
+
+
 def _aspect(aspects, names):
     for name, value in (aspects or {}).items():
         if name in names and str(value or "").strip():
-            return str(value)
+            return _plain(str(value))
     return ""
 
 
 def detect_gpu(text):
+    text = _plain(text)
     for pattern, fmt in _GPU_PATTERNS:
         m = pattern.search(text or "")
         if m:
@@ -130,9 +139,7 @@ def _ram_bucket(gb):
     return "32GB+"
 
 
-def _cpu_class(title, cpu_text=""):
-    """«i7 13 gen», «Ryzen 7 5000», «Core Ultra 7 (S1)», «i7» — або None."""
-    token = extract_cpu_token(title) or extract_cpu_token(cpu_text)
+def _cpu_from(token, title, cpu_text=""):
     if not token:
         return None
     m = re.match(r"I([3579])(?:-(\d{3,5}))?", token)
@@ -153,6 +160,16 @@ def _cpu_class(title, cpu_text=""):
     return None
 
 
+def _cpu_class(title, cpu_text=""):
+    """«i7 13 gen», «Ryzen 7 5000», «Core Ultra 7 (S1)», «i7» — або None. Якщо в назві лише «i5»,
+    а в характеристиках «i5-12450H» — береться точніше з характеристик."""
+    from_title = _cpu_from(extract_cpu_token(title), title, cpu_text)
+    from_aspects = _cpu_from(extract_cpu_token(cpu_text), cpu_text)
+    if from_title and from_aspects and from_aspects.startswith(from_title + " "):
+        return from_aspects
+    return from_title or from_aspects
+
+
 def _screen(title, aspects):
     for text in (title, _aspect(aspects, SCREEN_ASPECTS)):
         for pattern in _SCREEN_PATTERNS:
@@ -165,6 +182,7 @@ def _screen(title, aspects):
 def laptop_spec(title, aspects=None, query=""):
     """Клас ноутбука (див. опис модуля) або "unspecified", якщо з назви нічого не зрозуміло."""
     aspects = aspects or {}
+    title = _plain(title)
     cpu_text = _aspect(aspects, CPU_ASPECTS)
     token = extract_cpu_token(title) or extract_cpu_token(cpu_text)
     ram, ssd = _sizes(title)
