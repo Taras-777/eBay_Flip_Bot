@@ -1221,6 +1221,18 @@ def get_spec_rows(title_word=None):
         return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def get_spec_rows_for_items(item_ids):
+    ids = [i for i in item_ids if i]
+    result = []
+    with get_conn() as conn:
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            result += [dict(r) for r in conn.execute(
+                "SELECT watch_id, item_id, title, spec_group FROM listing_obs WHERE item_id IN ("
+                + ",".join("?" * len(chunk)) + ")", chunk).fetchall()]
+    return result
+
+
 def set_listing_spec(watch_id, item_id, spec_group):
     with get_conn() as conn:
         conn.execute("UPDATE listing_obs SET spec_group = ? WHERE watch_id = ? AND item_id = ?",
@@ -1337,6 +1349,32 @@ def save_item_availability(item_id, sold, available):
                ON CONFLICT(item_id) DO UPDATE SET est_sold = excluded.est_sold,
                  est_available = excluded.est_available, availability_at = excluded.availability_at""",
             (item_id, now, sold, available, now))
+
+
+def save_item_aspects(item_id, aspects):
+    """Характеристики з Trading API — у кеш, якщо їх там ще немає (порожні — щоб більше не питати)."""
+    data = json.dumps(aspects or {}, ensure_ascii=False)
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO item_specs (item_id, spec_group, fetched_at, aspects_json) VALUES (?, 'unspecified', ?, ?)
+               ON CONFLICT(item_id) DO UPDATE SET aspects_json = CASE
+                 WHEN item_specs.aspects_json IS NULL OR item_specs.aspects_json = '{}' THEN excluded.aspects_json
+                 ELSE item_specs.aspects_json END""",
+            (item_id, int(time.time()), data))
+
+
+def get_gone_without_aspects(watch_ids, max_age_days):
+    """Зниклі лоти товарів без збережених характеристик → [{'watch_id', 'item_id', 'spec_group'}], свіжі першими."""
+    ids = list(watch_ids)
+    if not ids:
+        return []
+    since = int(time.time()) - max_age_days * 86400
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT o.watch_id, o.item_id, o.spec_group FROM listing_obs o "
+            "LEFT JOIN item_specs s ON s.item_id = o.item_id "
+            "WHERE o.status = 'gone' AND o.gone_at >= ? AND s.aspects_json IS NULL AND o.watch_id IN ("
+            + ",".join("?" * len(ids)) + ") ORDER BY o.gone_at DESC", [since, *ids]).fetchall()]
 
 
 def get_bin_prices(item_ids):

@@ -321,3 +321,26 @@ def test_cpu_generation_from_aspects_when_title_vague():
         == "RTX 3050 · i5 12 gen · 16GB"
     assert laptop_spec("MSI Katana Laptop, 17,3\", Windows 11, Intel Core i7, NVIDIA GeForce RTX 5070",
                        query="MSI Katana") == "RTX 5070 · i7"
+
+
+def test_aspects_read_when_class_incomplete():
+    from laptops import wants_aspects, needs_aspects
+    assert wants_aspects("RTX 3060")                              # ні процесора, ні пам'яті
+    assert wants_aspects("RTX 4060 · i5 · 16GB")                  # процесор без покоління
+    assert wants_aspects("RTX 4050 · 32GB+")
+    assert not wants_aspects("RTX 4060 · i5 13 gen · 16GB")       # повний клас — запит не потрібен
+    assert not wants_aspects("RTX 4060 · Ryzen 7 7000 · 32GB+")
+    assert not wants_aspects("M2 · 13\" · 8GB · 256GB")           # MacBook
+    assert wants_aspects("GPU ? · i5 13 gen · 16GB")
+    assert not needs_aspects("RTX 3060")                          # але знахідки «RTX 3060» не відкладаються
+
+
+def test_incomplete_laptop_class_reads_aspects(fake_ebay):
+    import db
+    import market
+    w = {"id": db.add_watch(1, "Gigabyte G5", "Gigabyte G5", "", "", 15,
+                            categories=[{"id": "175672", "name": "Notebooks"}]), "query": "Gigabyte G5"}
+    fake_ebay.aspects = {"g5": {"Prozessor": "Intel® Core™ i5-12500H", "Arbeitsspeichergröße": "16 GB"}}
+    items = [{"item_id": "g5", "title": "GIGABYTE G5 Gaming | RTX 3060 6GB | 300Hz", "category_names": []}]
+    market._annotate_items(items, max_lookups=10, watch=db.get_watch(w["id"], 1))
+    assert items[0]["spec_group"] == "RTX 3060 · i5 12 gen · 16GB"

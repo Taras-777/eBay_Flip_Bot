@@ -125,7 +125,8 @@ SOLD_HALF_LIFE_DAYS = 14   # ціна продажу: продаж двотиж�
 # Спершу змінна оточення (.env на сервері), інакше — EBAY_RUNAME у config.py (зручно на ПК)
 EBAY_RUNAME = (os.getenv("EBAY_RUNAME") or getattr(config, "EBAY_RUNAME", "") or "").strip()
 TRADING_DAILY_BUDGET = 4000    # ліміт Trading API — 5000/добу, лишаємо запас
-SOLD_CHECK_BATCH = 100         # скільки зниклих оголошень перевіряти за один цикл
+SOLD_CHECK_BATCH = 100
+SPEC_BACKFILL_BATCH = 50       # продані ноутбуки: дочитати характеристики за цикл (з вільного ліміту Trading)         # скільки зниклих оголошень перевіряти за один цикл
 SOLD_CHECK_MAX_AGE_DAYS = 30   # зниклі давніше не перевіряємо (eBay пам'ятає до 90 днів)
 
 # «📉 Знизили ціну»: оголошення, які довго висять і сильно подешевшали.

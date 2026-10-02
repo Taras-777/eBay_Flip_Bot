@@ -215,6 +215,23 @@ def needs_aspects(spec):
     return spec == "unspecified" or spec.startswith(UNKNOWN_GPU)
 
 
+_FULL_CPU = re.compile(r"\bgen\b|Ryzen \d \d000|Core Ultra")
+_RAM_PART = re.compile(r"\d+GB\+?")
+
+
+def wants_aspects(spec):
+    """Чи варто прочитати характеристики: відеокарта невідома (обов'язково) або в класі бракує
+    покоління процесора чи пам'яті (для точнішої ціни). MacBook — чип відомий, досить назви."""
+    if needs_aspects(spec):
+        return True
+    parts = spec.split(SEP)
+    if re.fullmatch(r"M\d+( Pro| Max| Ultra)?", parts[0]):
+        return False
+    has_cpu = any(_FULL_CPU.search(p) for p in parts[1:])
+    has_ram = any(_RAM_PART.fullmatch(p) for p in parts[1:])
+    return not (has_cpu and has_ram)
+
+
 def spec_parents(spec):
     """«A · B · C» → ["A · B", "A"] — ширші групи, від найближчої."""
     parts = (spec or "").split(SEP)

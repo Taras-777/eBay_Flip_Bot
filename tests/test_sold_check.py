@@ -65,7 +65,8 @@ def test_sale_details_saved(monkeypatch):
     info = trading_api.parse_get_item(SOLD_XML)
     assert info["result"] == "sold" and info["details"] == {
         "sold_price": 579.0, "sold_at": 1790856000, "bid_count": 0, "offer_count": 4, "quantity": 3,
-        "listing_type": "FixedPriceItem", "watch_count": None}
+        "listing_type": "FixedPriceItem", "watch_count": None,
+        "aspects": None}
     assert trading_api.parse_get_item(xml_item())["details"]["sold_price"] is None   # полів немає — None
 
     for wid in (1, 2):   # той самий лот у двох товарах (спільний ринок)
@@ -685,3 +686,45 @@ def test_sales_range_text():
     import screen_sales
     assert screen_sales._range_text([61, 75, 80, 85, 88, 90, 95, 105, 110, 177]).startswith(", зазвичай ")
     assert screen_sales._range_text([100, 120]) == ", 100–120€"
+
+
+def test_laptop_specs_from_sold_check_and_backfill(monkeypatch):
+    import ebay_user
+    import market
+    xml = ('<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>'
+           '<ItemSpecifics><NameValueList><Name>Prozessor</Name><Value>Intel® Core™ i5-12500H</Value></NameValueList>'
+           '<NameValueList><Name>Arbeitsspeichergröße</Name><Value>8 GB</Value></NameValueList></ItemSpecifics>'
+           '<SellingStatus><QuantitySold>1</QuantitySold><ListingStatus>Completed</ListingStatus></SellingStatus>'
+           '</Item></GetItemResponse>')
+    info = trading_api.parse_get_item(xml)
+    assert info["details"]["aspects"] == {"prozessor": "Intel® Core™ i5-12500H", "arbeitsspeichergröße": "8 GB"}
+
+    wid = db.add_watch(1, "Gigabyte G5", "Gigabyte G5", "", "", 15, categories=[{"id": "175672", "name": "Notebooks"}])
+    db.update_listing_observations(wid, [
+        {"item_id": "old", "title": "GIGABYTE G5 Gaming Notebook 8GB RAM, I5 RTX 4050", "spec_group": "RTX 4050 · i5 · 8GB",
+         "cond_group": "used", "total_price": 608},
+        {"item_id": "full", "title": "G5 RTX 4060 i5-12500H 16GB", "spec_group": "RTX 4060 · i5 12 gen · 16GB",
+         "cond_group": "used", "total_price": 700}])
+    with db.get_conn() as conn:
+        conn.execute("UPDATE listing_obs SET status = 'gone', gone_at = ?, sold_check = 'sold'", (int(time.time()),))
+    assert market.laptop_backfill_ids(10) == ["old"]                    # повний клас дочитувати не треба
+
+    asked = []
+    monkeypatch.setattr(ebay_user, "is_connected", lambda: True)
+    monkeypatch.setattr(trading_api, "is_connected", lambda: True)
+    monkeypatch.setattr(trading_api, "trading_calls_today", lambda: (0, True))
+    monkeypatch.setattr(trading_api, "get_item_status", lambda item_id: asked.append(item_id) or info)
+    assert trading_api.backfill_laptop_specs(10) == 1
+    with db.get_conn() as conn:
+        spec = conn.execute("SELECT spec_group FROM listing_obs WHERE item_id = 'old'").fetchone()["spec_group"]
+    assert spec == "RTX 4050 · i5 12 gen · 8GB"
+    assert trading_api.backfill_laptop_specs(10) == 0 and asked == ["old"]   # кожне — лише раз
+
+
+def test_aspects_from_trading_reused_without_requests(fake_ebay):
+    import market
+    db.save_item_aspects("v1|p|0", {"speicherkapazität": "256 GB"})          # прийшло з перевірки продажу
+    items = [{"item_id": "v1|p|0", "title": "Apple iPhone 15 Pro Titan", "category_names": []}]
+    w = db.get_watch(db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15), 1)
+    market._annotate_items(items, max_lookups=10, watch=w)
+    assert items[0]["spec_group"] == "256GB" and fake_ebay.calls == []     # з бази, без запиту до eBay

@@ -31,6 +31,7 @@ from settings import (
 )
 from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, spec_matches, spec_parents
 from laptops import needs_aspects as laptop_needs_aspects
+from laptops import wants_aspects as laptop_wants_aspects
 from textparse import (
     COMPAT_ASPECTS,
     _aspect_satisfied_by_title,
@@ -50,6 +51,8 @@ from db import (
     save_bin_price,
     record_api_call,
     get_spec_rows,
+    get_spec_rows_for_items,
+    get_gone_without_aspects,
     set_listing_spec,
     list_watches,
     update_watch_categories,
@@ -220,7 +223,8 @@ def _annotate_items(items, max_lookups=0, watch=None):
     def needs_aspects(it):
         if ASPECT_LOOKUP_ALL or it["spec_group"] == "unspecified":
             return True
-        if it["laptop"] and laptop_needs_aspects(it["spec_group"]):
+        # Ноутбук: без відеокарти — обов'язково; без покоління процесора чи пам'яті — для точнішого класу
+        if it["laptop"] and laptop_wants_aspects(it["spec_group"]):
             return True
         return any(not _aspect_satisfied_by_title(name, it["title"]) for name in required)
 
@@ -250,11 +254,12 @@ def _annotate_items(items, max_lookups=0, watch=None):
                     it["aspects"] = aspects
                     continue
             elif it["spec_group"] == "unspecified":
-                it["spec_group"] = normalize_spec(it["title"], spec)   # кеш міг бути в старому форматі
+                # Характеристики могли прийти з перевірки продажів (Trading API) — тоді рахуємо з них
+                it["spec_group"] = _spec(it, aspects) if aspects else normalize_spec(it["title"], spec)
             if aspects is not None:
                 it["aspects"] = aspects
                 continue
-            if not required and not ASPECT_LOOKUP_ALL:
+            if not required and not ASPECT_LOOKUP_ALL and not it["laptop"]:
                 continue  # старий запис кешу без характеристик — для конфігурації достатньо
         if lookups_left <= 0:
             continue
@@ -505,6 +510,44 @@ def prune_laptop_parts():
             removed += len(ids)
             log.info("«%s»: прибрано з історії запчастин/аксесуарів: %s", w["label"], len(ids))
     return removed
+
+
+def _laptop_watches():
+    return {w["id"]: w for w in list_watches()
+            if is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)])}
+
+
+def reclassify_items(item_ids):
+    """Нові характеристики оголошень → клас ноутбука в історії (продажі теж). Повертає кількість змінених."""
+    laptops = _laptop_watches()
+    ids = set(item_ids)
+    cached = get_cached_specs(list(ids))
+    changed = set()
+    for r in get_spec_rows_for_items(ids):
+        if r["watch_id"] not in laptops:
+            continue
+        entry = cached.get(r["item_id"])
+        new = laptop_spec(r["title"] or "", entry[1] if entry else None, query=laptops[r["watch_id"]].get("query") or "")
+        if new != r["spec_group"] and new != "unspecified":
+            set_listing_spec(r["watch_id"], r["item_id"], new)
+            changed.add(r["watch_id"])
+    for wid in changed:
+        mark_market_stale(wid)
+    return len(changed)
+
+
+def laptop_backfill_ids(limit):
+    """Продані ноутбуки (≤ 85 днів — eBay ще віддає) з неповним класом і без характеристик."""
+    if limit <= 0:
+        return []
+    rows = get_gone_without_aspects(_laptop_watches(), 85)
+    result = []
+    for r in rows:
+        if laptop_wants_aspects(r["spec_group"] or "unspecified") and r["item_id"] not in result:
+            result.append(r["item_id"])
+            if len(result) >= limit:
+                break
+    return result
 
 
 def normalize_saved_specs():

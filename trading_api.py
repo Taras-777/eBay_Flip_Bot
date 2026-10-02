@@ -15,7 +15,7 @@ from datetime import datetime
 
 from defusedxml.ElementTree import fromstring as safe_fromstring
 
-from settings import SOLD_CHECK_BATCH, TRADING_DAILY_BUDGET, log
+from settings import SOLD_CHECK_BATCH, SPEC_BACKFILL_BATCH, TRADING_DAILY_BUDGET, log
 from db import (
     apply_discovery_check,
     apply_sold_check,
@@ -23,6 +23,7 @@ from db import (
     get_pending_sold_checks,
     known_sold_check,
     record_api_call,
+    save_item_aspects,
 )
 from ebay_api import _request_with_retries, trading_calls_today
 from ebay_user import UserAuthError, _token_cache, get_user_access_token, is_connected
@@ -110,7 +111,22 @@ def _sale_details(item):
         "quantity": _num(_text(item, "e:Quantity"), int),
         "listing_type": _text(item, "e:ListingType"),
         "watch_count": _num(_text(item, "e:WatchCount"), int),   # скільки людей стежать
+        "aspects": _item_specifics(item),
     }
+
+
+def _item_specifics(item):
+    """Характеристики оголошення (як у пошуку: {назва в нижньому регістрі: значення}) або None."""
+    node = item.find("e:ItemSpecifics", NS)
+    if node is None:
+        return None
+    result = {}
+    for pair in node.findall("e:NameValueList", NS):
+        name = _text(pair, "e:Name")
+        values = [v.text.strip() for v in pair.findall("e:Value", NS) if v.text and v.text.strip()]
+        if name and values:
+            result[name.lower()] = ", ".join(values)
+    return result
 
 
 def get_item_status(item_id):
@@ -120,6 +136,7 @@ def get_item_status(item_id):
         '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
         f"<ItemID>{legacy_item_id(item_id)}</ItemID>"
         "<IncludeWatchCount>true</IncludeWatchCount>"
+        "<IncludeItemSpecifics>true</IncludeItemSpecifics>"
         "<OutputSelector>Item.ItemID</OutputSelector>"
         "<OutputSelector>Item.SellingStatus</OutputSelector>"
         "<OutputSelector>Item.ListingDetails.EndTime</OutputSelector>"
@@ -127,6 +144,7 @@ def get_item_status(item_id):
         "<OutputSelector>Item.Quantity</OutputSelector>"
         "<OutputSelector>Item.ListingType</OutputSelector>"
         "<OutputSelector>Item.WatchCount</OutputSelector>"
+        "<OutputSelector>Item.ItemSpecifics</OutputSelector>"
         "</GetItemRequest>"
     )
     resp = _request_with_retries(
@@ -193,6 +211,7 @@ def _purpose(apply):
 def _run_checks(queue):
     """queue: [(apply, (власник, item_id))] → {результат: кількість}."""
     counts = {}
+    with_aspects: list = []
     for apply, (owner, item_id) in queue:
         known = known_sold_check(item_id)
         if known:
@@ -213,7 +232,60 @@ def _run_checks(queue):
             log.info("eBay не віддав статус оголошення %s (%s) — рахую за зникненням", item_id, info["error"])
         apply(owner, item_id, info["result"], info.get("details"))
         counts[info["result"]] = counts.get(info["result"], 0) + 1
+        # Характеристики з тієї самої відповіді — у базу: далі бот бере їх звідти, а не з eBay
+        if _keep_aspects(item_id, info):
+            with_aspects.append(item_id)
+    _reclassify(with_aspects)
     return counts
+
+
+def _keep_aspects(item_id, info):
+    """Характеристики з тієї самої відповіді — у кеш (ноутбуки отримають повний клас). True, якщо збережено."""
+    aspects = (info.get("details") or {}).get("aspects")
+    if aspects is None:
+        return False
+    save_item_aspects(item_id, aspects)
+    return True
+
+
+def _reclassify(item_ids):
+    if not item_ids:
+        return
+    from market import reclassify_items   # тут, щоб не було циклу імпортів
+    try:
+        reclassify_items(item_ids)
+    except Exception as e:
+        log.warning("Не вдалося перерахувати класи за характеристиками: %s", e)
+
+
+def backfill_laptop_specs(limit=SPEC_BACKFILL_BATCH):
+    """Продані ноутбуки з неповним класом (без покоління процесора чи пам'яті), характеристик яких
+    бот не встиг прочитати, — читаємо через Trading API (eBay віддає їх до 90 днів після завершення).
+    Кожне оголошення — один раз. Повертає кількість запитів. Викликати з потоку."""
+    if not is_connected():
+        return 0
+    from market import laptop_backfill_ids   # тут, щоб не було циклу імпортів
+    ids = laptop_backfill_ids(_budget_left(limit))
+    done, with_aspects = 0, []
+    for item_id in ids:
+        record_api_call("trading:watch")
+        try:
+            info = get_item_status(item_id)
+        except UserAuthError as e:
+            log.warning("Дочитування характеристик зупинено: %s", e)
+            break
+        except Exception as e:
+            log.debug("Не вдалося прочитати характеристики %s: %s", item_id, e)
+            continue
+        done += 1
+        if not _keep_aspects(item_id, info):
+            save_item_aspects(item_id, {})   # eBay не віддав — більше не питаємо
+        else:
+            with_aspects.append(item_id)
+    _reclassify(with_aspects)
+    if done:
+        log.info("Дочитано характеристики проданих ноутбуків: %s", done)
+    return done
 
 
 def _budget_left(limit):
@@ -237,6 +309,8 @@ def verify_disappeared(limit=SOLD_CHECK_BATCH):
     if done:
         log.info("Перевірено зниклих оголошень: %s (%s)", done,
                  ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
+    if done < left:   # черга порожня — вільні запити на дочитування характеристик ноутбуків
+        done += backfill_laptop_specs(min(SPEC_BACKFILL_BATCH, left - done))
     return done
 
 
