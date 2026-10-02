@@ -268,3 +268,37 @@ def test_auctions_listed_but_not_in_stats(fake_ebay):
         r = dict(conn.execute("SELECT status, sold_check FROM listing_obs WHERE item_id = 'auc'").fetchone())
     assert r == {"status": "ended", "sold_check": None}
     assert "auc" not in [x["item_id"] for x in db.get_sold_listings(wid)]
+
+
+def test_listings_newest_first_toggle(monkeypatch):
+    import screen_listings
+    sorts = []
+    found = [{"item_id": i, "title": f"PS5 #{i}", "total_price": p, "currency": "EUR", "condition": "Gebraucht",
+              "url": "u", "created_at": int(time.time() - ago * DAY)} for i, p, ago in
+             [("old_cheap", 200, 30), ("new_dear", 400, 0), ("mid", 300, 5)]]
+
+    def search(*a, **kw):
+        sorts.append(kw.get("sort"))
+        return [dict(x) for x in found]
+
+    monkeypatch.setattr(screen_listings, "search_in_categories", search)
+    monkeypatch.setattr(screen_listings, "_annotate_items", lambda items, **kw: items)
+    monkeypatch.setattr(screen_listings, "_apply_item_filters", lambda w, items: items)
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "1", "name": "K"}])
+    handlers_mod, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"view_listings:{wid}")
+    ctx.user_data = {}
+    asyncio.run(handlers_mod.view_listings_callback(upd, ctx))
+    assert sorts == ["price"] and "Від найдешевших" in shown[-1][0] and "🆕 Спершу найновіші" in shown[-1][1]
+    assert shown[-1][0].index("old_cheap") < shown[-1][0].index("new_dear") if "old_cheap" in shown[-1][0] else True
+
+    upd.callback_query.data = f"view_listings:{wid}:new"
+    asyncio.run(handlers_mod.view_listings_callback(upd, ctx))
+    assert sorts[-1] == "newlyListed" and "Спершу найновіші" in shown[-1][0]
+    items = ctx.user_data[screen_listings._listing_state_key(wid)]["items"]
+    assert [it["item_id"] for it in items] == ["new_dear", "mid", "old_cheap"]
+    assert "💶 Спершу найдешевші" in shown[-1][1]
+
+    upd.callback_query.data = f"view_listings:{wid}"            # з картки товару — пам'ятає вибір
+    asyncio.run(handlers_mod.view_listings_callback(upd, ctx))
+    assert len(sorts) == 2                                       # з пам'яті, без нового запиту

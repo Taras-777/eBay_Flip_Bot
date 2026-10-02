@@ -38,8 +38,18 @@ LISTINGS_CHUNK = 20          # скільки лотів перевіряти з
 LISTINGS_CACHE_SECONDS = 120  # повторне відкриття списку протягом 2 хв — без запитів до eBay
 
 
-def _new_fetch_state():
-    return {"offset": 0, "exhausted": False, "seen": [], "pending": []}
+SORT_LABELS = {"price": "Від найдешевших", "new": "Спершу найновіші"}
+
+
+def _new_fetch_state(sort="price"):
+    return {"offset": 0, "exhausted": False, "seen": [], "pending": [], "sort": sort}
+
+
+def _order_key(fetch):
+    """Як сортувати: найдешевші першими або найновіші (за датою виставлення)."""
+    if fetch.get("sort") == "new":
+        return lambda it: -(it.get("created_at") or 0)
+    return lambda it: it["total_price"]
 
 
 def _fetch_cheapest(watch, fetch, need):
@@ -61,7 +71,8 @@ def _fetch_cheapest(watch, fetch, need):
                 break
             stats = {}
             found = search_in_categories(
-                cats, limit=100, offset=fetch["offset"], fresh=True, sort="price", stats=stats,
+                cats, limit=100, offset=fetch["offset"], fresh=True,
+                sort="newlyListed" if fetch.get("sort") == "new" else "price", stats=stats,
                 **_watch_search_kwargs(watch),
             )
             pages += 1
@@ -70,14 +81,14 @@ def _fetch_cheapest(watch, fetch, need):
                 fetch["exhausted"] = True  # eBay віддав неповну сторінку — далі лотів немає
             found = [it for it in found if it["item_id"] not in seen]
             seen.update(it["item_id"] for it in found)
-            found.sort(key=lambda it: it["total_price"])
+            found.sort(key=_order_key(fetch))
             fetch["pending"] = found
             continue
         chunk, fetch["pending"] = fetch["pending"][:LISTINGS_CHUNK], fetch["pending"][LISTINGS_CHUNK:]
         _annotate_items(chunk, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=watch)
         kept.extend(_apply_item_filters(watch, chunk))
     fetch["seen"] = list(seen)
-    kept.sort(key=lambda item: item["total_price"])
+    kept.sort(key=_order_key(fetch))
     return [
         {"item_id": it["item_id"], "title": it["title"], "price": it["total_price"],
          "currency": it.get("currency") or "EUR", "condition": it.get("condition"), "url": it.get("url"),
@@ -92,17 +103,22 @@ def _has_more(fetch):
 
 @require_access
 async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """view_listings:<id>[:price|new] — живий список оголошень з eBay (від найдешевших або найновіших)."""
     query_cb = update.callback_query
-    watch_id = int(query_cb.data.split(":")[1])
+    parts = query_cb.data.split(":")
+    watch_id = int(parts[1])
     chat_id = update.effective_chat.id
     watch = get_watch(watch_id, chat_id)
     if watch is None:
         await query_cb.answer("Цей товар уже видалено.", show_alert=True)
         return
 
-    # Щойно відкритий список — показуємо з пам'яті, без нових запитів до eBay
     cached = context.user_data.get(_listing_state_key(watch_id))
-    if cached and cached.get("fetch") and time.time() - cached.get("fetched_at", 0) < LISTINGS_CACHE_SECONDS:
+    cached_sort = ((cached or {}).get("fetch") or {}).get("sort", "price")
+    sort = parts[2] if len(parts) > 2 and parts[2] in SORT_LABELS else cached_sort
+    # Щойно відкритий список — показуємо з пам'яті, без нових запитів до eBay
+    if (cached and cached.get("fetch") and sort == cached_sort
+            and time.time() - cached.get("fetched_at", 0) < LISTINGS_CACHE_SECONDS):
         await _ack_callback(update)
         cached["page"] = 0
         await _render_listing_panel(update, context, watch_id, cached)
@@ -115,7 +131,7 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
                          "◀️ До товару", callback_data=f"watch_details:{watch_id}")]]))
 
-    fetch = _new_fetch_state()
+    fetch = _new_fetch_state(sort)
     try:
         items = await asyncio.to_thread(_fetch_cheapest, watch, fetch, LISTINGS_PAGE_SIZE)
     except Exception as e:
@@ -138,7 +154,8 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
             update,
             context,
             f"🔎 <b>Оголошення для {html.escape(watch['label'])}</b>\n\n"
-            f"Підходящих оголошень не знайдено серед ~{fetch['offset']} найдешевших у категорії.\n\n"
+            f"Підходящих оголошень не знайдено серед ~{fetch['offset']} "
+            f"{'найновіших' if sort == 'new' else 'найдешевших'} у категорії.\n\n"
             "Найчастіше це інші моделі чи аксесуари, які відсіює перевірка назви, "
             "або оголошення без потрібних характеристик.",
             reply_markup=InlineKeyboardMarkup(nav_rows),
@@ -148,7 +165,7 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     state = {
         "header": (f"🔎 <b>Оголошення для {html.escape(watch['label'])}</b>\n"
-                   f"Від найдешевших · 🕒 {datetime.now().strftime('%H:%M:%S')}"),
+                   f"{SORT_LABELS[sort]} · 🕒 {datetime.now().strftime('%H:%M:%S')}"),
         "items": items,
         "page": 0,
         "fetch": fetch,
@@ -238,6 +255,11 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         rows.append([InlineKeyboardButton(f"↩️ Не відсіювати «{word}»", callback_data=f"unlw:{watch_id}:{word}")])
     if page_row:
         rows.append(page_row)
+    if fetch:   # живий список з eBay — можна перемкнути порядок
+        if fetch.get("sort") == "new":
+            rows.append([InlineKeyboardButton("💶 Спершу найдешевші", callback_data=f"view_listings:{watch_id}:price")])
+        else:
+            rows.append([InlineKeyboardButton("🆕 Спершу найновіші", callback_data=f"view_listings:{watch_id}:new")])
     rows.extend([InlineKeyboardButton(text, callback_data=cb)] for text, cb in state["nav"])
     await show_panel(update, context, "\n\n".join(lines),
                      reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
