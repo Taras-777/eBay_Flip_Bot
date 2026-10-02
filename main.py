@@ -58,6 +58,7 @@ from handlers import (
     deal_inbox_action_callback,
     deals_clear_callback,
     refresh_all_callback,
+    refresh_stop_callback,
     change_category_callback,
     cmd_list,
     cmd_menu,
@@ -239,6 +240,7 @@ def main():
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))
     app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
     app.add_handler(CallbackQueryHandler(refresh_all_callback, pattern="^menu:refresh_prices$"))
+    app.add_handler(CallbackQueryHandler(refresh_stop_callback, pattern="^refresh_stop$"))
     app.add_handler(CallbackQueryHandler(discover_callback, pattern="^menu:discover$"))
     app.add_handler(CallbackQueryHandler(discover_add_callback, pattern="^dadd:"))
     app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))

@@ -172,12 +172,55 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
     ctx = MagicMock()
     ctx.bot_data = {}
 
-    asyncio.run(handlers.refresh_all_callback(upd, ctx))
+    async def run():
+        await handlers.refresh_all_callback(upd, ctx)
+        await ctx.bot_data["refresh_all_task"]       # оновлення йде окремим завданням
+
+    asyncio.run(run())
     assert sorted(recalculated) == sorted([w1, w2]) and fetched == [1]
     assert any("(1/2)" in t for t in shown)
     assert "✅ Ціни оновлено: 1 товар" in shown[-1] and "Не вдалося" not in shown[-1]
     assert "📉 Замало оголошень: iPhone (8: вживані 5, нові 3 — треба 8 одного стану)" in shown[-1]
     assert ctx.bot_data["refresh_all_running"] is False
+
+
+def test_refresh_all_can_be_stopped(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    import handlers
+
+    ids = [db.add_watch(1, f"T{i}", f"T{i}", "", "", 15) for i in range(3)]
+    shown, recalculated = [], []
+    upd = MagicMock()
+    upd.effective_chat.id = upd.effective_user.id = 1
+    upd.callback_query.answer = AsyncMock()
+    ctx = MagicMock()
+    ctx.bot_data = {}
+
+    async def fake_recalc(watch, replace_existing=False):
+        recalculated.append(watch["id"])
+        if len(recalculated) == 1:   # під час першого товару користувач натиснув «⏹ Зупинити»
+            await handlers.refresh_stop_callback(upd, ctx)
+        return [], {("used", "*"): {}}, []
+
+    async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
+        shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r] if reply_markup else []))
+
+    patch_ui(monkeypatch, "is_owner", lambda uid: True)
+    patch_ui(monkeypatch, "_recalculate_watch_medians", fake_recalc)
+    patch_ui(monkeypatch, "fetch_browse_rate_limit", lambda: None)
+    patch_ui(monkeypatch, "browse_budget_left", lambda: 4000)
+    patch_ui(monkeypatch, "show_panel", fake_show)
+    patch_ui(monkeypatch, "main_menu_text", lambda uid: "MENU")
+    patch_ui(monkeypatch, "build_main_menu", lambda uid: None)
+
+    async def run():
+        await handlers.refresh_all_callback(upd, ctx)
+        await ctx.bot_data["refresh_all_task"]
+
+    asyncio.run(run())
+    assert recalculated == [ids[0]] and "⏹ Зупинити" in shown[0][1]
+    assert "⏹ Зупинено, не оновлено: T1, T2" in shown[-1][0]
+    assert ctx.bot_data["refresh_all_running"] is False and ctx.bot_data["refresh_all_cancel"] is False
 
 
 def test_main_menu_shows_when_prices_were_updated(monkeypatch):

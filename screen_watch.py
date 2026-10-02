@@ -811,22 +811,51 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         return
     await _ack_callback(update)
+    context.bot_data["refresh_all_running"] = True
+    context.bot_data["refresh_all_cancel"] = False
+    # Окремим завданням — щоб бот міг обробити «⏹ Зупинити», поки йде оновлення
+    context.bot_data["refresh_all_task"] = asyncio.create_task(_refresh_all(update, context))
+
+
+REFRESH_STOP_KB = InlineKeyboardMarkup([[InlineKeyboardButton("⏹ Зупинити", callback_data="refresh_stop")]])
+
+
+async def refresh_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """refresh_stop — зупинити «💰 Оновити ціни» після поточного товару."""
+    if not is_owner(update.effective_user.id):
+        await _ack_callback(update)
+        return
+    if not context.bot_data.get("refresh_all_running"):
+        await _ack_callback(update)
+        await show_main_menu(update, context)
+        return
+    context.bot_data["refresh_all_cancel"] = True
+    try:
+        await update.callback_query.answer("⏹ Зупиняю — допрацюю поточний товар і покажу підсумок.")
+    except Exception:
+        pass
+
+
+async def _refresh_all(update, context):
     chat_id = update.effective_chat.id
     watches = list_watches(chat_id=chat_id, active_only=True)
     done: list = []
     failed: list = []
     few: list = []      # не помилка: оголошень замало, щоб порахувати ціну
     skipped: list = []
-    context.bot_data["refresh_all_running"] = True
+    stopped: list = []
     try:
         for n, watch in enumerate(watches, 1):
+            if context.bot_data.get("refresh_all_cancel"):
+                stopped = [w["label"] for w in watches[n - 1:]]
+                break
             if browse_budget_left() < SEARCH_RESERVE:
                 skipped = [w["label"] for w in watches[n - 1:]]
                 break
             await show_panel(
                 update, context,
                 f"🔄 Оновлюю ціни з eBay… ({n}/{len(watches)})\n\n⏳ <b>{html.escape(watch['label'])}</b>",
-                parse_mode=ParseMode.HTML,
+                reply_markup=REFRESH_STOP_KB, parse_mode=ParseMode.HTML,
             )
             try:
                 items, stats, _ = await _recalculate_watch_medians(watch, replace_existing=True)
@@ -841,8 +870,11 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await asyncio.to_thread(fetch_browse_rate_limit)
         except Exception as e:
             log.warning("Не вдалося оновити дані про ліміт eBay: %s", e)
+    except Exception as e:
+        log.exception("Оновлення цін усіх товарів перервалось: %s", e)
     finally:
         context.bot_data["refresh_all_running"] = False
+        context.bot_data["refresh_all_cancel"] = False
 
     notes = []
     if done:
@@ -852,6 +884,8 @@ async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         notes.append("⚠️ Не вдалося порахувати: " + html.escape(", ".join(failed)))
     if skipped:
         notes.append("⏸ Замало запитів до eBay на сьогодні, не оновлено: " + html.escape(", ".join(skipped)))
+    if stopped:
+        notes.append("⏹ Зупинено, не оновлено: " + html.escape(", ".join(stopped)))
     if not watches:
         notes.append("Товарів ще немає — оновлено лише дані про запити.")
     user_id = update.effective_user.id

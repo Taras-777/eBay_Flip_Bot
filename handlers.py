@@ -63,6 +63,7 @@ from screen_watch import (  # noqa: F401
     edit_cancel,
     recalculate_median_callback,
     refresh_all_callback,
+    refresh_stop_callback,
     delwatch_ask_callback,
     delwatch_yes_callback,
     cmd_stats,
