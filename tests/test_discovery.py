@@ -240,3 +240,22 @@ def test_variant_terms_split_models():
     assert not discovery._same_model("Google Pixel 8 Pro 256GB", "Pixel 8")
     assert discovery._same_model("Apple iPhone 15 128GB Schwarz", "iPhone 15")
     assert not discovery._same_model("Steam Deck OLED 512GB", "Steam Deck 512GB")
+
+
+def test_discover_pages(monkeypatch):
+    import screen_discover
+    recs = [{"emoji": "🎮", "name": f"Товар {i}", "query": f"q{i}", "floor": 10, "spec": None, "median": 100,
+             "buy_limit": 70, "deals_per_week": 2, "deal_profit": 20, "deals_now": 1, "sold_per_day": 1,
+             "sold_week": 0, "sale_source": "sold", "updated_at": 1_790_000_000} for i in range(12)]
+    monkeypatch.setattr(screen_discover, "top_recommendations", lambda chat_id, limit=10: recs)
+    shown = _screen(monkeypatch)
+    ctx = MagicMock()
+    ctx.user_data = {}
+    asyncio.run(handlers.discover_callback(_update("menu:discover"), ctx))
+    text, buttons = shown[-1]
+    assert "сторінка 1 з 3" in text and "Наступні ▶️" in buttons and "◀️ Попередні" not in buttons
+    assert "➕ Товар 0" in buttons and "➕ Товар 5" not in buttons
+    asyncio.run(handlers.discover_callback(_update("dpage:2"), ctx))
+    text, buttons = shown[-1]
+    assert "<b>11. 🎮 Товар 10</b>" in text and "◀️ Попередні" in buttons and "Наступні ▶️" not in buttons
+    assert [r["name"] for r in ctx.user_data["discover_recs"]] == ["Товар 10", "Товар 11"]   # ➕/🙈 цієї сторінки

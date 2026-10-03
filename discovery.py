@@ -345,4 +345,4 @@ def top_recommendations(chat_id=None, limit=10):
                and r["name"] in names and r["name"] not in hidden
                and (not sold_only or r.get("sale_source") == "sold")]
     results.sort(key=score, reverse=True)
-    return results[:limit]
+    return results[:limit] if limit else results

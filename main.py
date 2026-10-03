@@ -246,7 +246,7 @@ def main():
     app.add_handler(CallbackQueryHandler(refresh_usage_callback, pattern="^menu:refresh_usage$"))
     app.add_handler(CallbackQueryHandler(refresh_all_callback, pattern="^menu:refresh_prices$"))
     app.add_handler(CallbackQueryHandler(refresh_stop_callback, pattern="^refresh_stop$"))
-    app.add_handler(CallbackQueryHandler(discover_callback, pattern="^menu:discover$"))
+    app.add_handler(CallbackQueryHandler(discover_callback, pattern="^(menu:discover|dpage:\\d+)$"))
     app.add_handler(CallbackQueryHandler(discover_add_callback, pattern="^dadd:"))
     app.add_handler(CallbackQueryHandler(discover_hide_callback, pattern="^dhide:"))
     app.add_handler(CallbackQueryHandler(discover_hidden_callback, pattern="^(dhidden|dunhide:)"))

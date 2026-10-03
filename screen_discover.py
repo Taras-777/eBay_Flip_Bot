@@ -51,14 +51,25 @@ def _recommendation_text(n, r):
             f"{deals}\n{sold}")
 
 
+DISCOVER_PAGE_SIZE = 5
+
+
 @require_access
 async def discover_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """menu:discover — рейтинг товарів, які варто перепродавати."""
+    """menu:discover — рейтинг товарів, які варто перепродавати; dpage:<n> — сторінка рейтингу."""
+    data = update.callback_query.data if update.callback_query else ""
+    page = int(data.split(":")[1]) if data.startswith("dpage:") and data.split(":")[1].isdigit() else 0
+    context.user_data["discover_page"] = page
     await _render_discover(update, context)
 
 
 async def _render_discover(update, context, note=""):
-    recs = top_recommendations(update.effective_chat.id)
+    ranked = top_recommendations(update.effective_chat.id, limit=None)
+    pages = max(1, (len(ranked) + DISCOVER_PAGE_SIZE - 1) // DISCOVER_PAGE_SIZE)
+    page = min(context.user_data.get("discover_page", 0), pages - 1)
+    context.user_data["discover_page"] = page
+    start = page * DISCOVER_PAGE_SIZE
+    recs = ranked[start:start + DISCOVER_PAGE_SIZE]
     context.user_data["discover_recs"] = [
         {"name": r["name"], "query": r["query"], "floor": r["floor"]} for r in recs
     ]
@@ -71,7 +82,9 @@ async def _render_discover(update, context, note=""):
     if recs:
         updated = max(r["updated_at"] for r in recs)
         lines.append(f"<i>Оновлено: {datetime.fromtimestamp(updated, LOCAL_TZ).strftime('%d.%m %H:%M')}</i>")
-        lines += [_recommendation_text(n, r) for n, r in enumerate(recs, 1)]
+        if pages > 1:
+            lines[-1] += f" · сторінка {page + 1} з {pages} (усього {len(ranked)})"
+        lines += [_recommendation_text(n, r) for n, r in enumerate(recs, start + 1)]
         lines.append("<i>Продажі — оголошення, які зникли з eBay задовго до кінця строку; ✅ — продаж "
                      "підтвердив eBay. «За продажами» — ціна рахується за ними, інакше — за оголошеннями. "
                      "Натисни товар, щоб почати його відстежувати.</i>")
@@ -79,6 +92,13 @@ async def _render_discover(update, context, note=""):
                      "(і бот перестане витрачати на нього запити).</i>")
         rows += [[InlineKeyboardButton(f"➕ {r['name']}", callback_data=f"dadd:{i}"),
                   InlineKeyboardButton("🙈", callback_data=f"dhide:{i}")] for i, r in enumerate(recs)]
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"dpage:{page - 1}"))
+        if page + 1 < pages:
+            nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"dpage:{page + 1}"))
+        if nav:
+            rows.append(nav)
     else:
         lines.append("Поки нічого показати: бот перевіряє популярні товари раз на 4 години, "
                      "перший результат з'явиться протягом кількох хвилин після запуску. "
