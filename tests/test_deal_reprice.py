@@ -94,3 +94,54 @@ def test_new_deal_stores_price_basis(fake_ebay):
     deal = db.get_inbox_deals(1)[0][0]
     assert deal["sale_source"] and deal["sale_sample"] and deal["item_spec"]
     assert deal_reprice.basis_line(deal).startswith("📊 Ціна продажу за ")
+
+
+def test_sold_only_uses_wider_sold_group():
+    import market
+    stats = {("used", "RTX 4060 · i7 13 gen · 16GB"): {"sale_source": "за поточними оголошеннями", "spec_group": "x"},
+             ("used", "RTX 4060"): {"sale_source": "за 12 проданими", "spec_group": "RTX 4060"},
+             ("used", "*"): {"sale_source": "за поточними оголошеннями", "spec_group": "*"}}
+    it = {"cond_group": "used", "spec_group": "RTX 4060 · i7 13 gen · 16GB"}
+    assert market._stat_for_item(stats, it)["spec_group"] == "x"                       # як раніше — найточніша
+    assert market._stat_for_item(stats, it, sold_only=True)["spec_group"] == "RTX 4060"   # ширша, але за продажами
+    other = {"cond_group": "used", "spec_group": "RTX 3050"}
+    assert market._stat_for_item(stats, other, sold_only=True) is None                  # продажів ніде — не пропонуємо
+
+
+def test_sold_only_hides_listing_priced_deals(monkeypatch):
+    import account
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    sold = db.add_deal(wid, "a", "PS5 A", 300, "EUR", 620, 40, "u", False, sale_source="за 9 проданими")
+    db.add_deal(wid, "b", "PS5 B", 300, "EUR", 620, 40, "u", False, sale_source="за поточними оголошеннями")
+    assert db.get_inbox_deals(1)[1] == 2 and db.count_unseen_deals(1) == 2
+    db.set_sold_only(1, True)
+    deals, total = db.get_inbox_deals(1)
+    assert total == 1 and deals[0]["id"] == sold and db.count_unseen_deals(1) == 1
+    assert [r["id"] for r in db.get_deals_to_recheck(10, -1)] == [sold]       # приховані не перевіряємо
+
+    from test_sales import _screen
+    handlers_mod, shown, press = _screen(monkeypatch)
+    monkeypatch.setattr(account, "show_panel", lambda u, c, text, reply_markup=None, parse_mode=None:
+                        _record(shown, text, reply_markup))
+    upd, ctx = press("soldonly")
+    asyncio.run(account.sold_only_callback(upd, ctx))
+    assert db.get_sold_only(1) is False and "як раніше" in shown[-1][0]
+    assert any("продажі або оголошення" in b for b in shown[-1][1])
+
+
+async def _record(shown, text, reply_markup):
+    shown.append((text, [b.text for r in reply_markup.inline_keyboard for b in r]))
+
+
+def test_scheduler_skips_listing_priced_deals_when_sold_only(fake_ebay):
+    from conftest import listing
+    from test_scheduler import consoles, make_app
+    fake_ebay.listings = consoles()
+    db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
+    db.set_sold_only(1, True)
+    app = make_app()
+    asyncio.run(scheduler.check_all_watches(app))
+    fake_ebay.listings = [listing("cheap", "Sony PlayStation 5 Slim 1TB Konsole", 250)] + consoles()
+    asyncio.run(scheduler.check_all_watches(app))
+    with db.get_conn() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM deals").fetchone()["c"] == 0   # продажів ще немає

@@ -4,7 +4,7 @@
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import config
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
@@ -17,7 +17,7 @@ from undo import attach_offer, menu_offer, undo_button
 from settings import CHECK_INTERVAL_MINUTES, LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
 from db import count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, sold_confirmed_today
 from ebay_user import is_connected
-from ebay_api import api_usage_line, fetch_browse_rate_limit, trading_calls_today
+from ebay_api import api_usage_line, fetch_browse_rate_limit, seconds_until_reset, trading_calls_today
 from version import get_version
 
 
@@ -59,6 +59,18 @@ MENU_LABELS = {
 MAIN_MENU_TEXT = "📋 <b>Головне меню</b> — обери дію:"
 
 
+def last_limit_reset(now=None):
+    """Коли eBay востаннє скинув денний ліміт (за даними eBay або о 09:00 за Берліном)."""
+    left = seconds_until_reset()
+    if left is not None and 0 < left <= 86400:
+        return int(datetime.now().timestamp() + left - 86400)
+    now = now or datetime.now(LOCAL_TZ)
+    reset = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    if now < reset:
+        reset -= timedelta(days=1)
+    return int(reset.timestamp())
+
+
 def sold_checks_line():
     """Рядок про запити Trading API (перевірки продажів) — коли акаунт eBay підключено
     або сьогодні вже були перевірки. Число — за даними eBay (усі копії бота разом)."""
@@ -66,7 +78,8 @@ def sold_checks_line():
     if not count and not is_connected():
         return ""
     line = f"🧾 Перевірки продажів сьогодні: <b>{count}</b> / {TRADING_DAILY_BUDGET}"
-    sold = sold_confirmed_today()
+    # «продано» — за той самий проміжок, що й лічильник перевірок (з останнього скидання ліміту eBay)
+    sold = sold_confirmed_today(since=last_limit_reset())
     return line + (f" (✅ продано: <b>{sold}</b>)" if count else "")
 
 

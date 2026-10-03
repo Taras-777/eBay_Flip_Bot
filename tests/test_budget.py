@@ -109,3 +109,22 @@ def test_429_pauses_browse_without_error(monkeypatch):
         ebay_api._request_with_retries("GET", ebay_api.SEARCH_URL)
     assert len(responses) == ebay_api.NETWORK_MAX_ATTEMPTS
     ebay_api._rate_pause["until"] = 0
+
+
+def test_sold_count_matches_check_counter_window():
+    import time as _time
+    from datetime import datetime
+    from settings import LOCAL_TZ
+    now = datetime(2026, 10, 3, 9, 58, tzinfo=LOCAL_TZ)
+    assert datetime.fromtimestamp(panel.last_limit_reset(now), LOCAL_TZ).hour == 9
+    early = datetime(2026, 10, 3, 3, 0, tzinfo=LOCAL_TZ)
+    assert datetime.fromtimestamp(panel.last_limit_reset(early), LOCAL_TZ).day == 2   # ще вчорашня доба eBay
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    db.update_listing_observations(wid, [{"item_id": i, "cond_group": "used", "spec_group": "1TB", "total_price": 300}
+                                         for i in ("night", "morning")])
+    with db.get_conn() as conn:
+        conn.execute("UPDATE listing_obs SET sold_check = 'sold', checked_at = ? WHERE item_id = 'night'",
+                     (int(_time.time()) - 10 * 3600,))
+        conn.execute("UPDATE listing_obs SET sold_check = 'sold', checked_at = ? WHERE item_id = 'morning'",
+                     (int(_time.time()),))
+    assert db.sold_confirmed_today(since=int(_time.time()) - 3600) == 1   # нічні — до скидання ліміту

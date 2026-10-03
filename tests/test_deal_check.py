@@ -302,3 +302,40 @@ def test_listings_newest_first_toggle(monkeypatch):
     upd.callback_query.data = f"view_listings:{wid}"            # з картки товару — пам'ятає вибір
     asyncio.run(handlers_mod.view_listings_callback(upd, ctx))
     assert len(sorts) == 2                                       # з пам'яті, без нового запиту
+
+
+def test_hide_old_listings_toggle(monkeypatch):
+    import screen_listings
+    found = [{"item_id": i, "title": f"PS5 #{i}", "total_price": p, "currency": "EUR", "condition": "Gebraucht",
+              "url": "u", "created_at": int(time.time() - ago * DAY)} for i, p, ago in
+             [("ancient", 150, 244), ("fresh", 300, 5), ("month", 250, 40)]]
+    calls = []
+    monkeypatch.setattr(screen_listings, "search_in_categories",
+                        lambda *a, **kw: calls.append(1) or [dict(x) for x in found])
+    monkeypatch.setattr(screen_listings, "_annotate_items", lambda items, **kw: items)
+    monkeypatch.setattr(screen_listings, "_apply_item_filters", lambda w, items: items)
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "1", "name": "K"}])
+    handlers_mod, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"view_listings:{wid}")
+    ctx.user_data = {}
+    key = screen_listings._listing_state_key(wid)
+
+    asyncio.run(handlers_mod.view_listings_callback(upd, ctx))
+    assert [it["item_id"] for it in ctx.user_data[key]["items"]] == ["ancient", "month", "fresh"]
+    assert "🕰 Без старих (>100 дн.)" in shown[-1][1] and "🕰 виставлено" in shown[-1][0]   # стару позначено
+
+    upd.callback_query.data = f"lold:{wid}:on"
+    asyncio.run(handlers_mod.listing_old_callback(upd, ctx))
+    assert [it["item_id"] for it in ctx.user_data[key]["items"]] == ["month", "fresh"]
+    assert "без старших за 100 дн." in shown[-1][0] and "⏱ Межа: 100 дн." in shown[-1][1]
+
+    upd.callback_query.data = f"lold:{wid}:days"                 # 100 → 180
+    asyncio.run(handlers_mod.listing_old_callback(upd, ctx))
+    assert db.get_old_listing_filter(1) == (True, 180) and "⏱ Межа: 180 дн." in shown[-1][1]
+    upd.callback_query.data = f"lold:{wid}:days"                 # 180 → 30
+    asyncio.run(handlers_mod.listing_old_callback(upd, ctx))
+    assert [it["item_id"] for it in ctx.user_data[key]["items"]] == ["fresh"]
+
+    upd.callback_query.data = f"lold:{wid}:off"
+    asyncio.run(handlers_mod.listing_old_callback(upd, ctx))
+    assert len(ctx.user_data[key]["items"]) == 3 and "🕰 Без старих (>30 дн.)" in shown[-1][1]

@@ -30,6 +30,7 @@ from db import (
     get_market_stats,
     get_meta,
     get_min_profit,
+    get_sold_only,
     get_markdown_candidates,
     list_watches,
     mark_track_gone,
@@ -92,6 +93,7 @@ def markdown_list(chat_id):
     rows = get_markdown_candidates(chat_id, get_drop_pct(chat_id), PRICE_DROP_MIN_DAYS,
                                    PRICE_DROP_FRESH_HOURS * 3600)
     min_profit = get_min_profit(chat_id)
+    sold_only = get_sold_only(chat_id)
     stats_by_watch, result = {}, []
     for r in rows:
         if r["watch_id"] not in stats_by_watch:
@@ -99,7 +101,7 @@ def markdown_list(chat_id):
                                              for s in get_market_stats(r["watch_id"])}
         if (r["spec_group"] or "").startswith(UNKNOWN_GPU):
             continue   # ноутбук з невідомою відеокартою — ціну ні з чим порівняти
-        stat = _stat_for_item(stats_by_watch[r["watch_id"]], r)
+        stat = _stat_for_item(stats_by_watch[r["watch_id"]], r, sold_only=sold_only)
         if stat is None:
             continue   # ринкова ціна ще не відома — не з чим порівняти
         sale = stat["sale_price"] or stat["median_price"]

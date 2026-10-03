@@ -17,6 +17,7 @@ from db import (
     get_market_stats,
     get_min_profit,
     get_open_deals,
+    get_sold_only,
     get_watch_categories,
     list_watches,
     set_deals_status,
@@ -69,6 +70,7 @@ def reprice_deals(chat_id=None):
         return 0
     watches = {w["id"]: w for w in list_watches(active_only=True)}
     stats_by_watch, groups_by_watch, laptop_by_watch, min_profit_by_chat = {}, {}, {}, {}
+    sold_only_by_chat: dict = {}
     removed, stale = 0, []
     for d in deals:
         wid, watch = d["watch_id"], watches.get(d["watch_id"])
@@ -97,7 +99,8 @@ def reprice_deals(chat_id=None):
             stale.append(d["id"])   # ноутбук без відомої відеокарти: таких бот більше не пропонує
             removed += was_shown
             continue
-        stat = _stat_for_item(stats, {"cond_group": cond, "spec_group": spec})
+        sold_only = sold_only_by_chat.setdefault(d["chat_id"], get_sold_only(d["chat_id"]))
+        stat = _stat_for_item(stats, {"cond_group": cond, "spec_group": spec}, sold_only=sold_only)
         if stat is None:
             continue
         sale = stat["sale_price"] or stat["median_price"]

@@ -14,6 +14,9 @@ from settings import MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, log
 from textparse import _search_tokens
 from learning import hide_item, learned_words_note, reject_and_learn, unlearn_word
 from db import (
+    LISTING_AGE_CHOICES,
+    get_old_listing_filter,
+    set_old_listing_filter,
     get_deal,
     get_deal_owner_chat_id,
     get_watch,
@@ -41,8 +44,15 @@ LISTINGS_CACHE_SECONDS = 120  # повторне відкриття списку
 SORT_LABELS = {"price": "Від найдешевших", "new": "Спершу найновіші"}
 
 
-def _new_fetch_state(sort="price"):
-    return {"offset": 0, "exhausted": False, "seen": [], "pending": [], "sort": sort}
+def _new_fetch_state(sort="price", max_age_days=None):
+    """max_age_days — не показувати оголошень, що висять довше (None — показувати всі)."""
+    return {"offset": 0, "exhausted": False, "seen": [], "pending": [], "sort": sort,
+            "max_age_days": max_age_days}
+
+
+def _too_old(it, fetch):
+    days = fetch.get("max_age_days")
+    return bool(days) and bool(it.get("created_at")) and it["created_at"] < time.time() - days * 86400
 
 
 def _order_key(fetch):
@@ -86,7 +96,7 @@ def _fetch_cheapest(watch, fetch, need):
             continue
         chunk, fetch["pending"] = fetch["pending"][:LISTINGS_CHUNK], fetch["pending"][LISTINGS_CHUNK:]
         _annotate_items(chunk, max_lookups=MAX_SPEC_LOOKUPS_PER_DEAL_SCAN, watch=watch)
-        kept.extend(_apply_item_filters(watch, chunk))
+        kept.extend(it for it in _apply_item_filters(watch, chunk) if not _too_old(it, fetch))
     fetch["seen"] = list(seen)
     kept.sort(key=_order_key(fetch))
     return [
@@ -97,6 +107,25 @@ def _fetch_cheapest(watch, fetch, need):
     ]
 
 
+def _old_days(context, update):
+    return get_old_listing_filter(update.effective_chat.id)[1]
+
+
+@require_access
+async def listing_old_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lold:<id>:on|off|days — сховати/показати старі оголошення або змінити межу (30 → 60 → 100 → 180)."""
+    query_cb = update.callback_query
+    _, watch_id, action = query_cb.data.split(":")
+    chat_id = update.effective_chat.id
+    _, days = get_old_listing_filter(chat_id)
+    if action == "days":
+        later = [d for d in LISTING_AGE_CHOICES if d > days]
+        set_old_listing_filter(chat_id, days=later[0] if later else LISTING_AGE_CHOICES[0])
+    else:
+        set_old_listing_filter(chat_id, enabled=action == "on")
+    await _open_listings(update, context, int(watch_id))
+
+
 def _has_more(fetch):
     return bool(fetch) and (not fetch["exhausted"] or bool(fetch["pending"]))
 
@@ -104,9 +133,12 @@ def _has_more(fetch):
 @require_access
 async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """view_listings:<id>[:price|new] — живий список оголошень з eBay (від найдешевших або найновіших)."""
+    parts = update.callback_query.data.split(":")
+    await _open_listings(update, context, int(parts[1]), parts[2] if len(parts) > 2 else None)
+
+
+async def _open_listings(update, context, watch_id, requested_sort=None):
     query_cb = update.callback_query
-    parts = query_cb.data.split(":")
-    watch_id = int(parts[1])
     chat_id = update.effective_chat.id
     watch = get_watch(watch_id, chat_id)
     if watch is None:
@@ -114,10 +146,13 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     cached = context.user_data.get(_listing_state_key(watch_id))
-    cached_sort = ((cached or {}).get("fetch") or {}).get("sort", "price")
-    sort = parts[2] if len(parts) > 2 and parts[2] in SORT_LABELS else cached_sort
+    cached_fetch = (cached or {}).get("fetch") or {}
+    cached_sort = cached_fetch.get("sort", "price")
+    sort = requested_sort if requested_sort in SORT_LABELS else cached_sort
+    hide_old, old_days = get_old_listing_filter(chat_id)
+    max_age = old_days if hide_old else None
     # Щойно відкритий список — показуємо з пам'яті, без нових запитів до eBay
-    if (cached and cached.get("fetch") and sort == cached_sort
+    if (cached and cached.get("fetch") and sort == cached_sort and cached_fetch.get("max_age_days") == max_age
             and time.time() - cached.get("fetched_at", 0) < LISTINGS_CACHE_SECONDS):
         await _ack_callback(update)
         cached["page"] = 0
@@ -131,7 +166,7 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
                          "◀️ До товару", callback_data=f"watch_details:{watch_id}")]]))
 
-    fetch = _new_fetch_state(sort)
+    fetch = _new_fetch_state(sort, max_age)
     try:
         items = await asyncio.to_thread(_fetch_cheapest, watch, fetch, LISTINGS_PAGE_SIZE)
     except Exception as e:
@@ -165,7 +200,8 @@ async def view_listings_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     state = {
         "header": (f"🔎 <b>Оголошення для {html.escape(watch['label'])}</b>\n"
-                   f"{SORT_LABELS[sort]} · 🕒 {datetime.now().strftime('%H:%M:%S')}"),
+                   f"{SORT_LABELS[sort]}" + (f" · 🕰 без старших за {max_age} дн." if max_age else "")
+                   + f" · 🕒 {datetime.now().strftime('%H:%M:%S')}"),
         "items": items,
         "page": 0,
         "fetch": fetch,
@@ -231,11 +267,15 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
             f"➡️ Наступні {LISTINGS_PAGE_SIZE}", callback_data=f"lpage:{watch_id}:{page + 1}"))
     if not items:
         lines.append("Підходящих оголошень не лишилось.")
+    old_days = _old_days(context, update)
     for i, it in enumerate(shown, start + 1):
         cond = f" · стан: {html.escape(it['condition'])}" if it.get("condition") else ""
         if is_bundle(it["title"]):
             cond += " · 📦 комплект"
-        listed = f"\n📅 виставлено {_listed(it['created_at'])}" if it.get("created_at") else ""
+        listed = ""
+        if it.get("created_at"):
+            old = time.time() - it["created_at"] > old_days * 86400
+            listed = f"\n{'🕰' if old else '📅'} виставлено {_listed(it['created_at'])}"
         listed += "".join(f"\n{w}" for w in laptop_warnings(it["title"]))
         if it.get("auction"):
             listed += "\n" + auction_note(it.get("current_bid"), it.get("bid_count"), it.get("end_at"))
@@ -255,11 +295,17 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         rows.append([InlineKeyboardButton(f"↩️ Не відсіювати «{word}»", callback_data=f"unlw:{watch_id}:{word}")])
     if page_row:
         rows.append(page_row)
-    if fetch:   # живий список з eBay — можна перемкнути порядок
+    if fetch:   # живий список з eBay — можна перемкнути порядок і сховати старі
         if fetch.get("sort") == "new":
             rows.append([InlineKeyboardButton("💶 Спершу найдешевші", callback_data=f"view_listings:{watch_id}:price")])
         else:
             rows.append([InlineKeyboardButton("🆕 Спершу найновіші", callback_data=f"view_listings:{watch_id}:new")])
+        days = _old_days(context, update)
+        if fetch.get("max_age_days"):
+            rows.append([InlineKeyboardButton("🕰 Показати й старі", callback_data=f"lold:{watch_id}:off"),
+                         InlineKeyboardButton(f"⏱ Межа: {days} дн.", callback_data=f"lold:{watch_id}:days")])
+        else:
+            rows.append([InlineKeyboardButton(f"🕰 Без старих (>{days} дн.)", callback_data=f"lold:{watch_id}:on")])
     rows.extend([InlineKeyboardButton(text, callback_data=cb)] for text, cb in state["nav"])
     await show_panel(update, context, "\n\n".join(lines),
                      reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)

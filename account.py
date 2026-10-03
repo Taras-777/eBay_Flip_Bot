@@ -13,7 +13,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import get_drop_pct, sold_check_stats
+from db import get_drop_pct, get_sold_only, set_sold_only, sold_check_stats
 from ebay_api import trading_calls_today
 from deal_check import trading_breakdown_lines
 from ebay_user import (
@@ -117,9 +117,30 @@ def _settings_keyboard(chat_id=None):
     if chat_id is not None:
         rows.append([InlineKeyboardButton(f"📉 Поріг знижки: {get_drop_pct(chat_id):.0f}%",
                                           callback_data="mdpct:show")])
+        rows.append([InlineKeyboardButton(
+            "💰 Ціна для знахідок: " + ("лише за продажами ✅" if get_sold_only(chat_id) else "продажі або оголошення"),
+            callback_data="soldonly")])
     rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
     rows.append(BACK_ROW)
     return InlineKeyboardMarkup(rows)
+
+
+SOLD_ONLY_NOTE = {
+    True: ("✅ «🔥 Вигідні пропозиції» — лише з ціною «Продати» за <b>реальними продажами</b>. "
+           "Якщо в точній конфігурації продажів замало, бот бере ширшу групу, де їх достатньо; "
+           "немає й такої — оголошення не пропонується. Знахідок буде менше, зате надійніших."),
+    False: ("✅ «🔥 Вигідні пропозиції» — як раніше: ціна «Продати» за продажами, а якщо їх замало — "
+            "за поточними оголошеннями."),
+}
+
+
+async def sold_only_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """soldonly — перемкнути «ціна для знахідок лише за продажами»."""
+    await _ack_callback(update)
+    chat_id = update.effective_chat.id
+    value = not get_sold_only(chat_id)
+    set_sold_only(chat_id, value)
+    await show_settings(update, context, note=SOLD_ONLY_NOTE[value])
 
 
 async def show_settings(update, context, note=""):

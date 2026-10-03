@@ -1012,10 +1012,11 @@ SOLD_CHECK_OUTCOMES = {
 }
 
 
-def sold_confirmed_today():
-    """Скільки перевірок сьогодні (доба UTC, як і лічильник запитів) показали «продано»:
-    твої товари + «💡 Що перепродавати»."""
-    start = int(datetime.strptime(_utc_day(), "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
+def sold_confirmed_today(since=None):
+    """Скільки перевірок показали «продано» з моменту since (unix-час; за замовчуванням — з початку
+    доби UTC): твої товари + «💡 Що перепродавати»."""
+    start = since if since is not None else \
+        int(datetime.strptime(_utc_day(), "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
     with get_conn() as conn:
         return sum(conn.execute(
             f"SELECT COUNT(*) AS c FROM {table} WHERE sold_check = 'sold' AND checked_at >= ?", (start,)
@@ -1530,7 +1531,7 @@ def get_inbox_deals(chat_id, limit=5, offset=0):
     його мінімального), від найбільшого прибутку. Повертає (сторінка, загальна кількість)."""
     since = int(time.time()) - DEALS_INBOX_DAYS * 86400
     where = ("w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ? AND "
-             + _profit_sql() + " >= ?")
+             + _profit_sql() + " >= ? AND " + SOLD_ONLY_SQL)
     params = (chat_id, since, get_min_profit(chat_id))
     with get_conn() as conn:
         rows = conn.execute(
@@ -1550,7 +1551,7 @@ def count_unseen_deals(chat_id):
         return conn.execute(
             """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
                WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.seen_at IS NULL
-               AND d.created_at >= ? AND """ + _profit_sql() + " >= ?",
+               AND d.created_at >= ? AND """ + _profit_sql() + " >= ? AND " + SOLD_ONLY_SQL,
             (chat_id, since, get_min_profit(chat_id)),
         ).fetchone()["c"]
 
@@ -1564,7 +1565,8 @@ def get_deals_to_recheck(limit, stale_seconds, deal_ids=None):
                   "WHERE m.key = 'min_profit:' || w.chat_id), " + str(float(settings.MIN_PROFIT_EUR)) + ")")
     sql = ("SELECT d.id, d.item_id FROM deals d JOIN watches w ON w.id = d.watch_id "
            "WHERE w.active = 1 AND d.status = 'new' AND d.created_at >= ? "
-           "AND COALESCE(d.checked_at, d.created_at) < ? AND " + _profit_sql() + " >= " + min_profit)
+           "AND COALESCE(d.checked_at, d.created_at) < ? AND " + _profit_sql() + " >= " + min_profit
+           + " AND " + SOLD_ONLY_SQL)
     params = [now - DEALS_INBOX_DAYS * 86400, now - stale_seconds]
     if deal_ids is not None:
         if not deal_ids:
@@ -1763,6 +1765,41 @@ def get_drop_pct(chat_id):
 
 def set_drop_pct(chat_id, value):
     set_meta(f"drop_pct:{chat_id}", value)
+
+
+def get_sold_only(chat_id):
+    """Знахідки «🔥» лише з ціною «Продати» за реальними продажами (а не за поточними оголошеннями)."""
+    return get_meta(f"sold_only:{chat_id}") == "1"
+
+
+def set_sold_only(chat_id, value):
+    set_meta(f"sold_only:{chat_id}", "1" if value else "0")
+
+
+# SQL-умова для «🔥»: якщо користувач увімкнув «лише за продажами» — лише такі пропозиції
+SOLD_ONLY_SQL = ("(COALESCE((SELECT m2.value FROM meta m2 WHERE m2.key = 'sold_only:' || w.chat_id), '0') != '1' "
+                 "OR COALESCE(d.sale_source, '') LIKE '%продан%')")
+
+
+# ---------- «🔎 Переглянути оголошення»: без старих оголошень ----------
+
+LISTING_AGE_CHOICES = (30, 60, 100, 180)
+
+
+def get_old_listing_filter(chat_id):
+    """(увімкнено, межа в днях) — ховати оголошення, що висять довше за межу."""
+    try:
+        days = int(get_meta(f"old_days:{chat_id}") or 100)
+    except ValueError:
+        days = 100
+    return get_meta(f"hide_old:{chat_id}") == "1", days
+
+
+def set_old_listing_filter(chat_id, enabled=None, days=None):
+    if enabled is not None:
+        set_meta(f"hide_old:{chat_id}", "1" if enabled else "0")
+    if days is not None:
+        set_meta(f"old_days:{chat_id}", int(days))
 
 
 # ---------- «↩️ Скасувати» ----------

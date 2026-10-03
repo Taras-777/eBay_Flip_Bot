@@ -402,14 +402,17 @@ def laptop_unknown(it):
     return bool(it.get("laptop")) and laptop_needs_aspects(it.get("spec_group") or "unspecified")
 
 
-def _stat_for_item(stats, it):
+def _stat_for_item(stats, it, sold_only=False):
     """Спершу статистика точної конфігурації; якщо окремої немає (замало
-    оголошень) — найближчий ширший клас ноутбука, і лише тоді загальна група стану."""
+    оголошень) — найближчий ширший клас, і лише тоді загальна група стану.
+    sold_only — лише групи з ціною «Продати» за реальними продажами: якщо в точній групі
+    продажів замало, береться найближча ширша, де їх достатньо; немає такої — None."""
     cond, spec = it["cond_group"], it.get("spec_group") or "unspecified"
-    for key in [spec] + spec_parents(spec):
-        if (cond, key) in stats:
-            return stats[(cond, key)]
-    return stats.get((cond, "*"))
+    for key in [spec] + spec_parents(spec) + ["*"]:
+        stat = stats.get((cond, key))
+        if stat and (not sold_only or "продан" in (stat.get("sale_source") or "")):
+            return stat
+    return None
 
 
 def _fetch_market_items(w, max_age=MARKET_CACHE_SECONDS):

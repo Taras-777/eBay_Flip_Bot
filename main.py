@@ -23,6 +23,7 @@ from account import (
     ebay_account_cancel,
     ebay_account_code,
     ebay_account_disconnect,
+    sold_only_callback,
     ebay_account_interrupt,
     ebay_account_start,
     backup_send_callback,
@@ -88,6 +89,7 @@ from handlers import (
     set_required_aspect_callback,
     toggle_aspect_callback,
     view_listings_callback,
+    listing_old_callback,
     watch_details_callback,
     learned_words_callback,
 )
@@ -213,6 +215,7 @@ def main():
     app.add_handler(check_conv)
     app.add_handler(account_conv)
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
+    app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(backup_send_callback, pattern="^backup:send$"))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("stats", cmd_stats))
@@ -252,6 +255,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cmd_users, pattern="^menu:users$"))
     app.add_handler(CallbackQueryHandler(recalculate_median_callback, pattern="^recalc_median:"))
     app.add_handler(CallbackQueryHandler(view_listings_callback, pattern="^view_listings:"))
+    app.add_handler(CallbackQueryHandler(listing_old_callback, pattern="^lold:"))
     app.add_handler(CallbackQueryHandler(change_category_callback, pattern="^chcat:"))
     app.add_handler(CallbackQueryHandler(all_configs_callback, pattern="^configs:"))
     app.add_handler(CallbackQueryHandler(sales_callback, pattern="^sales:"))
