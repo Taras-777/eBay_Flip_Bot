@@ -24,7 +24,7 @@ from db import (
     list_watches,
     watch_activity,
 )
-from discovery import CANDIDATES
+from discovery import CANDIDATES, tracked_candidates
 from sales import weekly_change
 from panel import _ack_callback, show_panel
 from access import require_access
@@ -84,59 +84,71 @@ def _activity_key(item):
     return (-a["sold_new"], -a["new"], -a["sold"])
 
 
-def stats_text(chat_id, page=0):
-    """(текст, сторінок усього). Сторінка 0 — твої товари і початок «💡»; далі — решта «💡»."""
+HEADER = ("<i>🆕 — за останні 24 години. Оголошень і продажів — від початку стеження "
+          f"(бот пам'ятає {LISTING_OBS_RETENTION_DAYS} днів). 📈/📉 — типова ціна за тиждень.</i>")
+
+
+def stats_text(chat_id):
+    """Головний екран: лише твої товари і підсумок «🔥 Знахідки»."""
     since = time.time() - DAY
     watches = list_watches(chat_id=chat_id, active_only=True)
     act = watch_activity([w["id"] for w in watches], since)
     mine = sorted(((w["label"], w["id"], act.get(w["id"]) or {"total": 0, "new": 0, "sold": 0, "sold_new": 0})
                    for w in watches), key=_activity_key)
+    lines = ["📊 <b>Статистика</b>", HEADER, "📦 <b>Мої товари</b>"]
+    lines += [_row("📌", label, a, _watch_trend(wid)) for label, wid, a in mine] or ["Товарів ще немає."]
+    deals = get_deal_stats(chat_id)
+    if deals:
+        lines.append(f"🔥 Знахідки: ✅ куплено {deals.get('bought', 0)} · ❌ пропущено {deals.get('skipped', 0)}"
+                     f" · 🆕 без рішення {deals.get('new', 0)}")
+    return "\n\n".join(lines)
 
-    hidden = set(get_hidden_candidates(chat_id))
-    disc_act = discovery_activity(since)
+
+def discovery_stats_text(chat_id, page=0):
+    """(текст, сторінок усього, сторінка) — статистика «💡 Що перепродавати», по DISCOVERY_PER_PAGE.
+    Без прихованих (🙈) і без тих, що вже є у «📦 Мої товари» (вони — на головному екрані)."""
+    skip = set(get_hidden_candidates(chat_id)) | tracked_candidates(chat_id)
+    disc_act = discovery_activity(time.time() - DAY)
     trends = _discovery_trends()
     emoji = {name: e for e, name, _, _ in CANDIDATES}
-    disc = sorted(((name, name, disc_act[name]) for name in emoji if name in disc_act and name not in hidden),
+    disc = sorted(((name, name, disc_act[name]) for name in emoji if name in disc_act and name not in skip),
                   key=_activity_key)
     pages = max(1, (len(disc) + DISCOVERY_PER_PAGE - 1) // DISCOVERY_PER_PAGE)
     page = min(max(page, 0), pages - 1)
-
-    lines = ["📊 <b>Статистика</b>",
-             f"<i>🆕 — за останні 24 години. Оголошень і продажів — від початку стеження "
-             f"(бот пам'ятає {LISTING_OBS_RETENTION_DAYS} днів). 📈/📉 — типова ціна за тиждень.</i>"]
-    if page == 0:
-        lines.append("📦 <b>Мої товари</b>")
-        lines += [_row("📌", label, a, _watch_trend(wid)) for label, wid, a in mine] or ["Товарів ще немає."]
-        deals = get_deal_stats(chat_id)
-        if deals:
-            lines.append(f"🔥 Знахідки: ✅ куплено {deals.get('bought', 0)} · ❌ пропущено {deals.get('skipped', 0)}"
-                         f" · 🆕 без рішення {deals.get('new', 0)}")
+    title = "📊 <b>Статистика · 💡 Що перепродавати</b>" + (f" · сторінка {page + 1} з {pages}" if pages > 1 else "")
+    lines = [title, HEADER]
     start = page * DISCOVERY_PER_PAGE
     shown = disc[start:start + DISCOVERY_PER_PAGE]
-    if shown:
-        title = "💡 <b>Що перепродавати</b>" + (f" · сторінка {page + 1} з {pages}" if pages > 1 else "")
-        lines.append(title)
-        lines += [_row(emoji[name], name, a, trends.get(name)) for name, _, a in shown]
-    elif page == 0:
-        lines.append("💡 <b>Що перепродавати</b>\nДаних ще немає — з'являться після першого аналізу.")
+    lines += [_row(emoji[name], name, a, trends.get(name)) for name, _, a in shown] or [
+        "Даних ще немає — з'являться після першого аналізу."]
     return "\n\n".join(lines), pages, page
 
 
 @require_access
 async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """menu:stats або /stats — сторінка 0; stats:<n> — наступні сторінки «💡»."""
+    """menu:stats або /stats — мої товари; stats:d<n> — сторінка n статистики «💡»."""
     data = update.callback_query.data if update.callback_query else ""
-    page = int(data.split(":")[1]) if data.startswith("stats:") and data.split(":")[1].isdigit() else 0
-    await show_stats(update, context, page)
+    if data.startswith("stats:d") and data[7:].isdigit():
+        await show_discovery_stats(update, context, int(data[7:]))
+    else:
+        await show_stats(update, context)
 
 
-async def show_stats(update, context, page=0):
+async def show_stats(update, context):
     await _ack_callback(update)
-    text, pages, page = stats_text(update.effective_chat.id, page)
+    text = stats_text(update.effective_chat.id)
+    rows = [[InlineKeyboardButton("💡 Статистика «Що перепродавати»", callback_data="stats:d0")],
+            [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+    await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+
+
+async def show_discovery_stats(update, context, page=0):
+    await _ack_callback(update)
+    text, pages, page = discovery_stats_text(update.effective_chat.id, page)
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"stats:{page - 1}"))
+        nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"stats:d{page - 1}"))
     if page + 1 < pages:
-        nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"stats:{page + 1}"))
-    rows = ([nav] if nav else []) + [[InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+        nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"stats:d{page + 1}"))
+    rows = ([nav] if nav else []) + [[InlineKeyboardButton("◀️ До статистики", callback_data="menu:stats")]]
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)

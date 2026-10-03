@@ -252,7 +252,7 @@ def main():
     app.add_handler(CallbackQueryHandler(discover_hidden_callback, pattern="^(dhidden|dunhide:)"))
     app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))
     app.add_handler(CallbackQueryHandler(cmd_list, pattern="^menu:list$"))
-    app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^(menu:stats|stats:\\d+)$"))
+    app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^(menu:stats|stats:d\\d+)$"))
     app.add_handler(CallbackQueryHandler(watch_details_callback, pattern="^watch_details:"))
     app.add_handler(CallbackQueryHandler(learned_words_callback, pattern="^(lwords|lwdel):"))
     app.add_handler(CallbackQueryHandler(cmd_pending, pattern="^menu:pending$"))

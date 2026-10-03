@@ -217,9 +217,28 @@ def _same_model(title, query):
     return not (SUPER_MODEL.search(title) and "super" not in query_tokens)
 
 
-def _already_tracked(chat_id=None):
-    """Запити, які користувач уже відстежує: такі товари йому не пропонуємо."""
-    return {frozenset(_search_tokens(w["query"])) for w in list_watches(chat_id=chat_id)}
+def _model_tokens(text):
+    """Слова назви моделі; «PlayStation 5» / «PS 5» → «ps5», щоб їх можна було порівнювати."""
+    text = re.sub(r"play\s?station\s?(\d)", r"ps\1", (text or "").lower())
+    text = re.sub(r"\bps\s(\d)", r"ps\1", text)
+    return _search_tokens(text)
+
+
+def _is_same_product(watch_text, candidate_query):
+    """Товар, який ти відстежуєш, — це той самий кандидат «💡»: усі слова кандидата є в запиті
+    (або назві) товару, і варіант той самий («iPhone 15 Pro 256GB» = «iPhone 15 Pro»,
+    але не «iPhone 15 Pro Max»)."""
+    watch, cand = _model_tokens(watch_text), _model_tokens(candidate_query)
+    if not cand or not cand <= watch:
+        return False
+    return all((t in watch) == (t in cand) for t in EXTRA_VARIANT_TERMS)
+
+
+def tracked_candidates(chat_id=None):
+    """Назви кандидатів «💡», які користувач уже відстежує у «📦 Мої товари»."""
+    watches = list_watches(chat_id=chat_id, active_only=True)
+    return {name for _, name, query, _ in CANDIDATES
+            if any(_is_same_product(w["query"], query) or _is_same_product(w["label"], query) for w in watches)}
 
 
 def analyze_candidate(emoji, name, query, floor):
@@ -313,7 +332,9 @@ def run_discovery(force=False):
         return 0
     done = 0
     # Те, що власник позначив «🙈 Не цікавить», не аналізуємо — це запити до eBay
-    skip = hidden_names(config.OWNER_TELEGRAM_ID) if getattr(config, "OWNER_TELEGRAM_ID", 0) else set()
+    # і те, що він уже відстежує у «📦 Мої товари» (там свої, точніші дані)
+    owner = getattr(config, "OWNER_TELEGRAM_ID", 0)
+    skip = (hidden_names(owner) | tracked_candidates(owner)) if owner else set()
     for emoji, name, query, floor in CANDIDATES:
         if name in skip:
             continue
@@ -336,12 +357,12 @@ def run_discovery(force=False):
 def top_recommendations(chat_id=None, limit=10):
     """Найкращі кандидати, яких користувач ще не відстежує й не приховав, від найперспективнішого.
     Якщо в «⚙️ Налаштування» увімкнено «ціна лише за продажами» — лише ті, де ціна за продажами."""
-    tracked = _already_tracked(chat_id)
+    tracked = tracked_candidates(chat_id)
     hidden = hidden_names(chat_id) if chat_id is not None else set()
     sold_only = chat_id is not None and get_sold_only(chat_id)
     names = {c[1] for c in CANDIDATES}
     results = [r for r in get_discovery_results()
-               if frozenset(_search_tokens(r["query"])) not in tracked and r.get("deals_now")
+               if r["name"] not in tracked and r.get("deals_now")
                and r["name"] in names and r["name"] not in hidden
                and (not sold_only or r.get("sale_source") == "sold")]
     results.sort(key=score, reverse=True)

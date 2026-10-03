@@ -36,7 +36,8 @@ def test_stats_counts_and_trend(monkeypatch):
         for day, price in ((today - timedelta(days=7), 100), (today, 90)):
             conn.execute("INSERT INTO price_history (watch_id, cond_group, spec_group, day, median_price) "
                          "VALUES (?, 'used', '*', ?, ?)", (ps4, day.isoformat(), price))
-    text, pages, page = screen_stats.stats_text(1)
+    text = screen_stats.stats_text(1)
+    assert "💡" not in text.split("Мої товари")[1]           # «💡» — окремою кнопкою
     assert "<b>PS4</b>\n   оголошень 4 (🆕 +1) · продано 2 (🆕 +1) · 📉 -10%" in text
     assert "<b>MacBook</b>\n   оголошень 1 · продано 0" in text
     assert text.index("PS4") < text.index("MacBook")          # активніші вгорі
@@ -50,11 +51,30 @@ def test_stats_discovery_section_and_pages(monkeypatch):
             conn.execute("INSERT INTO discovery_obs (candidate, item_id, price, first_seen, last_seen, status) "
                          "VALUES (?, ?, 100, ?, ?, 'active')", (name, f"x{i}", now - 3600 * (i + 1), now))
     db.set_hidden_candidates(1, [names[0]])
-    text, pages, page = screen_stats.stats_text(1)
-    assert pages == 2 and "💡 <b>Що перепродавати</b> · сторінка 1 з 2" in text
+    text, pages, page = screen_stats.discovery_stats_text(1)
+    assert pages == 2 and "· сторінка 1 з 2" in text
     assert f"<b>{names[0]}</b>" not in text                     # прихований не показуємо
     handlers, shown, press = _screen(monkeypatch)
-    upd, ctx = press("stats:1")
+    upd, ctx = press("menu:stats")
+    asyncio.run(handlers.cmd_stats(upd, ctx))
+    assert "📦 <b>Мої товари</b>" in shown[-1][0] and "💡 Статистика «Що перепродавати»" in shown[-1][1]
+    upd, ctx = press("stats:d1")
     asyncio.run(handlers.cmd_stats(upd, ctx))
     assert "сторінка 2 з 2" in shown[-1][0] and "📦 <b>Мої товари</b>" not in shown[-1][0]
-    assert "◀️ Попередні" in shown[-1][1]
+    assert "◀️ Попередні" in shown[-1][1] and "◀️ До статистики" in shown[-1][1]
+
+
+def test_tracked_product_not_duplicated_in_discovery():
+    import discovery
+    now = int(time.time())
+    with db.get_conn() as conn:
+        for i, name in enumerate(("iPhone 15 Pro", "iPhone 15 Pro Max", "PlayStation 5 Slim")):
+            conn.execute("INSERT INTO discovery_obs (candidate, item_id, price, first_seen, last_seen, status) "
+                         "VALUES (?, ?, 100, ?, ?, 'active')", (name, f"y{i}", now - 3600, now))
+    db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro 256GB", "", "", 15)
+    db.add_watch(1, "PS5 Slim", "PS5 Slim", "", "", 15)
+    tracked = discovery.tracked_candidates(1)
+    assert {"iPhone 15 Pro", "PlayStation 5 Slim"} <= tracked and "iPhone 15 Pro Max" not in tracked
+    text, _, _ = screen_stats.discovery_stats_text(1)
+    assert "<b>iPhone 15 Pro Max</b>" in text and "<b>iPhone 15 Pro</b>" not in text
+    assert "PlayStation 5 Slim" not in text
