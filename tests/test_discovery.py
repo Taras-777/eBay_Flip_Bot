@@ -120,7 +120,7 @@ def test_discover_screen_without_data(monkeypatch):
     ctx = MagicMock()
     ctx.user_data = {}
     asyncio.run(handlers.discover_callback(_update("menu:discover"), ctx))
-    assert "Аналіз ще не готовий" in shown[-1][0]
+    assert "Поки нічого показати" in shown[-1][0]
 
 
 # ---------- продажі в «💡 Що перепродавати» ----------
@@ -202,3 +202,41 @@ def test_candidate_takes_only_its_own_model(title, query, ok):
 def test_candidate_list_is_big_and_unique():
     names = [name for _, name, _, _ in discovery.CANDIDATES]
     assert len(names) >= 80 and len(names) == len(set(names))
+
+
+def test_hide_candidate_and_restore(fake_ebay, one_candidate, monkeypatch):
+    import config
+    fake_ebay.listings = SWITCH
+    discovery.run_discovery(force=True)
+    shown = _screen(monkeypatch)
+    ctx = MagicMock()
+    ctx.user_data = {}
+    asyncio.run(handlers.discover_callback(_update("menu:discover"), ctx))
+    assert "🙈" in shown[-1][1]
+    asyncio.run(handlers.discover_hide_callback(_update("dhide:0"), ctx))
+    assert db.get_hidden_candidates(1) == ["Nintendo Switch OLED"]
+    assert "➕ Nintendo Switch OLED" not in shown[-1][1] and "🙈 Приховані (1)" in shown[-1][1]
+    assert discovery.top_recommendations(1) == []
+
+    monkeypatch.setattr(config, "OWNER_TELEGRAM_ID", 1, raising=False)   # власник приховав — не аналізуємо
+    assert discovery.run_discovery(force=True) == 0
+
+    asyncio.run(handlers.discover_hidden_callback(_update("dhidden"), ctx))
+    assert "↩️ Nintendo Switch OLED" in shown[-1][1]
+    asyncio.run(handlers.discover_hidden_callback(_update("dunhide:0"), ctx))
+    assert db.get_hidden_candidates(1) == [] and "повернуто" in shown[-1][0]
+
+
+def test_sold_only_hides_listing_priced_candidates(fake_ebay, one_candidate):
+    fake_ebay.listings = SWITCH
+    discovery.run_discovery(force=True)
+    assert discovery.top_recommendations(1)                       # ціна за оголошеннями — видно
+    db.set_sold_only(1, True)
+    assert discovery.top_recommendations(1) == []                 # «лише за продажами» — ще ні
+
+
+def test_variant_terms_split_models():
+    assert not discovery._same_model("Apple iPhone 15 Pro 128GB", "iPhone 15")
+    assert not discovery._same_model("Google Pixel 8 Pro 256GB", "Pixel 8")
+    assert discovery._same_model("Apple iPhone 15 128GB Schwarz", "iPhone 15")
+    assert not discovery._same_model("Steam Deck OLED 512GB", "Steam Deck 512GB")

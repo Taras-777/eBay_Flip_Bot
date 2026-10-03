@@ -1767,6 +1767,18 @@ def set_drop_pct(chat_id, value):
     set_meta(f"drop_pct:{chat_id}", value)
 
 
+def get_hidden_candidates(chat_id):
+    """«💡 Що перепродавати»: назви товарів, позначених «🙈 Не цікавить»."""
+    try:
+        return list(json.loads(get_meta(f"disc_hidden:{chat_id}") or "[]"))
+    except ValueError:
+        return []
+
+
+def set_hidden_candidates(chat_id, names):
+    set_meta(f"disc_hidden:{chat_id}", json.dumps(sorted(set(names)), ensure_ascii=False))
+
+
 def get_sold_only(chat_id):
     """Знахідки «🔥» лише з ціною «Продати» за реальними продажами (а не за поточними оголошеннями)."""
     return get_meta(f"sold_only:{chat_id}") == "1"

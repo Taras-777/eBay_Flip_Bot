@@ -23,7 +23,10 @@ from collections import Counter
 from settings import DEFAULT_CONDITION_IDS, MIN_SOLD_SAMPLE, SEARCH_RESERVE, log
 from laptops import is_laptop, laptop_spec
 from textparse import _search_tokens, _title_matches_search, extract_spec_key, is_accessory_category
+import config
 from db import (
+    get_hidden_candidates,
+    get_sold_only,
     discovery_gone_stats,
     get_discovery_sold,
     get_discovery_results,
@@ -37,7 +40,7 @@ from ebay_api import browse_budget_left, search_active_items
 from market import estimate_resale_profit, filter_outliers, max_buy_price, percentile
 from sales import summarize
 
-DISCOVERY_INTERVAL_HOURS = 4     # ~90 товарів × 6 разів = ~550 запитів на добу
+DISCOVERY_INTERVAL_HOURS = 4     # ~135 товарів × 6 разів = ~800 запитів на добу (мінус приховані)
 DISCOVERY_SOLD_DAYS = 7
 DISCOVERY_MIN_SAMPLE = 10         # менше оголошень — оцінка ненадійна
 DISCOVERY_EXCLUDE = "broken defekt teile parts kaputt"
@@ -150,12 +153,56 @@ CANDIDATES = [
     ("🍲", "Thermomix TM6", "Thermomix TM6", 600),
     ("☕", "De'Longhi Magnifica Evo", "Magnifica Evo", 200),
     ("📖", "Kindle Paperwhite", "Kindle Paperwhite", 60),
+    # --- додано 3 жовтня ---
+    # Консолі
+    ("🎮", "Steam Deck LCD", "Steam Deck 512GB", 220),
+    # Смартфони
+    ("📱", "iPhone 12", "iPhone 12", 150),
+    ("📱", "iPhone 12 Pro", "iPhone 12 Pro", 220),
+    ("📱", "iPhone 14 Pro Max", "iPhone 14 Pro Max", 450),
+    ("📱", "Samsung Galaxy S23 Ultra", "Samsung Galaxy S23 Ultra", 400),
+    ("📱", "Samsung Galaxy Z Fold5", "Galaxy Z Fold5", 500),
+    ("📱", "Google Pixel 8", "Pixel 8", 200),
+    ("📱", "Google Pixel 9", "Pixel 9", 300),
+    # Планшети й ноутбуки
+    ("📲", "iPad 10", "iPad 10. Generation", 200),
+    ("📲", "iPad Pro M2", "iPad Pro M2", 500),
+    ("💻", "MacBook Air M4", "MacBook Air M4", 800),
+    ("💻", "MacBook Pro M1 Pro", "MacBook Pro M1 Pro", 700),
+    ("💻", "ASUS TUF RTX 4060", "ASUS TUF RTX 4060", 550),
+    ("💻", "HP Victus RTX 4060", "HP Victus RTX 4060", 550),
+    ("💻", "Lenovo Legion Pro 5 RTX 4070", "Legion Pro 5 RTX 4070", 900),
+    # Комп'ютерні комплектуючі
+    ("🖥", "RTX 3060", "RTX 3060", 150),
+    ("🖥", "RTX 3070", "RTX 3070", 200),
+    ("🖥", "RTX 3080", "RTX 3080", 300),
+    ("🖥", "RTX 5070 Ti", "RTX 5070 Ti", 550),
+    ("🖥", "RTX 5080", "RTX 5080", 850),
+    ("🖥", "RX 7900 XTX", "RX 7900 XTX", 600),
+    ("🖥", "Ryzen 7 9800X3D", "Ryzen 7 9800X3D", 350),
+    # Аудіо й годинники
+    ("🎧", "AirPods 4", "AirPods 4", 70),
+    ("🎧", "Sony WF-1000XM5", "Sony WF-1000XM5", 100),
+    ("🎧", "Bose QuietComfort 45", "Bose QuietComfort 45", 90),
+    ("⌚", "Apple Watch SE 2", "Apple Watch SE 2", 90),
+    ("⌚", "Samsung Galaxy Watch 7", "Galaxy Watch 7", 120),
+    # Фото й дрони
+    ("📷", "Sony A6400", "Sony A6400", 450),
+    ("📷", "Canon EOS R7", "Canon EOS R7", 900),
+    ("📷", "Nikon Z6 II", "Nikon Z6 II", 900),
+    ("📷", "DJI Osmo Action 4", "DJI Osmo Action 4", 150),
+    ("🚁", "DJI Mini 4K", "DJI Mini 4K", 180),
+    # Побутове й транспорт
+    ("🧹", "Dyson V11", "Dyson V11", 150),
+    ("🤖", "Roborock S7", "Roborock S7", 180),
+    ("🛴", "Segway Ninebot Max G30", "Ninebot Max G30", 250),
 ]
 
 
-# Варіанти моделі, які рахуються окремо (Galaxy S24 ≠ S24 Ultra, RTX 4070 ≠ 4070 Ti).
+# Варіанти моделі, які рахуються окремо (Galaxy S24 ≠ S24 Ultra, RTX 4070 ≠ 4070 Ti,
+# iPhone 15 ≠ 15 Pro / 15 Plus, Pixel 8 ≠ 8 Pro, Steam Deck ≠ Steam Deck OLED).
 # «super» перевіряється лише після номера моделі: «super Zustand» — це не RTX Super.
-EXTRA_VARIANT_TERMS = {"ultra", "ti", "fe"}
+EXTRA_VARIANT_TERMS = {"ultra", "ti", "fe", "pro", "max", "plus", "mini", "lite", "oled", "slim", "air"}
 SUPER_MODEL = re.compile(r"\b\d{4}\s?super\b", re.IGNORECASE)
 
 
@@ -253,6 +300,11 @@ def score(result):
     return weekly * liquidity
 
 
+def hidden_names(chat_id):
+    """Товари, які користувач позначив «🙈 Не цікавить»."""
+    return set(get_hidden_candidates(chat_id))
+
+
 def run_discovery(force=False):
     """Аналізує кандидатів, якщо минуло DISCOVERY_INTERVAL_HOURS (або force).
     Повертає кількість проаналізованих. Викликати з потоку."""
@@ -260,7 +312,11 @@ def run_discovery(force=False):
     if not force and time.time() - last < DISCOVERY_INTERVAL_HOURS * 3600:
         return 0
     done = 0
+    # Те, що власник позначив «🙈 Не цікавить», не аналізуємо — це запити до eBay
+    skip = hidden_names(config.OWNER_TELEGRAM_ID) if getattr(config, "OWNER_TELEGRAM_ID", 0) else set()
     for emoji, name, query, floor in CANDIDATES:
+        if name in skip:
+            continue
         if browse_budget_left() < SEARCH_RESERVE + 50:
             log.info("«Що перепродавати»: мало запитів до eBay — решту кандидатів перевірю пізніше")
             break
@@ -278,9 +334,15 @@ def run_discovery(force=False):
 
 
 def top_recommendations(chat_id=None, limit=10):
-    """Найкращі кандидати, яких користувач ще не відстежує, від найперспективнішого."""
+    """Найкращі кандидати, яких користувач ще не відстежує й не приховав, від найперспективнішого.
+    Якщо в «⚙️ Налаштування» увімкнено «ціна лише за продажами» — лише ті, де ціна за продажами."""
     tracked = _already_tracked(chat_id)
+    hidden = hidden_names(chat_id) if chat_id is not None else set()
+    sold_only = chat_id is not None and get_sold_only(chat_id)
+    names = {c[1] for c in CANDIDATES}
     results = [r for r in get_discovery_results()
-               if frozenset(_search_tokens(r["query"])) not in tracked and r.get("deals_now")]
+               if frozenset(_search_tokens(r["query"])) not in tracked and r.get("deals_now")
+               and r["name"] in names and r["name"] not in hidden
+               and (not sold_only or r.get("sale_source") == "sold")]
     results.sort(key=score, reverse=True)
     return results[:limit]

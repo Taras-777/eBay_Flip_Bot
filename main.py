@@ -69,6 +69,8 @@ from handlers import (
     deal_action_callback,
     delwatch_ask_callback,
     discover_add_callback,
+    discover_hide_callback,
+    discover_hidden_callback,
     discover_callback,
     discover_refresh_callback,
     delwatch_yes_callback,
@@ -246,6 +248,8 @@ def main():
     app.add_handler(CallbackQueryHandler(refresh_stop_callback, pattern="^refresh_stop$"))
     app.add_handler(CallbackQueryHandler(discover_callback, pattern="^menu:discover$"))
     app.add_handler(CallbackQueryHandler(discover_add_callback, pattern="^dadd:"))
+    app.add_handler(CallbackQueryHandler(discover_hide_callback, pattern="^dhide:"))
+    app.add_handler(CallbackQueryHandler(discover_hidden_callback, pattern="^(dhidden|dunhide:)"))
     app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))
     app.add_handler(CallbackQueryHandler(cmd_list, pattern="^menu:list$"))
     app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^menu:stats$"))

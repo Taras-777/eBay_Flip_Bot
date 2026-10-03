@@ -119,6 +119,8 @@ from screen_discover import (  # noqa: F401
     discover_callback,
     discover_refresh_callback,
     discover_add_callback,
+    discover_hide_callback,
+    discover_hidden_callback,
 )
 from screen_check import (  # noqa: F401
     CHECK_LINK,
