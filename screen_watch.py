@@ -33,7 +33,6 @@ from db import (
     get_current_listings,
     get_auto_min_price,
     get_learned_words,
-    get_deal_stats,
     get_market_stats,
     get_min_profit,
     get_price_history,
@@ -69,7 +68,6 @@ from market import (
 from panel import (
     refresh_usage_callback,
     _ack_callback,
-    back_to_menu_keyboard,
     build_main_menu,
     main_menu_text,
     show_main_menu,
@@ -927,21 +925,10 @@ async def delwatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await cmd_list(update, context)
 
 
-@require_access
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    stats = get_deal_stats(chat_id)
-    if not stats:
-        await show_panel(update, context, "Поки що немає жодної вигідної пропозиції.", reply_markup=back_to_menu_keyboard())
-        return
-    bought = stats.get("bought", 0)
-    skipped = stats.get("skipped", 0)
-    new = stats.get("new", 0)
-    await show_panel(
-        update, context,
-        f"📊 Твоя статистика\n\n✅ Куплено: {bought}\n❌ Пропущено: {skipped}\n🆕 Ще не позначено: {new}",
-        reply_markup=back_to_menu_keyboard(),
-    )
+    """/stats і «📊 Статистика» — див. screen_stats."""
+    from screen_stats import stats_callback   # тут, щоб не було циклу імпортів
+    await stats_callback(update, context)
 
 
 # Імпорти з інших екранів — унизу, щоб модулі могли посилатися один на одного

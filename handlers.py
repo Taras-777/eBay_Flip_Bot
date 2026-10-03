@@ -135,7 +135,7 @@ import importlib as _importlib
 
 _SCREENS = [_importlib.import_module(m) for m in (
     "screen_common", "screen_addwatch", "screen_watch", "screen_sales",
-    "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_markdowns", "screen_undo",
+    "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_markdowns", "screen_undo", "screen_stats",
 )]
 
 

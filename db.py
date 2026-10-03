@@ -1608,6 +1608,35 @@ def clear_inbox_deals(chat_id):
         )
 
 
+def _activity(table, key, since, keys=None):
+    """{ключ: {'total', 'new', 'sold', 'sold_new'}}: усі оголошення, які бот бачив (зберігаються
+    LISTING_OBS_RETENTION_DAYS днів), нові з since; продані (як у статистиці продажів) — усього і з since."""
+    sold = "(status = 'gone'" + _sold_filter() + ")"
+    sql = (f"SELECT {key} AS k, COUNT(*) AS total, SUM(first_seen >= :since) AS new, "
+           f"SUM({sold}) AS sold, SUM({sold} AND gone_at >= :since) AS sold_new FROM {table}")
+    params: dict = {"since": since}
+    if keys is not None:
+        if not keys:
+            return {}
+        names = {f"k{i}": k for i, k in enumerate(keys)}
+        sql += f" WHERE {key} IN (" + ",".join(":" + n for n in names) + ")"
+        params.update(names)
+    sql += f" GROUP BY {key}"
+    with get_conn() as conn:
+        return {r["k"]: {f: int(r[f] or 0) for f in ("total", "new", "sold", "sold_new")}
+                for r in conn.execute(sql, params).fetchall()}
+
+
+def watch_activity(watch_ids, since):
+    """«📊 Статистика»: активність товарів користувача (див. _activity)."""
+    return _activity("listing_obs", "watch_id", since, list(watch_ids))
+
+
+def discovery_activity(since):
+    """«📊 Статистика»: активність товарів «💡 Що перепродавати» (див. _activity)."""
+    return _activity("discovery_obs", "candidate", since)
+
+
 def get_deal_stats(chat_id):
     with get_conn() as conn:
         rows = conn.execute(

@@ -149,6 +149,7 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(deals_label, callback_data="deals:0")],
         [btn("list")],
         [btn("discover")],
+        [btn("stats")],
     ]
     if total_md:   # «📉 Знизили ціну» — лише коли там щось є
         rows.insert(1, [InlineKeyboardButton(md_label, callback_data="mkd:0")])

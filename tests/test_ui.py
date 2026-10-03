@@ -239,14 +239,14 @@ def test_hide_from_deal_notification(screen):
 def test_owner_menu_has_refresh_button(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: True)
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
-    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати",
+    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати", "📊 Статистика",
                       "🔄 Оновити запити", "💰 Оновити ціни", "⚙️ Налаштування"]
 
 
 def test_regular_user_menu_has_no_owner_buttons(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: False)
     labels = [b.text for r in panel.build_main_menu(2).inline_keyboard for b in r]
-    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати"]
+    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати", "📊 Статистика"]
 
 
 def _panel_context(panel_id=10, edit_error=None):
