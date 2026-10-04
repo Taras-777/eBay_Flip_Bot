@@ -15,7 +15,8 @@ from telegram.ext import ContextTypes
 from markdowns import markdown_counts
 from undo import attach_offer, menu_offer, undo_button
 from settings import CHECK_INTERVAL_MINUTES, LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, sold_confirmed_today
+from db import (count_notices, count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users,
+                sold_confirmed_today)
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, seconds_until_reset, trading_calls_today
 from version import get_version
@@ -48,6 +49,7 @@ MENU_LABELS = {
     "discover": "💡 Що перепродавати",
     "list": "📦 Мої товари",
     "stats": "📊 Статистика",
+    "notices": "🔔 Повідомлення",
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
     "refresh_usage": "🔄 Оновити запити",
@@ -151,6 +153,10 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         [btn("discover")],
         [btn("stats")],
     ]
+    total_nt, unseen_nt = count_notices(user_id)
+    if total_nt:   # «🔔 Повідомлення» — лише коли там щось є
+        rows.append([InlineKeyboardButton(MENU_LABELS["notices"] + (f" · 🆕 {unseen_nt}" if unseen_nt else ""),
+                                          callback_data="ntc:0")])
     if total_md:   # «📉 Знизили ціну» — лише коли там щось є
         rows.insert(1, [InlineKeyboardButton(md_label, callback_data="mkd:0")])
     offer = menu_offer(user_id)
@@ -257,6 +263,25 @@ def _remember_panel(context, text, reply_markup, parse_mode):
     """Запам'ятовує, що зараз показано в панелі — щоб перенести той самий
     екран униз чату, коли над ним з'являться нові сповіщення."""
     context.user_data["panel_state"] = {"text": text, "markup": reply_markup, "parse_mode": parse_mode}
+
+
+async def refresh_menu_in_place(app, chat_id):
+    """Якщо в чаті зараз відкрите головне меню — оновити його на місці (новий лічильник),
+    без нового повідомлення і без дзвіночка."""
+    user_data = app.user_data.get(chat_id)
+    if not user_data:
+        return
+    state = user_data.get("panel_state") or {}
+    panel_id = user_data.get("panel_message_id")
+    if not state.get("main_menu") or not panel_id:
+        return
+    text, markup = await menu_parts(chat_id)
+    try:
+        await app.bot.edit_message_text(chat_id=chat_id, message_id=panel_id, text=text,
+                                        reply_markup=markup, parse_mode=ParseMode.HTML)
+        user_data["panel_state"] = dict(state, text=text, markup=markup)
+    except Exception as e:
+        log.debug("Не вдалося оновити меню на місці в чаті %s: %s", chat_id, e)
 
 
 async def repost_panel(app, chat_id):
