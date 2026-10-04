@@ -32,3 +32,23 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Секрети й дані — ніколи в git
+config.py
+.env
+*.sqlite3
+*.sqlite3-*
+*.pickle
+backups/
+data/
+ebay_login.p
+
+# Службове
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.vscode/
