@@ -311,6 +311,10 @@ async def watch_details_callback(update: Update, context: ContextTypes.DEFAULT_T
     await _show_watch_details(update, context, watch)
 
 
+SMALL_GROUP_SIZE = 2       # групи з 1–2 оголошеннями — під «📂 Інші конфігурації»
+MAX_CONFIG_BUTTONS = 25
+
+
 @require_access
 async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Усі конфігурації з останнього ринкового сканування — зокрема ті, де
@@ -339,42 +343,59 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     groups: dict = {}
     for row in listings:
         groups.setdefault((row["cond_group"], row["spec_group"]), []).append(row["price"])
+    show_small = query_cb.data.endswith(":other")
+    # Найбільші групи — вгорі; дрібні (1–2 оголошення) — під кнопкою «📂 Інші конфігурації»
+    ordered = sorted(groups.items(), key=lambda kv: (kv[0][0], -len(kv[1]), statistics.median(kv[1])))
+    big = [kv for kv in ordered if len(kv[1]) > SMALL_GROUP_SIZE]
+    small = [kv for kv in ordered if len(kv[1]) <= SMALL_GROUP_SIZE]
+    shown = small if show_small else big
 
+    title = "дрібні конфігурації" if show_small else "усі конфігурації"
     lines = [
-        f"🧩 <b>{html.escape(watch['label'])}: усі конфігурації</b>",
+        f"🧩 <b>{html.escape(watch['label'])}: {title}</b>",
         f"Оголошень в останньому скануванні: <b>{len(listings)}</b>",
     ]
+    if show_small:
+        lines.append(f"<i>Групи, де лише 1–{SMALL_GROUP_SIZE} оголошення: окремої ціни в них немає, "
+                     "вони порівнюються з ширшою групою.</i>")
     current_cond = None
-    for (cond, spec), prices in sorted(groups.items(), key=lambda kv: (kv[0][0], statistics.median(kv[1]))):
+    for (cond, spec), prices in shown:
         if cond != current_cond:
             current_cond = cond
             lines.append(f"\n<b>{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())}</b>")
         spec_txt = "конфігурація не вказана" if spec == "unspecified" else spec
-        enough = len(prices) >= MIN_SAMPLE_SIZE
-        mark = "" if enough else " ⚠️"
+        mark = "" if len(prices) >= MIN_SAMPLE_SIZE else " ⚠️"
         lines.append(
             f"• <b>{html.escape(spec_txt)}</b>{mark} — {len(prices)} огол., "
             f"від {min(prices):.0f}€, типова {statistics.median(prices):.0f}€"
         )
+    if not show_small and small:
+        lines.append(f"\n📂 Ще {plural(len(small), 'дрібна конфігурація', 'дрібні конфігурації', 'дрібних конфігурацій')} "
+                     f"(по 1–{SMALL_GROUP_SIZE} оголошення) — кнопка «📂 Інші конфігурації».")
     lines.append(
         f"\n<i>⚠️ — менше {MIN_SAMPLE_SIZE} оголошень: окремої оцінки «купити/продати» немає, "
-        "оголошення цієї конфігурації порівнюються із групою «усі конфігурації» свого стану.</i>\n"
+        "оголошення цієї конфігурації порівнюються з ширшою групою свого стану.</i>\n"
         "Натисни групу нижче, щоб побачити її найдешевші оголошення."
     )
 
     # Кнопки перегляду оголошень: спершу "усі" для кожного стану, потім конфігурації
     choices = []
-    conds = sorted({cond for cond, _ in groups})
-    for cond in conds:
-        count = sum(len(p) for (c, _), p in groups.items() if c == cond)
-        choices.append(((cond, "*"), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} — усі ({count})"))
-    for (cond, spec), prices in sorted(groups.items(), key=lambda kv: (kv[0][0], statistics.median(kv[1]))):
+    if not show_small:
+        for cond in sorted({cond for cond, _ in groups}):
+            count = sum(len(p) for (c, _), p in groups.items() if c == cond)
+            choices.append(((cond, "*"), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} — усі ({count})"))
+    for (cond, spec), prices in shown:
         spec_txt = "без конфігурації" if spec == "unspecified" else spec
         choices.append(((cond, spec), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} · {spec_txt} ({len(prices)})"))
-    choices = choices[:20]
+    choices = choices[:MAX_CONFIG_BUTTONS]
     context.user_data[f"cfg_groups_{watch_id}"] = [key for key, _ in choices]
     rows = [[InlineKeyboardButton(label[:60], callback_data=f"cfgl:{watch_id}:{i}")]
             for i, (_, label) in enumerate(choices)]
+    if show_small:
+        back_rows = [[InlineKeyboardButton("◀️ До конфігурацій", callback_data=f"configs:{watch_id}")]] + back_rows
+    elif small:
+        rows.append([InlineKeyboardButton(f"📂 Інші конфігурації ({len(small)})",
+                                          callback_data=f"configs:{watch_id}:other")])
     await show_panel(
         update, context, "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(rows + back_rows),

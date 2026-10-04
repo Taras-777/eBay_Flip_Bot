@@ -1,4 +1,5 @@
 """Ноутбуки: клас замість точної конфігурації, ширші класи, попередження."""
+import asyncio
 import time
 
 import pytest
@@ -385,3 +386,55 @@ def test_old_cached_aspects_reread_for_description(monkeypatch):
     market._annotate_items(items, max_lookups=5, watch=db.get_watch(wid, 1))
     assert fetched == ["old"]                                                 # опис уже читали — не повторюємо
     assert items[0]["spec_group"].startswith("RTX 5070 Ti") and not items[1]["spec_group"].startswith("RTX")
+
+
+def test_specs_from_description_cpu_ram_ssd_screen():
+    from laptops import specs_from_description
+    found = specs_from_description(
+        DESC + '<p>18" Display</p><p>32 GB DDR5-5600 Arbeitsspeicher, 2 × 16 GB SODIMM</p><p>1 TB PCIe 4.0 NVMe M.2 SSD</p>')
+    assert found["grafikkarte (aus beschreibung)"] == "RTX 5070 Ti"
+    assert found["prozessor (aus beschreibung)"].startswith("Core Ultra 9 290HX")
+    assert found["arbeitsspeicher (aus beschreibung)"] == "32 GB"         # «12 GB GDDR7» — відеопам'ять
+    assert found["ssd (aus beschreibung)"] == "1TB" and found["bildschirm (aus beschreibung)"] == '18"'
+    assert specs_from_description("16 GB RAM, 512 GB SSD")["ssd (aus beschreibung)"] == "512GB"
+    assert "arbeitsspeicher (aus beschreibung)" not in specs_from_description("16 GB RAM, bis 64 GB RAM")
+    assert "prozessor (aus beschreibung)" not in specs_from_description("i5-12450H oder i7-13620H, 512GB M2 SSD")
+    # Процесор з опису — лише коли його немає в назві
+    assert laptops.laptop_spec("MSI Katana RTX 4060 i5-12450H 16GB",
+                               {"prozessor (aus beschreibung)": "i7-13620H"}).startswith("RTX 4060 · i5 12 gen")
+    assert laptops.laptop_spec("MSI Katana RTX 4060 16GB",
+                               {"prozessor (aus beschreibung)": "i7-13620H"}) == "RTX 4060 · i7 13 gen · 16GB"
+
+
+def test_macbook_ssd_rounding_default_screen_and_suspicious_16():
+    q = "MacBook Pro M4"
+    assert laptops.laptop_spec("Apple MacBook Pro M4 16GB 500GB", {}, q) == 'M4 · 14" · 16GB · 512GB'
+    assert laptops.laptop_spec('MacBook Pro M4 Pro 16" 24GB 1000GB', {}, q) == 'M4 Pro · 16" · 24GB · 1TB'
+    assert laptops.laptop_spec("MacBook Pro M2 8GB 256GB", {}, "") == 'M2 · 13" · 8GB · 256GB'
+    assert laptops.laptop_spec("MacBook Air M4 16GB 256GB", {}, "MacBook Air") == "M4 · 16GB · 256GB"   # Air: 13 або 15
+    assert laptops.laptop_spec('MacBook Pro 16" M4 24GB 512GB', {}, q).startswith("M4 Pro/Max ?")
+    # Чип у назві «M4», а в характеристиках точніший «M4 Pro» — береться точніший
+    assert laptops.laptop_spec('MacBook Pro M4 16" 24GB 512GB', {"prozessor": "Apple M4 Pro"}, q) == \
+        'M4 Pro · 16" · 24GB · 512GB'
+    assert laptops.wants_aspects('M4 · 14"') and not laptops.wants_aspects('M4 · 14" · 16GB · 512GB')
+
+
+def test_configs_screen_folds_small_groups(monkeypatch):
+    from test_sales import _screen
+    wid = db.add_watch(1, "MacBook Pro M4", "MacBook Pro M4", "", "", 15)
+    obs = [{"item_id": f"b{i}", "cond_group": "new", "spec_group": 'M4 Pro · 14" · 24GB · 512GB',
+            "total_price": 1800 + i} for i in range(4)]
+    obs += [{"item_id": "s1", "cond_group": "new", "spec_group": "M4", "total_price": 1500},
+            {"item_id": "s2", "cond_group": "new", "spec_group": 'M4 · 14"', "total_price": 1600}]
+    db.update_listing_observations(wid, obs)
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"configs:{wid}")
+    asyncio.run(handlers.all_configs_callback(upd, ctx))
+    text, buttons = shown[-1]
+    assert "Нові · M4 Pro · 14\" · 24GB · 512GB (4)" in " ".join(buttons)
+    assert "📂 Інші конфігурації (2)" in buttons and not any("· M4 (1)" in b for b in buttons)
+    upd, ctx = press(f"configs:{wid}:other")
+    asyncio.run(handlers.all_configs_callback(upd, ctx))
+    text, buttons = shown[-1]
+    assert "дрібні конфігурації" in text and any("· M4 (1)" in b for b in buttons)
+    assert "◀️ До конфігурацій" in buttons and not any("усі (" in b for b in buttons)

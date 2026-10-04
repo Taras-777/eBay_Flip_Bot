@@ -253,9 +253,9 @@ def _annotate_items(items, max_lookups=0, watch=None):
                 if aspects is not None:   # клас ноутбука — завжди заново з назви й характеристик
                     it["spec_group"] = _spec(it, aspects)
                     it["aspects"] = aspects
-                    # Відеокарти немає ні в назві, ні в характеристиках, а опис бот ще не читав
+                    # Класу бракує відеокарти, процесора чи пам'яті, а опис бот ще не читав
                     # (характеристики завантажено до того, як він навчився) — читаємо ще раз
-                    if not (laptop_needs_aspects(it["spec_group"]) and DESC_CHECKED not in aspects):
+                    if not (laptop_wants_aspects(it["spec_group"]) and DESC_CHECKED not in aspects):
                         continue
                     if lookups_left > 0:
                         lookups_left -= 1

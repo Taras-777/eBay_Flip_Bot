@@ -108,13 +108,44 @@ def detect_gpu(text):
     return None
 
 
-# Відеокарта з опису оголошення: деякі продавці (часто магазини) пишуть її лише в описі,
-# а не в назві й не в характеристиках. Опис приходить у тій самій відповіді getItem,
-# що й характеристики, — окремого запиту немає. Зберігаємо лише знайдену відеокарту.
+# Опис оголошення: деякі продавці (часто магазини) пишуть відеокарту, процесор чи пам'ять лише
+# в описі, а не в назві й не в характеристиках. Опис приходить у тій самій відповіді getItem,
+# що й характеристики, — окремого запиту немає. Зберігаємо лише знайдені значення, не весь опис.
+# Ці значення беруться, лише коли в назві й характеристиках нічого немає.
 DESC_GPU_ASPECT = "grafikkarte (aus beschreibung)"
+DESC_CPU_ASPECT = "prozessor (aus beschreibung)"
+DESC_RAM_ASPECT = "arbeitsspeicher (aus beschreibung)"
+DESC_SSD_ASPECT = "ssd (aus beschreibung)"
+DESC_SCREEN_ASPECT = "bildschirm (aus beschreibung)"
 DESC_CHECKED = "_beschreibung_geprueft"   # опис уже переглянуто (щоб не перечитувати)
 _HTML_BLOCKS = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.I | re.S)
 _HTML_TAGS = re.compile(r"<[^>]+>")
+# Процесори в описі. Apple — лише з «Apple» перед чипом або «Chip» після (інакше «M2 SSD» — це M.2)
+_DESC_CPU_PATTERNS = [
+    re.compile(r"\bApple\s+M\d{1,2}(?:\s?(?:Pro|Max|Ultra))?\b|\bM\d{1,2}(?:\s?(?:Pro|Max|Ultra))?(?=[\s-]*Chip)", re.I),
+    re.compile(r"\bCore\s+Ultra\s+[3579]\s+\d{3}[A-Za-z]{0,2}\b", re.I),
+    re.compile(r"\bi[3579][-\s]?\d{3,5}[A-Za-z]{0,2}\d{0,2}\b", re.I),
+    re.compile(r"\bRyzen\s?[3579]\s?\d{3,4}[A-Za-z]{0,2}\b", re.I),
+]
+# «1 TB PCIe 4.0 NVMe M.2 SSD» або «SSD: 512 GB»; між об'ємом і «SSD» — без іншого об'єму
+# (інакше «16 GB RAM, 512 GB SSD» дало б 16GB)
+_DESC_SSD = re.compile(r"\b(\d{2,4}|[1-8])\s?(GB|TB)\b(?:(?!\d+\s?(?:GB|TB))[\s\w.,-]){0,25}?\bSSD\b"
+                       r"|\bSSD\b\s*[:\-]?\s*(\d{2,4}|[1-8])\s?(GB|TB)\b", re.I)
+
+
+# RAM в описі: «32 GB DDR5», «24 GB gemeinsamer Arbeitsspeicher», «16 GB Unified Memory»
+_DESC_RAM = re.compile(r"\b(\d+)\s?gb\s*(?:[a-zäöü]+\s+)?(?:ram|ddr\d\w*|lpddr\d\w*|arbeitsspeicher|unified|memory)\b",
+                       re.I)
+
+
+def _description_text(description):
+    text = _HTML_TAGS.sub(" ", _HTML_BLOCKS.sub(" ", description or ""))
+    return _plain(html.unescape(text))
+
+
+def _unique(values):
+    values = set(values)
+    return values.pop() if len(values) == 1 else None
 
 
 def gpu_from_description(description):
@@ -122,10 +153,41 @@ def gpu_from_description(description):
     і RTX 5070») — невідомо, яка саме в цьому ноутбуці, тоді None."""
     if not description:
         return None
-    text = html.unescape(_HTML_TAGS.sub(" ", _HTML_BLOCKS.sub(" ", description)))
-    text = _plain(text)
-    found = {fmt(m) for pattern, fmt in _GPU_PATTERNS for m in pattern.finditer(text)}
-    return found.pop() if len(found) == 1 else None
+    text = _description_text(description)
+    return _unique(fmt(m) for pattern, fmt in _GPU_PATTERNS for m in pattern.finditer(text))
+
+
+def specs_from_description(description):
+    """{псевдо-характеристика: значення} з опису: відеокарта, процесор, RAM, SSD, екран.
+    Значення — лише якщо воно в описі одне (кілька різних — невідомо, яке з них)."""
+    if not description:
+        return {}
+    text = _description_text(description)
+    result = {}
+    gpu = _unique(fmt(m) for pattern, fmt in _GPU_PATTERNS for m in pattern.finditer(text))
+    if gpu:
+        result[DESC_GPU_ASPECT] = gpu
+    cpus = {}
+    for pattern in _DESC_CPU_PATTERNS:
+        for m in pattern.finditer(text):
+            token = extract_cpu_token(m.group(0)) or extract_cpu_token(m.group(0) + " Chip")
+            if token:
+                cpus.setdefault(token, " ".join(m.group(0).split()))
+    if len(cpus) == 1:
+        result[DESC_CPU_ASPECT] = next(iter(cpus.values()))
+    no_vram = _VRAM_TAGGED.sub(" ", text)
+    ram = _unique(int(n) for n in _DESC_RAM.findall(no_vram) if 4 <= int(n) <= 128)
+    if ram:
+        result[DESC_RAM_ASPECT] = f"{ram} GB"
+    ssd = _unique(int(m.group(1) or m.group(3)) * (1024 if (m.group(2) or m.group(4)).upper() == "TB" else 1)
+                  for m in _DESC_SSD.finditer(text)
+                  if int(m.group(1) or m.group(3)) * (1024 if (m.group(2) or m.group(4)).upper() == "TB" else 1) >= 64)
+    if ssd:
+        result[DESC_SSD_ASPECT] = _size_label(ssd)
+    screen = _unique(m.group(1) for m in _SCREEN_PATTERNS[0].finditer(text))
+    if screen:
+        result[DESC_SCREEN_ASPECT] = f'{screen}"'
+    return result
 
 
 def _sizes(text):
@@ -192,7 +254,7 @@ def _cpu_class(title, cpu_text=""):
 
 
 def _screen(title, aspects):
-    for text in (title, _aspect(aspects, SCREEN_ASPECTS)):
+    for text in (title, _aspect(aspects, SCREEN_ASPECTS), _aspect(aspects, {DESC_SCREEN_ASPECT})):
         for pattern in _SCREEN_PATTERNS:
             m = pattern.search(text or "")
             if m:
@@ -200,23 +262,59 @@ def _screen(title, aspects):
     return None
 
 
+def _best_cpu_token(*tokens):
+    """Перший відомий процесор; якщо далі є точніший того ж чипа («M4» → «M4PRO») — точніший."""
+    known = [t for t in tokens if t]
+    if not known:
+        return None
+    best = known[0]
+    for t in known[1:]:
+        if t != best and t.startswith(best) and re.fullmatch(r"M\d+", best):
+            return t
+    return best
+
+
+# SSD у Mac буває лише таких об'ємів; «500 GB» / «1000 GB» у назві — це 512GB / 1TB
+APPLE_SSD_SIZES = (128, 256, 512, 1024, 2048, 4096, 8192)
+
+
+def _apple_ssd(gb):
+    nearest = min(APPLE_SSD_SIZES, key=lambda size: abs(size - gb))
+    return nearest if abs(nearest - gb) <= nearest * 0.1 else gb
+
+
 def laptop_spec(title, aspects=None, query=""):
-    """Клас ноутбука (див. опис модуля) або "unspecified", якщо з назви нічого не зрозуміло."""
+    """Клас ноутбука (див. опис модуля) або "unspecified", якщо з назви нічого не зрозуміло.
+    Порядок джерел: назва → характеристики → опис оголошення."""
     aspects = aspects or {}
     title = _plain(title)
-    cpu_text = _aspect(aspects, CPU_ASPECTS)
-    token = extract_cpu_token(title) or extract_cpu_token(cpu_text)
+    cpu_text = _aspect(aspects, CPU_ASPECTS) or _aspect(aspects, {DESC_CPU_ASPECT})
+    token = _best_cpu_token(extract_cpu_token(title), extract_cpu_token(_aspect(aspects, CPU_ASPECTS)),
+                            extract_cpu_token(_aspect(aspects, {DESC_CPU_ASPECT})))
     ram, ssd = _sizes(title)
     if ram is None:
         ram = _sizes(_aspect(aspects, RAM_ASPECTS) + " RAM")[0]
+    if ram is None:
+        ram = _sizes(_aspect(aspects, {DESC_RAM_ASPECT}) + " RAM")[0]
     if ssd is None:
-        ssd = _sizes(_aspect(aspects, SSD_ASPECTS))[1]
+        ssd = _sizes(_aspect(aspects, SSD_ASPECTS))[1] or _sizes(_aspect(aspects, {DESC_SSD_ASPECT}))[1]
 
     # MacBook: чип · екран · RAM · SSD
     if token and re.fullmatch(r"M\d+(PRO|MAX|ULTRA)?", token):
         chip = re.sub(r"(PRO|MAX|ULTRA)$", lambda m: " " + m.group(1).capitalize(), token)
-        parts = [chip, _screen(title, aspects)]
-        parts += [_size_label(ram) if ram and ram <= 128 else None, _size_label(ssd) if ssd else None]
+        screen = _screen(title, aspects)
+        plain_chip = re.fullmatch(r"M\d+", token) is not None
+        macbook_pro = bool(re.search(r"macbook\s*pro", f"{title} {query}", re.I)) and \
+            "air" not in _search_tokens(title) | _search_tokens(query)
+        if plain_chip and screen == '16"':
+            # 16" буває лише з M Pro / M Max — у назві, мабуть, пропущено; не змішуємо з дешевшим чипом
+            chip += " Pro/Max ?"
+        elif plain_chip and screen is None and macbook_pro:
+            # MacBook Pro зі звичайним чипом: M1/M2 — лише 13", з M3 — лише 14"
+            screen = '14"' if int(token[1:]) >= 3 else '13"'
+        parts = [chip, screen]
+        parts += [_size_label(ram) if ram and ram <= 128 else None,
+                  _size_label(_apple_ssd(ssd)) if ssd else None]
         return SEP.join(p for p in parts if p)
 
     # Windows-ноутбук: відеокарта · процесор · RAM
@@ -243,12 +341,13 @@ _RAM_PART = re.compile(r"\d+GB\+?")
 
 def wants_aspects(spec):
     """Чи варто прочитати характеристики: відеокарта невідома (обов'язково) або в класі бракує
-    покоління процесора чи пам'яті (для точнішої ціни). MacBook — чип відомий, досить назви."""
+    покоління процесора чи пам'яті (для точнішої ціни). MacBook — якщо бракує екрана, RAM чи SSD."""
     if needs_aspects(spec):
         return True
     parts = spec.split(SEP)
-    if re.fullmatch(r"M\d+( Pro| Max| Ultra)?", parts[0]):
-        return False
+    if re.fullmatch(r"M\d+( Pro| Max| Ultra| Pro/Max \?)?", parts[0]):
+        # MacBook: чип · екран · RAM · SSD — бракує частини або чип під питанням
+        return len(parts) < 4 or "?" in parts[0]
     has_cpu = any(_FULL_CPU.search(p) for p in parts[1:])
     has_ram = any(_RAM_PART.fullmatch(p) for p in parts[1:])
     return not (has_cpu and has_ram)
