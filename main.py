@@ -28,6 +28,8 @@ from account import (
     ebay_account_start,
     backup_send_callback,
 )
+from action_log import TimedApplication, slowlog_callback
+from concurrency import DialogSafeUpdateProcessor
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from handlers import (
     ASK_ASPECT,
@@ -113,9 +115,14 @@ def main():
         filepath=settings.STATE_FILE,
         store_data=PersistenceInput(bot_data=False, chat_data=False, user_data=True, callback_data=False),
     )
+    update_processor = DialogSafeUpdateProcessor(settings.CONCURRENT_UPDATES)
     app = (
         Application.builder()
+        .application_class(TimedApplication)   # 🐢 журнал повільних дій
         .token(config.TELEGRAM_BOT_TOKEN)
+        # Кілька натискань обробляються одночасно: повільна дія (оновлення цін, перевірка
+        # оголошення) більше не змушує інші кнопки чекати в черзі
+        .concurrent_updates(update_processor)
         .persistence(persistence)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
@@ -216,8 +223,10 @@ def main():
     app.add_handler(edit_conv)
     app.add_handler(check_conv)
     app.add_handler(account_conv)
+    update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv]
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
+    app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear)?$"))
     app.add_handler(CallbackQueryHandler(backup_send_callback, pattern="^backup:send$"))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("stats", cmd_stats))

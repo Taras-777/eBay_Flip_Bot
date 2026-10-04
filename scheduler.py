@@ -7,6 +7,7 @@ import asyncio
 import config
 import time
 from concurrent.futures import ThreadPoolExecutor
+from telegram import Update
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, ContextTypes
 
@@ -105,7 +106,7 @@ async def check_all_watches(app: Application):
 
 
 async def check_one_watch(app: Application, w: dict):
-    rows = get_market_stats(w["id"])
+    rows = await asyncio.to_thread(get_market_stats, w["id"])
     market_is_stale = (
         not rows
         or min(r["updated_at"] for r in rows) < time.time() - MARKET_REFRESH_MINUTES * 60
@@ -132,77 +133,82 @@ async def check_one_watch(app: Application, w: dict):
     if not items or not stats:
         return
 
-    new_deals = []
-    sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))  # як продаються конфігурації
-    min_profit = get_min_profit(w["chat_id"])
-    sold_only = get_sold_only(w["chat_id"])   # «лише за реальними продажами»
-    seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
-    seen_updates = []  # записуються одним пакетом наприкінці
-    for it in items:
-        seen = seen_map.get(it["item_id"])
-        is_new = seen is None
-        price_dropped = (not is_new) and seen["last_price"] is not None and it["effective_price"] < seen["last_price"] - 0.01
+    def _evaluate():
+        """Оцінка оголошень — лише база, без мережі; у потоці, щоб не гальмувати кнопки."""
+        new_deals = []
+        sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))  # як продаються конфігурації
+        min_profit = get_min_profit(w["chat_id"])
+        sold_only = get_sold_only(w["chat_id"])   # «лише за реальними продажами»
+        seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
+        seen_updates = []  # записуються одним пакетом наприкінці
+        for it in items:
+            seen = seen_map.get(it["item_id"])
+            is_new = seen is None
+            price_dropped = (not is_new) and seen["last_price"] is not None and it["effective_price"] < seen["last_price"] - 0.01
 
-        if not is_new and not price_dropped:
-            seen_updates.append((it["item_id"], it["effective_price"], None))
-            continue
+            if not is_new and not price_dropped:
+                seen_updates.append((it["item_id"], it["effective_price"], None))
+                continue
 
-        if laptop_unknown(it):
-            # Відеокарта ще невідома: не записуємо в seen_items — наступного циклу,
-            # коли бот прочитає характеристики, оголошення оціниться як нове
-            continue
-        stat = _stat_for_item(stats, it, sold_only=sold_only)
-        if stat is None:
-            seen_updates.append((it["item_id"], it["effective_price"], None))
-            continue  # для цього стану ще немає надійної статистики
+            if laptop_unknown(it):
+                # Відеокарта ще невідома: не записуємо в seen_items — наступного циклу,
+                # коли бот прочитає характеристики, оголошення оціниться як нове
+                continue
+            stat = _stat_for_item(stats, it, sold_only=sold_only)
+            if stat is None:
+                seen_updates.append((it["item_id"], it["effective_price"], None))
+                continue  # для цього стану ще немає надійної статистики
 
-        sale_price = stat["sale_price"] or stat["median_price"]
-        # Вигідно, якщо ціна купівлі (для Best Offer — з урахуванням торгу)
-        # не вища за максимальну, що ще дає мінімальний прибуток при перепродажі
-        # Вигідно — лише якщо прибуток ≥ мінімуму користувача за ЦІНОЮ ОГОЛОШЕННЯ (торг — бонус,
-        # а не підстава: «можна торгуватись» не робить збиткову пропозицію вигідною)
-        if it["total_price"] > max_buy_price(sale_price, min_profit):
-            seen_updates.append((it["item_id"], it["effective_price"], None))
-            continue
-        # Дешево, але така конфігурація не продається (при живому ринку) — не сповіщаємо
-        if is_slow_seller(sold, it["cond_group"], it["spec_group"]):
-            log.info("watch #%s: %s — вигідна ціна, але %s не продається, пропускаю",
-                     w["id"], it["item_id"], it["spec_group"])
-            seen_updates.append((it["item_id"], it["effective_price"], None))
-            continue
-        it["sales_note"] = sales_note(sold, stat["cond_group"], stat["spec_group"])
-        discount_pct = (sale_price - it["total_price"]) / sale_price * 100
+            sale_price = stat["sale_price"] or stat["median_price"]
+            # Вигідно, якщо ціна купівлі (для Best Offer — з урахуванням торгу)
+            # не вища за максимальну, що ще дає мінімальний прибуток при перепродажі
+            # Вигідно — лише якщо прибуток ≥ мінімуму користувача за ЦІНОЮ ОГОЛОШЕННЯ (торг — бонус,
+            # а не підстава: «можна торгуватись» не робить збиткову пропозицію вигідною)
+            if it["total_price"] > max_buy_price(sale_price, min_profit):
+                seen_updates.append((it["item_id"], it["effective_price"], None))
+                continue
+            # Дешево, але така конфігурація не продається (при живому ринку) — не сповіщаємо
+            if is_slow_seller(sold, it["cond_group"], it["spec_group"]):
+                log.info("watch #%s: %s — вигідна ціна, але %s не продається, пропускаю",
+                         w["id"], it["item_id"], it["spec_group"])
+                seen_updates.append((it["item_id"], it["effective_price"], None))
+                continue
+            it["sales_note"] = sales_note(sold, stat["cond_group"], stat["spec_group"])
+            discount_pct = (sale_price - it["total_price"]) / sale_price * 100
 
-        already_notified_price = seen["last_notified_price"] if seen else None
-        if already_notified_price is not None and it["effective_price"] >= already_notified_price - 0.01:
-            seen_updates.append((it["item_id"], it["effective_price"], None))
-            continue
+            already_notified_price = seen["last_notified_price"] if seen else None
+            if already_notified_price is not None and it["effective_price"] >= already_notified_price - 0.01:
+                seen_updates.append((it["item_id"], it["effective_price"], None))
+                continue
 
-        it["price_dropped"] = price_dropped and not is_new
-        deal_id = add_deal(
-            watch_id=w["id"],
-            item_id=it["item_id"],
-            title=it["title"],
-            total_price=it["total_price"],
-            currency=it["currency"],
-            median_price=sale_price,
-            discount_pct=discount_pct,
-            url=it["url"],
-            suspicious=it["suspicious"],
-            has_best_offer=it["has_best_offer"],
-            cond_group=stat["cond_group"],
-            spec_group=stat["spec_group"],
-            listed_at=it.get("created_at"),
-            item_spec=it["spec_group"],
-            sale_source=stat.get("sale_source"),
-            sale_sample=stat.get("sample_size"),
-            auction=({"current_bid": it.get("current_bid"), "bid_count": it.get("bid_count"),
-                      "end_at": it.get("end_at")} if it.get("auction") else None),
-        )
-        seen_updates.append((it["item_id"], it["effective_price"], it["effective_price"]))
-        new_deals.append((deal_id, it, stat))
+            it["price_dropped"] = price_dropped and not is_new
+            deal_id = add_deal(
+                watch_id=w["id"],
+                item_id=it["item_id"],
+                title=it["title"],
+                total_price=it["total_price"],
+                currency=it["currency"],
+                median_price=sale_price,
+                discount_pct=discount_pct,
+                url=it["url"],
+                suspicious=it["suspicious"],
+                has_best_offer=it["has_best_offer"],
+                cond_group=stat["cond_group"],
+                spec_group=stat["spec_group"],
+                listed_at=it.get("created_at"),
+                item_spec=it["spec_group"],
+                sale_source=stat.get("sale_source"),
+                sale_sample=stat.get("sample_size"),
+                auction=({"current_bid": it.get("current_bid"), "bid_count": it.get("bid_count"),
+                          "end_at": it.get("end_at")} if it.get("auction") else None),
+            )
+            seen_updates.append((it["item_id"], it["effective_price"], it["effective_price"]))
+            new_deals.append((deal_id, it, stat))
 
-    bulk_upsert_seen_items(w["id"], seen_updates)
+        bulk_upsert_seen_items(w["id"], seen_updates)
+        return new_deals
+
+    new_deals = await asyncio.to_thread(_evaluate)
 
     if not new_deals:
         return
@@ -258,6 +264,9 @@ async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
         _start_telegram_watch(context.application)
         return
     log.error("Помилка під час обробки оновлення", exc_info=err)
+    if isinstance(update, Update):   # 🐢 журнал: кнопка, що «нічого не відкрила» через помилку
+        from action_log import save_action
+        await save_action(update, 0, f"{type(err).__name__}: {err}"[:200])
     if config.OWNER_TELEGRAM_ID and time.time() - _error_notice["last"] > ERROR_NOTICE_INTERVAL:
         _error_notice["last"] = time.time()
         try:

@@ -68,8 +68,8 @@ from market import (
 from panel import (
     refresh_usage_callback,
     _ack_callback,
-    build_main_menu,
-    main_menu_text,
+    menu_parts,
+    run_with_progress,
     show_main_menu,
     show_panel,
 )
@@ -589,8 +589,8 @@ async def set_category_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if not selected:
             await query_cb.answer("Познач хоча б одну категорію або обери «Усі категорії».", show_alert=True)
             return
-        chosen = await asyncio.to_thread(
-            collapse_categories, [{"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected])
+        chosen = await run_with_progress(
+            update, context, "🗂️ ⏳ Зберігаю категорії…", collapse_categories, [{"id": o["id"], "name": o["name"]} for o in options if o["id"] in selected])
         new_ids = {c["id"] for c in chosen}
         update_watch_categories(watch_id, chat_id, chosen)
     else:
@@ -907,9 +907,9 @@ async def _refresh_all(update, context):
         notes.append("⏹ Зупинено, не оновлено: " + html.escape(", ".join(stopped)))
     if not watches:
         notes.append("Товарів ще немає — оновлено лише дані про запити.")
-    user_id = update.effective_user.id
-    await show_panel(update, context, main_menu_text(user_id) + "\n\n" + "\n".join(notes),
-                     reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
+    menu_text, menu_kb = await menu_parts(update.effective_user.id)
+    await show_panel(update, context, menu_text + "\n\n" + "\n".join(notes),
+                     reply_markup=menu_kb, parse_mode=ParseMode.HTML)
 
 
 @require_access

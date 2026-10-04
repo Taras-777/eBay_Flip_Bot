@@ -16,7 +16,7 @@ from db import get_drop_pct, get_watch, mark_track_seen, set_drop_pct
 from learning import hide_item, learned_words_note, reject_and_learn
 from laptops import laptop_warnings
 from markdowns import markdown_list, recheck_rows
-from panel import _ack_callback, show_panel
+from panel import _ack_callback, run_with_progress, show_panel
 from access import require_access
 from textparse import plural
 from undo import record as undo_record, short
@@ -58,14 +58,15 @@ def _card(n, r):
 
 async def _render_markdowns(update, context, page=0, note=""):
     chat_id = update.effective_chat.id
-    rows = markdown_list(chat_id)
+    rows = await asyncio.to_thread(markdown_list, chat_id)
     last = max(0, (len(rows) - 1) // PER_PAGE)
     page = min(page, last)
     shown = rows[page * PER_PAGE:(page + 1) * PER_PAGE]
     # Перед показом — чи ці оголошення ще продаються
-    removed = await asyncio.to_thread(recheck_rows, shown) if shown else 0
+    removed = await run_with_progress(update, context, "📉 ⏳ Перевіряю на eBay, чи оголошення ще продаються…",
+                                      recheck_rows, shown) if shown else 0
     if removed:
-        rows = markdown_list(chat_id)
+        rows = await asyncio.to_thread(markdown_list, chat_id)
         page = min(page, max(0, (len(rows) - 1) // PER_PAGE))
         shown = rows[page * PER_PAGE:(page + 1) * PER_PAGE]
         gone = f"🗑 Прибрано вже проданих чи знятих: {removed}"
@@ -121,7 +122,7 @@ async def markdown_action_callback(update: Update, context: ContextTypes.DEFAULT
     item_id, page = rest.rsplit(":", 1)
     chat_id = update.effective_chat.id
     watch = get_watch(int(watch_id), chat_id)
-    row = next((r for r in markdown_list(chat_id)
+    row = next((r for r in await asyncio.to_thread(markdown_list, chat_id)
                 if r["watch_id"] == int(watch_id) and r["item_id"] == item_id), None)
     if watch is None or row is None:
         await query_cb.answer("Цього оголошення вже немає в списку.")

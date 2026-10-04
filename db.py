@@ -301,6 +301,16 @@ CREATE INDEX IF NOT EXISTS idx_seen_watch ON seen_items (watch_id, item_id);
 CREATE INDEX IF NOT EXISTS idx_watches_chat ON watches (chat_id, active);
 CREATE INDEX IF NOT EXISTS idx_undo_chat ON undo_actions (chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_track_watch ON price_track (watch_id, last_seen);
+CREATE INDEX IF NOT EXISTS idx_disc_first_seen ON discovery_obs (first_seen);
+CREATE TABLE IF NOT EXISTS action_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at INTEGER NOT NULL,
+    chat_id INTEGER,
+    action TEXT NOT NULL,
+    seconds REAL NOT NULL,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_action_log_at ON action_log (at);
 """
 
 
@@ -2032,3 +2042,38 @@ def get_discovery_results():
     with get_conn() as conn:
         rows = conn.execute("SELECT data_json, updated_at FROM discovery_results").fetchall()
     return [dict(json.loads(r["data_json"]), updated_at=r["updated_at"]) for r in rows]
+
+
+# ---------- 🐢 Журнал повільних дій ----------
+
+ACTION_LOG_KEEP = 1000
+
+
+def record_action(chat_id, action, seconds, error=None):
+    """Повільна (або з помилкою) дія користувача — у журнал; зберігаються останні ACTION_LOG_KEEP."""
+    with get_conn() as conn:
+        conn.execute("INSERT INTO action_log (at, chat_id, action, seconds, error) VALUES (?, ?, ?, ?, ?)",
+                     (int(time.time()), chat_id, action, round(seconds, 2), error))
+        conn.execute("DELETE FROM action_log WHERE id <= (SELECT MAX(id) FROM action_log) - ?", (ACTION_LOG_KEEP,))
+
+
+def get_action_log(limit=15):
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM action_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()]
+
+
+def action_log_summary(days=7, limit=10):
+    """Найповільніші дії за `days` днів: [{'action', 'count', 'avg', 'max', 'errors'}], від найгіршої."""
+    since = int(time.time()) - days * 86400
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT action, COUNT(*) AS count, AVG(seconds) AS avg, MAX(seconds) AS max,
+                      SUM(error IS NOT NULL) AS errors
+               FROM action_log WHERE at >= ? GROUP BY action ORDER BY MAX(seconds) * COUNT(*) DESC LIMIT ?""",
+            (since, limit)).fetchall()]
+
+
+def clear_action_log():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM action_log")

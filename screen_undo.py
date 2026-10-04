@@ -11,15 +11,15 @@ from telegram.ext import ContextTypes
 
 from settings import log
 from db import get_undo, get_watch, mark_undo_done
-from panel import _ack_callback, build_main_menu, main_menu_text, show_panel
+from panel import _ack_callback, menu_parts, show_panel
 from access import require_access
 from undo import OFFER_KEY, perform
 
 
 async def _show_menu_with_note(update, context, note):
-    user_id = update.effective_user.id
-    await show_panel(update, context, f"{note}\n\n{main_menu_text(user_id)}",
-                     reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
+    menu_text, menu_kb = await menu_parts(update.effective_user.id)
+    await show_panel(update, context, f"{note}\n\n{menu_text}",
+                     reply_markup=menu_kb, parse_mode=ParseMode.HTML)
     context.user_data.setdefault("panel_state", {})["main_menu"] = True
 
 

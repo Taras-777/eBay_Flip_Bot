@@ -165,7 +165,9 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
     patch_ui(monkeypatch, "fetch_browse_rate_limit", lambda: fetched.append(1))
     patch_ui(monkeypatch, "browse_budget_left", lambda: 4000)
     patch_ui(monkeypatch, "show_panel", fake_show)
-    patch_ui(monkeypatch, "main_menu_text", lambda uid: "MENU")
+    async def fake_menu(uid):
+        return "MENU", None
+    patch_ui(monkeypatch, "menu_parts", fake_menu)
     upd = MagicMock()
     upd.effective_chat.id = upd.effective_user.id = 1
     upd.callback_query.answer = AsyncMock()
@@ -210,8 +212,9 @@ def test_refresh_all_can_be_stopped(monkeypatch):
     patch_ui(monkeypatch, "fetch_browse_rate_limit", lambda: None)
     patch_ui(monkeypatch, "browse_budget_left", lambda: 4000)
     patch_ui(monkeypatch, "show_panel", fake_show)
-    patch_ui(monkeypatch, "main_menu_text", lambda uid: "MENU")
-    patch_ui(monkeypatch, "build_main_menu", lambda uid: None)
+    async def fake_menu(uid):
+        return "MENU", None
+    patch_ui(monkeypatch, "menu_parts", fake_menu)
 
     async def run():
         await handlers.refresh_all_callback(upd, ctx)

@@ -226,6 +226,26 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
         await _delete_quietly(context.bot, chat_id, panel_id)  # стара панель не має лишатись
 
 
+PROGRESS_AFTER_SECONDS = 0.8
+
+
+async def run_with_progress(update, context, text, func, *args):
+    """func(*args) у потоці. Якщо за PROGRESS_AFTER_SECONDS не впоралась (пішла в eBay) —
+    у панелі з'являється «⏳ …», щоб було видно, що бот працює, а не завис."""
+    task = asyncio.ensure_future(asyncio.to_thread(func, *args))
+    done, _ = await asyncio.wait({task}, timeout=PROGRESS_AFTER_SECONDS)
+    if not done:
+        message_id = (update.callback_query.message.message_id if update.callback_query
+                      else context.user_data.get("panel_message_id"))
+        if message_id:
+            try:
+                await context.bot.edit_message_text(chat_id=update.effective_chat.id, message_id=message_id,
+                                                    text=text)
+            except Exception as e:
+                log.debug("Не вдалося показати «⏳»: %s", e)
+    return await task
+
+
 async def _delete_quietly(bot, chat_id, message_id):
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
@@ -255,7 +275,8 @@ async def repost_panel(app, chat_id):
         return
     if state.get("main_menu"):
         # Головне меню — свіжий текст і кнопки (напр. новий лічильник «🔥 Вигідні пропозиції»)
-        state = dict(state, text=main_menu_text(chat_id), markup=build_main_menu(chat_id))
+        text, markup = await menu_parts(chat_id)
+        state = dict(state, text=text, markup=markup)
         user_data["panel_state"] = state
     try:
         msg = await app.bot.send_message(
@@ -279,9 +300,16 @@ async def notify(app, chat_id, text, reply_markup=None, parse_mode=None):
     app.bot_data.setdefault("chats_to_repost_panel", set()).add(chat_id)
 
 
+async def menu_parts(user_id):
+    """(текст, кнопки) головного меню — у потоці: лічильники (🔥, 📉) рахуються з бази,
+    і поки вони рахуються, інші кнопки не мають чекати."""
+    return await asyncio.to_thread(lambda: (main_menu_text(user_id), build_main_menu(user_id)))
+
+
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await show_panel(update, context, main_menu_text(user_id), reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
+    text, markup = await menu_parts(user_id)
+    await show_panel(update, context, text, reply_markup=markup, parse_mode=ParseMode.HTML)
     context.user_data["panel_state"]["main_menu"] = True  # при перенесенні — перемалювати (лічильник 🔥)
 
 
@@ -316,13 +344,13 @@ async def refresh_owner_menu(bot):
     """Оновлює ОДНЕ й те саме повідомлення з меню власника, а не плодить нові."""
     if config.OWNER_TELEGRAM_ID == 0:
         return
-    kb = build_main_menu(config.OWNER_TELEGRAM_ID)
+    owner_text, kb = await menu_parts(config.OWNER_TELEGRAM_ID)
     msg_id = _owner_notice_state["message_id"]
     if msg_id:
         try:
             await bot.edit_message_text(
                 chat_id=config.OWNER_TELEGRAM_ID, message_id=msg_id,
-                text=main_menu_text(config.OWNER_TELEGRAM_ID), reply_markup=kb, parse_mode=ParseMode.HTML,
+                text=owner_text, reply_markup=kb, parse_mode=ParseMode.HTML,
             )
             return
         except Exception as e:
@@ -331,7 +359,7 @@ async def refresh_owner_menu(bot):
     try:
         msg = await bot.send_message(
             chat_id=config.OWNER_TELEGRAM_ID,
-            text=main_menu_text(config.OWNER_TELEGRAM_ID),
+            text=owner_text,
             reply_markup=kb,
             parse_mode=ParseMode.HTML,
         )

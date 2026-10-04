@@ -670,15 +670,19 @@ async def _recalculate_watch_medians(w: dict, replace_existing=False):
     if not items:
         return [], {}, []
 
-    new_count = await asyncio.to_thread(update_listing_observations, w["id"], items, window_start, present_ids)
-    record_scan_stats(w["id"], len(present_ids or ()), len(items), new_count or 0)
-    existing_keys = {(s["cond_group"], s["spec_group"]) for s in get_market_stats(w["id"])}
-    stats = _compute_group_stats(w["id"], items)
+    def _save_and_compute():
+        """Запис спостережень і статистика груп — лише база, у потоці (кнопки не чекають)."""
+        new_count = update_listing_observations(w["id"], items, window_start, present_ids)
+        record_scan_stats(w["id"], len(present_ids or ()), len(items), new_count or 0)
+        existing_keys = {(s["cond_group"], s["spec_group"]) for s in get_market_stats(w["id"])}
+        stats = _compute_group_stats(w["id"], items)
 
-    delete_market_stats_except(w["id"], set(stats))
-    for (cond, spec), s in stats.items():
-        upsert_market_stats(w["id"], cond, spec, s["median_price"], s["sample_size"],
-                            s["sale_price"], s["sale_source"])
-    record_price_history(w["id"], stats.values())
-    newly = [key for key in stats if key not in existing_keys]
+        delete_market_stats_except(w["id"], set(stats))
+        for (cond, spec), s in stats.items():
+            upsert_market_stats(w["id"], cond, spec, s["median_price"], s["sample_size"],
+                                s["sale_price"], s["sale_source"])
+        record_price_history(w["id"], stats.values())
+        return stats, [key for key in stats if key not in existing_keys]
+
+    stats, newly = await asyncio.to_thread(_save_and_compute)
     return items, stats, newly

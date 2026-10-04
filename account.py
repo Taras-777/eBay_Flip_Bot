@@ -120,6 +120,7 @@ def _settings_keyboard(chat_id=None):
         rows.append([InlineKeyboardButton(
             "💰 Ціна для знахідок: " + ("лише за продажами ✅" if get_sold_only(chat_id) else "продажі або оголошення"),
             callback_data="soldonly")])
+    rows.append([InlineKeyboardButton("🐢 Журнал повільних дій", callback_data="slowlog")])
     rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
     rows.append(BACK_ROW)
     return InlineKeyboardMarkup(rows)

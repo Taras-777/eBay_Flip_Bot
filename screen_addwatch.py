@@ -26,9 +26,8 @@ from market import suggest_min_price
 from panel import (
     refresh_usage_callback,
     _ack_callback,
-    build_main_menu,
+    menu_parts,
     cancel_keyboard,
-    main_menu_text,
     show_main_menu,
     show_panel,
 )
@@ -410,22 +409,22 @@ async def _finalize_watch(update, context):
         extras.append(f"🧾 Обов'язкові характеристики: {html.escape(aspects_label(aspects), quote=False)}")
     extras_txt = ("\n" + "\n".join(extras)) if extras else ""
 
-    user_id = update.effective_user.id
+    menu_text, menu_kb = await menu_parts(update.effective_user.id)
     text = (
         f"✅ Товар «{html.escape(query)}» додано."
-        f"{extras_txt}\n\n{main_menu_text(update.effective_user.id)}"
+        f"{extras_txt}\n\n{menu_text}"
     )
-    await show_panel(update, context, text, reply_markup=build_main_menu(user_id), parse_mode=ParseMode.HTML)
+    await show_panel(update, context, text, reply_markup=menu_kb, parse_mode=ParseMode.HTML)
     return ConversationHandler.END
 
 
 async def addwatch_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _clear_new_watch(context)
-    user_id = update.effective_user.id
+    menu_text, menu_kb = await menu_parts(update.effective_user.id)
     await show_panel(
         update, context,
-        f"Скасовано.\n\n{main_menu_text(update.effective_user.id)}",
-        reply_markup=build_main_menu(user_id),
+        f"Скасовано.\n\n{menu_text}",
+        reply_markup=menu_kb,
         parse_mode=ParseMode.HTML,
     )
     return ConversationHandler.END

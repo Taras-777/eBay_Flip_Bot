@@ -24,7 +24,7 @@ from db import (
     set_deal_status,
 )
 from market import estimate_resale_profit
-from panel import _ack_callback, show_panel
+from panel import _ack_callback, run_with_progress, show_panel
 from access import require_access
 from sales import sales_note
 from deal_check import recheck_shown_deals
@@ -105,13 +105,14 @@ def _deal_card(n, d, sold=None):
 async def _render_deals(update, context, page=0, note=""):
     chat_id = update.effective_chat.id
     # «Продати» — за теперішньою статистикою ринку, а не за тією, що була в момент знахідки
-    repriced = await asyncio.to_thread(reprice_deals, chat_id)
+    repriced = await run_with_progress(update, context, "🔥 ⏳ Перераховую ціни…", reprice_deals, chat_id)
     if repriced:
         reprice_note = (f"🔄 Ціни продажу перераховано за свіжими даними — прибрано невигідних: {repriced}")
         note = f"{note}\n{reprice_note}" if note else reprice_note
     deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     # Перед показом — чи ці лоти ще продаються (вигідні розкуповують швидко)
-    removed = await asyncio.to_thread(recheck_shown_deals, [d["id"] for d in deals]) if deals else 0
+    removed = await run_with_progress(update, context, "🔥 ⏳ Перевіряю на eBay, чи оголошення ще продаються…",
+                                      recheck_shown_deals, [d["id"] for d in deals]) if deals else 0
     if deals:   # свіжі дані після перевірки (зокрема «👁 стежать»)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     if removed:

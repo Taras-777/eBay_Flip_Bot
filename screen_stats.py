@@ -6,6 +6,7 @@
 Усе — з бази, без запитів до eBay.
 """
 
+import asyncio
 import html
 import statistics
 import time
@@ -136,7 +137,7 @@ async def stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_stats(update, context):
     await _ack_callback(update)
-    text = stats_text(update.effective_chat.id)
+    text = await asyncio.to_thread(stats_text, update.effective_chat.id)
     rows = [[InlineKeyboardButton("💡 Статистика «Що перепродавати»", callback_data="stats:d0")],
             [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
@@ -144,7 +145,7 @@ async def show_stats(update, context):
 
 async def show_discovery_stats(update, context, page=0):
     await _ack_callback(update)
-    text, pages, page = discovery_stats_text(update.effective_chat.id, page)
+    text, pages, page = await asyncio.to_thread(discovery_stats_text, update.effective_chat.id, page)
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"stats:d{page - 1}"))

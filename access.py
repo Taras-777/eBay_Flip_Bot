@@ -219,9 +219,10 @@ async def delete_user_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     if list_users(status="approved"):
         await _show_users(update, context, note=f"🗑 {name} видалено.")
     else:
-        from panel import build_main_menu, main_menu_text  # головне меню — вже без «👥 Користувачі»
-        await show_panel(update, context, f"🗑 {name} видалено.\n\n" + main_menu_text(update.effective_user.id),
-                         reply_markup=build_main_menu(update.effective_user.id), parse_mode="HTML")
+        from panel import menu_parts  # головне меню — вже без «👥 Користувачі»
+        menu_text, menu_kb = await menu_parts(update.effective_user.id)
+        await show_panel(update, context, f"🗑 {name} видалено.\n\n" + menu_text,
+                         reply_markup=menu_kb, parse_mode="HTML")
         context.user_data["panel_state"]["main_menu"] = True
 
 
