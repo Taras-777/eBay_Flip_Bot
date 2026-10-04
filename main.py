@@ -31,6 +31,7 @@ from account import (
 from action_log import TimedApplication, slowlog_callback
 from concurrency import DialogSafeUpdateProcessor
 from screen_notices import notices_callback
+from screen_unknown import unknown_callback
 from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from handlers import (
     ASK_ASPECT,
@@ -228,6 +229,7 @@ def main():
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear)?$"))
+    app.add_handler(CallbackQueryHandler(unknown_callback, pattern="^unk[a-z]*:"))
     app.add_handler(CallbackQueryHandler(notices_callback, pattern="^ntc:(\\d+|clear)$"))
     app.add_handler(CallbackQueryHandler(backup_send_callback, pattern="^backup:send$"))
     app.add_handler(CommandHandler("list", cmd_list))

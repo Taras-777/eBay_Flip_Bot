@@ -321,6 +321,22 @@ CREATE TABLE IF NOT EXISTS notices (
     seen_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_notices_chat ON notices (chat_id, id);
+CREATE TABLE IF NOT EXISTS manual_specs (
+    item_id TEXT PRIMARY KEY,
+    spec_group TEXT NOT NULL,
+    at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS review_items (
+    watch_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT,
+    price REAL,
+    url TEXT,
+    note TEXT,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (watch_id, item_id)
+);
 """
 
 
@@ -2132,3 +2148,62 @@ def mark_notices_seen(ids):
 def clear_notices(chat_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM notices WHERE chat_id = ?", (chat_id,))
+
+
+# ---------- 🛠 Нерозпізнані оголошення ----------
+
+def save_manual_spec(item_id, spec_group):
+    """Клас/конфігурацію оголошення вказав користувач — бот її не перезаписує."""
+    with get_conn() as conn:
+        conn.execute("""INSERT INTO manual_specs (item_id, spec_group, at) VALUES (?, ?, ?)
+                        ON CONFLICT(item_id) DO UPDATE SET spec_group = excluded.spec_group, at = excluded.at""",
+                     (item_id, spec_group, int(time.time())))
+
+
+def get_manual_specs(item_ids=None):
+    """{item_id: конфігурація, вказана вручну}; item_ids=None — усі."""
+    with get_conn() as conn:
+        if item_ids is None:
+            rows = conn.execute("SELECT item_id, spec_group FROM manual_specs").fetchall()
+        else:
+            ids = list(item_ids)
+            rows = []
+            for start in range(0, len(ids), 500):
+                part = ids[start:start + 500]
+                rows += conn.execute(f"SELECT item_id, spec_group FROM manual_specs WHERE item_id IN "
+                                     f"({','.join('?' * len(part))})", part).fetchall()
+    return {r["item_id"]: r["spec_group"] for r in rows}
+
+
+def set_review(watch_id, item_id, status, title=None, price=None, url=None, note=None):
+    """status: 'keep' — «👌 Залишити як є», 'flag' — «🚩 Для розробника»."""
+    with get_conn() as conn:
+        conn.execute("""INSERT INTO review_items (watch_id, item_id, status, title, price, url, note, at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(watch_id, item_id) DO UPDATE SET status = excluded.status,
+                          title = excluded.title, price = excluded.price, url = excluded.url,
+                          note = excluded.note, at = excluded.at""",
+                     (watch_id, item_id, status, title, price, url, note, int(time.time())))
+
+
+def get_reviewed_ids(watch_id):
+    with get_conn() as conn:
+        return {r["item_id"] for r in conn.execute("SELECT item_id FROM review_items WHERE watch_id = ?",
+                                                   (watch_id,)).fetchall()}
+
+
+def get_flagged(watch_id):
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM review_items WHERE watch_id = ? AND status = 'flag' ORDER BY at", (watch_id,)).fetchall()]
+
+
+def clear_flagged(watch_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM review_items WHERE watch_id = ? AND status = 'flag'", (watch_id,))
+
+
+def forget_seen_item(watch_id, item_id):
+    """Оголошення оціниться заново наступного циклу (напр. після того, як користувач вказав клас)."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM seen_items WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))

@@ -6,7 +6,7 @@ import asyncio
 import html
 import statistics
 
-from laptops import spec_matches
+from laptops import scoped_label, spec_matches
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
@@ -226,6 +226,15 @@ def _learned_excluded(watch_id):
     return sorted(w for w, st in get_learned_words(watch_id).items() if st == "excluded")
 
 
+def _count_unrecognized(watch):
+    from unrecognized import count_unrecognized
+    try:
+        return count_unrecognized(watch)
+    except Exception as e:   # лічильник не має ламати екран товару
+        log.debug("Не вдалося порахувати нерозпізнані: %s", e)
+        return 0
+
+
 async def _show_watch_details(update, context, watch, note=""):
     watch_id = watch["id"]
     learned = _learned_excluded(watch_id)
@@ -238,6 +247,9 @@ async def _show_watch_details(update, context, watch, note=""):
         ],
         [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")],
     ]
+    unknown = await asyncio.to_thread(_count_unrecognized, watch)
+    if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
+        rows.append([InlineKeyboardButton(f"🛠 Нерозпізнані ({unknown})", callback_data=f"unk:{watch_id}:0")])
     if learned:   # кнопка лише коли є що прибирати
         rows.append([InlineKeyboardButton(f"🧠 Вивчені слова ({len(learned)})",
                                           callback_data=f"lwords:{watch_id}")])
@@ -362,7 +374,10 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     def spec_label(spec, short=False):
         if spec == "*":
             return "усі" if short else "усі конфігурації"
-        return ("без конфігурації" if short else "конфігурація не вказана") if spec == "unspecified" else spec
+        if spec == "unspecified":
+            return "без конфігурації" if short else "конфігурація не вказана"
+        # Ширша група з ціною («RTX 5050») — з поясненням «· усі процесори»; точні з «Інших» — як є
+        return spec if show_small else scoped_label(spec)
 
     title = "інші конфігурації" if show_small else "конфігурації з ціною"
     lines = [

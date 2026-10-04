@@ -46,6 +46,7 @@ from textparse import (
     spec_required_by_default,
 )
 from db import (
+    get_manual_specs,
     delete_listing_obs_by_ids,
     get_all_listing_rows,
     get_bin_prices,
@@ -217,6 +218,17 @@ def suggest_min_price(query, category_ids=None, condition_ids=DEFAULT_CONDITION_
 
 
 def _annotate_items(items, max_lookups=0, watch=None):
+    """Конфігурація кожного оголошення (див. _annotate_items_auto); якщо користувач у «🛠 Нерозпізнані»
+    вказав її вручну — береться його вибір."""
+    _annotate_items_auto(items, max_lookups=max_lookups, watch=watch)
+    manual = get_manual_specs([it["item_id"] for it in items if it.get("item_id")])
+    for it in items:
+        if it.get("item_id") in manual:
+            it["spec_group"] = manual[it["item_id"]]
+    return items
+
+
+def _annotate_items_auto(items, max_lookups=0, watch=None):
     """
     Визначає конфігурацію кожного лота і, де потрібно, завантажує його
     характеристики (it["aspects"]; None — не завантажені).
@@ -556,11 +568,13 @@ def reclassify_items(item_ids):
     ids = set(item_ids)
     cached = get_cached_specs(list(ids))
     changed = set()
+    manual = get_manual_specs(ids)
     for r in get_spec_rows_for_items(ids):
         if r["watch_id"] not in laptops:
             continue
         entry = cached.get(r["item_id"])
-        new = laptop_spec(r["title"] or "", entry[1] if entry else None, query=laptops[r["watch_id"]].get("query") or "")
+        new = manual.get(r["item_id"]) or laptop_spec(r["title"] or "", entry[1] if entry else None,
+                                                      query=laptops[r["watch_id"]].get("query") or "")
         if new != r["spec_group"] and new != "unspecified":
             set_listing_spec(r["watch_id"], r["item_id"], new)
             changed.add(r["watch_id"])
@@ -597,12 +611,15 @@ def normalize_saved_specs():
     for start in range(0, len(laptop_items), 500):
         cached.update(get_cached_specs(laptop_items[start:start + 500]))
     changed_watches, changed, foreign = set(), 0, {}
+    manual = get_manual_specs()   # вказане вручну в «🛠 Нерозпізнані» — не перезаписуємо
     for r in rows:
         watch = watches.get(r["watch_id"]) or {}
         if console_foreign(r["title"] or "", watch.get("query") or ""):
             foreign.setdefault(r["watch_id"], []).append(r["item_id"])
             continue
-        if r["watch_id"] in laptop_ids:
+        if r["item_id"] in manual:
+            new = manual[r["item_id"]]
+        elif r["watch_id"] in laptop_ids:
             entry = cached.get(r["item_id"])
             new = laptop_spec(r["title"] or "", entry[1] if entry else None, query=watch.get("query") or "")
             if new == "unspecified" and r["spec_group"] not in (None, "unspecified") and not entry:

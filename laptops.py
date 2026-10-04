@@ -342,6 +342,48 @@ def laptop_spec(title, aspects=None, query=""):
     return SEP.join(p for p in parts if p)
 
 
+def _first(*pairs):
+    for value, source in pairs:
+        if value:
+            return value, source
+    return None, None
+
+
+def class_sources(title, aspects=None, query=""):
+    """Як бот визначив частини класу ноутбука: [(частина, значення або None, звідки)].
+    Для «🛠 Нерозпізнані»: видно, чого бракує і де бот шукав."""
+    aspects = aspects or {}
+    t = _plain(title)
+    spec = laptop_spec(title, aspects, query)
+    parts = spec.split(SEP) if spec != "unspecified" else []
+    ram = _first((_sizes(t)[0], "назва"), (_sizes(_aspect(aspects, RAM_ASPECTS) + " RAM")[0], "характеристики"),
+                 (_sizes(_aspect(aspects, {DESC_RAM_ASPECT}) + " RAM")[0], "опис"))
+    ram = (_size_label(ram[0]) if ram[0] else None, ram[1])
+    if parts and _MAC_CHIP.fullmatch(parts[0]):
+        _, chip_src = _first((extract_cpu_token(t), "назва"),
+                             (extract_cpu_token(_aspect(aspects, CPU_ASPECTS)), "характеристики"),
+                             (extract_cpu_token(_aspect(aspects, {DESC_CPU_ASPECT})), "опис"))
+        screen = _first((_screen(t, {}), "назва"),
+                        (_screen("", {k: v for k, v in aspects.items() if k in SCREEN_ASPECTS}), "характеристики"),
+                        (aspects.get(DESC_SCREEN_ASPECT), "опис"))
+        if screen[0] is None and len(parts) > 1 and parts[1].endswith('"'):
+            screen = (parts[1], "типово для моделі")
+        ssd = _first((_sizes(t)[1], "назва"), (_sizes(_aspect(aspects, SSD_ASPECTS))[1], "характеристики"),
+                     (_sizes(_aspect(aspects, {DESC_SSD_ASPECT}))[1], "опис"))
+        ssd = (_size_label(_apple_ssd(ssd[0])) if ssd[0] else None, ssd[1])
+        return [("чип", parts[0], chip_src), ("екран", *screen), ("RAM", *ram), ("SSD", *ssd)]
+    gpu = _first((detect_gpu(t), "назва"), (detect_gpu(_aspect(aspects, GPU_ASPECTS)), "характеристики"),
+                 (detect_gpu(_aspect(aspects, {DESC_GPU_ASPECT})), "опис"))
+    cpu = _first((_cpu_class(t), "назва"), (_cpu_class("", _aspect(aspects, CPU_ASPECTS)), "характеристики"),
+                 (_cpu_class("", _aspect(aspects, {DESC_CPU_ASPECT})), "опис"))
+    return [("відеокарта", *gpu), ("процесор", *cpu), ("RAM", *ram)]
+
+
+def sources_line(sources):
+    """«відеокарта: RTX 4060 (характеристики) · процесор: ❓ · RAM: 16GB (назва)»."""
+    return " · ".join(f"{name}: {value} ({src})" if value else f"{name}: ❓" for name, value, src in sources)
+
+
 def needs_aspects(spec):
     """Ноутбук, про відеокарту якого з назви нічого не відомо, — варто глянути характеристики."""
     return spec == "unspecified" or spec.startswith(UNKNOWN_GPU)
@@ -363,6 +405,37 @@ def wants_aspects(spec):
     has_cpu = any(_FULL_CPU.search(p) for p in parts[1:])
     has_ram = any(_RAM_PART.fullmatch(p) for p in parts[1:])
     return not (has_cpu and has_ram)
+
+
+_MAC_CHIP = re.compile(r"M\d+( Pro| Max| Ultra| Pro/Max \?)?")
+_WIN_GPU = re.compile(r"(RTX|GTX|RX|MX|Arc) .+|iGPU")
+_RAM_LABEL = re.compile(r"\d+GB\+?")
+
+
+def group_scope(spec):
+    """Для ширшої групи ноутбуків — чого вона не уточнює: «RTX 5050» → «усі процесори»,
+    «RTX 3050 · i5 14 gen» → «уся RAM», «M4 Pro · 14"» → «уся RAM». Для повного класу чи
+    не ноутбука — порожньо."""
+    if not spec or spec in ("*", "unspecified"):
+        return ""
+    parts = spec.split(SEP)
+    if _MAC_CHIP.fullmatch(parts[0]):
+        if len(parts) >= 2 and not parts[1].endswith('"'):
+            return ""          # екрана немає, а далі RAM/SSD — це точний клас, а не ширша група
+        if len(parts) >= 3 and not _RAM_LABEL.fullmatch(parts[2]):
+            return ""
+        return ("усі екрани", "уся RAM", "усі SSD", "")[min(len(parts), 4) - 1]
+    if _WIN_GPU.fullmatch(parts[0]):
+        if len(parts) >= 2 and _RAM_LABEL.fullmatch(parts[1]):
+            return ""          # процесор невідомий, RAM відома — точний клас
+        return ("усі процесори", "уся RAM", "")[min(len(parts), 3) - 1]
+    return ""
+
+
+def scoped_label(spec):
+    """Назва групи з поясненням для ширших груп: «RTX 5050 · усі процесори»."""
+    scope = group_scope(spec)
+    return f"{spec}{SEP}{scope}" if scope else spec
 
 
 def spec_parents(spec):

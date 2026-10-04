@@ -780,8 +780,9 @@ CONDITION_LABELS = {"new": "нові", "used": "вживані", "unknown": "с�
 
 
 def _group_label(cond, spec):
+    from laptops import scoped_label   # тут, бо laptops сам імпортує textparse
     cond_txt = CONDITION_LABELS.get(cond, cond)
-    spec_txt = "усі конфігурації" if spec == "*" else spec
+    spec_txt = "усі конфігурації" if spec == "*" else scoped_label(spec)
     return f"{cond_txt}, {spec_txt}"
 
 
