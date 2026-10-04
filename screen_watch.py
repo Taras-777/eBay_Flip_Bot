@@ -5,6 +5,8 @@
 import asyncio
 import html
 import statistics
+
+from laptops import spec_matches
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
@@ -311,7 +313,6 @@ async def watch_details_callback(update: Update, context: ContextTypes.DEFAULT_T
     await _show_watch_details(update, context, watch)
 
 
-SMALL_GROUP_SIZE = 2       # групи з 1–2 оголошеннями — під «📂 Інші конфігурації»
 MAX_CONFIG_BUTTONS = 25
 
 
@@ -340,61 +341,70 @@ async def all_configs_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    groups: dict = {}
+    # Основні групи — ті самі, що в «💰 Купівля і продаж» на екрані товару (з ціною, ≥ MIN_SAMPLE_SIZE
+    # оголошень; разом із ширшими класами); решта точних конфігурацій — у «📂 Інші конфігурації»
+    exact: dict = {}
     for row in listings:
-        groups.setdefault((row["cond_group"], row["spec_group"]), []).append(row["price"])
+        exact.setdefault((row["cond_group"], row["spec_group"]), []).append(row["price"])
+    market_keys = [(m["cond_group"], m["spec_group"]) for m in sorted(
+        get_market_stats(watch_id), key=lambda m: (m["cond_group"], m["spec_group"] != "*", m["spec_group"]))]
+    main = []
+    for cond, spec in market_keys:
+        prices = [r["price"] for r in listings if r["cond_group"] == cond and spec_matches(r["spec_group"], spec)]
+        if prices:
+            main.append(((cond, spec), prices))
+    main_set = {key for key, _ in main}
+    others = sorted(((k, p) for k, p in exact.items() if k not in main_set),
+                    key=lambda kv: (kv[0][0], -len(kv[1]), statistics.median(kv[1])))
     show_small = query_cb.data.endswith(":other")
-    # Найбільші групи — вгорі; дрібні (1–2 оголошення) — під кнопкою «📂 Інші конфігурації»
-    ordered = sorted(groups.items(), key=lambda kv: (kv[0][0], -len(kv[1]), statistics.median(kv[1])))
-    big = [kv for kv in ordered if len(kv[1]) > SMALL_GROUP_SIZE]
-    small = [kv for kv in ordered if len(kv[1]) <= SMALL_GROUP_SIZE]
-    shown = small if show_small else big
+    shown = others if show_small else main
 
-    title = "дрібні конфігурації" if show_small else "усі конфігурації"
+    def spec_label(spec, short=False):
+        if spec == "*":
+            return "усі" if short else "усі конфігурації"
+        return ("без конфігурації" if short else "конфігурація не вказана") if spec == "unspecified" else spec
+
+    title = "інші конфігурації" if show_small else "конфігурації з ціною"
     lines = [
         f"🧩 <b>{html.escape(watch['label'])}: {title}</b>",
         f"Оголошень в останньому скануванні: <b>{len(listings)}</b>",
     ]
     if show_small:
-        lines.append(f"<i>Групи, де лише 1–{SMALL_GROUP_SIZE} оголошення: окремої ціни в них немає, "
-                     "вони порівнюються з ширшою групою.</i>")
+        lines.append(f"<i>Тут менше {MIN_SAMPLE_SIZE} оголошень (або невідома відеокарта): окремої ціни немає, "
+                     "такі оголошення порівнюються з ширшою групою свого стану.</i>")
+    else:
+        lines.append("<i>Ті самі групи, що в «💰 Купівля і продаж» на екрані товару.</i>")
     current_cond = None
     for (cond, spec), prices in shown:
         if cond != current_cond:
             current_cond = cond
             lines.append(f"\n<b>{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())}</b>")
-        spec_txt = "конфігурація не вказана" if spec == "unspecified" else spec
-        mark = "" if len(prices) >= MIN_SAMPLE_SIZE else " ⚠️"
         lines.append(
-            f"• <b>{html.escape(spec_txt)}</b>{mark} — {len(prices)} огол., "
+            f"• <b>{html.escape(spec_label(spec))}</b> — {len(prices)} огол., "
             f"від {min(prices):.0f}€, типова {statistics.median(prices):.0f}€"
         )
-    if not show_small and small:
-        lines.append(f"\n📂 Ще {plural(len(small), 'дрібна конфігурація', 'дрібні конфігурації', 'дрібних конфігурацій')} "
-                     f"(по 1–{SMALL_GROUP_SIZE} оголошення) — кнопка «📂 Інші конфігурації».")
-    lines.append(
-        f"\n<i>⚠️ — менше {MIN_SAMPLE_SIZE} оголошень: окремої оцінки «купити/продати» немає, "
-        "оголошення цієї конфігурації порівнюються з ширшою групою свого стану.</i>\n"
-        "Натисни групу нижче, щоб побачити її найдешевші оголошення."
-    )
+    if not shown:
+        lines.append("\nТут поки порожньо." if show_small else
+                     f"\nГруп з ціною ще немає — у жодній конфігурації поки немає {MIN_SAMPLE_SIZE} оголошень.")
+    if not show_small and others:
+        lines.append(f"\n📂 Ще {plural(len(others), 'конфігурація', 'конфігурації', 'конфігурацій')} "
+                     f"без окремої ціни — кнопка «📂 Інші конфігурації».")
+    lines.append("\nНатисни групу нижче, щоб побачити її найдешевші оголошення.")
 
-    # Кнопки перегляду оголошень: спершу "усі" для кожного стану, потім конфігурації
     choices = []
-    if not show_small:
-        for cond in sorted({cond for cond, _ in groups}):
-            count = sum(len(p) for (c, _), p in groups.items() if c == cond)
-            choices.append(((cond, "*"), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} — усі ({count})"))
     for (cond, spec), prices in shown:
-        spec_txt = "без конфігурації" if spec == "unspecified" else spec
-        choices.append(((cond, spec), f"🔎 {CONDITION_LABELS.get(cond, cond).capitalize()} · {spec_txt} ({len(prices)})"))
+        cond_txt = CONDITION_LABELS.get(cond, cond).capitalize()
+        label = f"🔎 {cond_txt} — усі ({len(prices)})" if spec == "*" else \
+            f"🔎 {cond_txt} · {spec_label(spec, short=True)} ({len(prices)})"
+        choices.append(((cond, spec), label))
     choices = choices[:MAX_CONFIG_BUTTONS]
     context.user_data[f"cfg_groups_{watch_id}"] = [key for key, _ in choices]
     rows = [[InlineKeyboardButton(label[:60], callback_data=f"cfgl:{watch_id}:{i}")]
             for i, (_, label) in enumerate(choices)]
     if show_small:
         back_rows = [[InlineKeyboardButton("◀️ До конфігурацій", callback_data=f"configs:{watch_id}")]] + back_rows
-    elif small:
-        rows.append([InlineKeyboardButton(f"📂 Інші конфігурації ({len(small)})",
+    elif others:
+        rows.append([InlineKeyboardButton(f"📂 Інші конфігурації ({len(others)})",
                                           callback_data=f"configs:{watch_id}:other")])
     await show_panel(
         update, context, "\n".join(lines),

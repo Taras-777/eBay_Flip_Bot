@@ -419,24 +419,28 @@ def test_macbook_ssd_rounding_default_screen_and_suspicious_16():
     assert laptops.wants_aspects('M4 · 14"') and not laptops.wants_aspects('M4 · 14" · 16GB · 512GB')
 
 
-def test_configs_screen_folds_small_groups(monkeypatch):
+def test_configs_screen_shows_priced_groups_first(monkeypatch):
     from test_sales import _screen
     wid = db.add_watch(1, "MacBook Pro M4", "MacBook Pro M4", "", "", 15)
-    obs = [{"item_id": f"b{i}", "cond_group": "new", "spec_group": 'M4 Pro · 14" · 24GB · 512GB',
-            "total_price": 1800 + i} for i in range(4)]
+    big = 'M4 Pro · 14" · 24GB · 512GB'
+    obs = [{"item_id": f"b{i}", "cond_group": "new", "spec_group": big, "total_price": 1800 + i} for i in range(8)]
     obs += [{"item_id": "s1", "cond_group": "new", "spec_group": "M4", "total_price": 1500},
             {"item_id": "s2", "cond_group": "new", "spec_group": 'M4 · 14"', "total_price": 1600}]
     db.update_listing_observations(wid, obs)
+    db.upsert_market_stats(wid, "new", "*", 1800, 10, sale_price=1750, sale_source="x")
+    db.upsert_market_stats(wid, "new", big, 1804, 8, sale_price=1790, sale_source="x")
+    db.upsert_market_stats(wid, "new", "M4 Pro", 1804, 8, sale_price=1790, sale_source="x")
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press(f"configs:{wid}")
     asyncio.run(handlers.all_configs_callback(upd, ctx))
     text, buttons = shown[-1]
-    assert "Нові · M4 Pro · 14\" · 24GB · 512GB (4)" in " ".join(buttons)
+    # Як у «💰 Купівля і продаж»: «усі», потім класи з ціною (разом із ширшим «M4 Pro»)
+    assert buttons[:3] == ["🔎 Нові — усі (10)", "🔎 Нові · M4 Pro (8)", f"🔎 Нові · {big} (8)"]
     assert "📂 Інші конфігурації (2)" in buttons and not any("· M4 (1)" in b for b in buttons)
     upd, ctx = press(f"configs:{wid}:other")
     asyncio.run(handlers.all_configs_callback(upd, ctx))
     text, buttons = shown[-1]
-    assert "дрібні конфігурації" in text and any("· M4 (1)" in b for b in buttons)
+    assert "інші конфігурації" in text and any("· M4 (1)" in b for b in buttons)
     assert "◀️ До конфігурацій" in buttons and not any("усі (" in b for b in buttons)
 
 
