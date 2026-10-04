@@ -1,7 +1,8 @@
 """
 Екран «🛠 Нерозпізнані» (кнопка на екрані товару, лише коли такі оголошення є).
 
-unk:<товар>:<сторінка>          — список (по 5, до 50 найцікавіших)
+unkall:0                        — з головного меню: товари з кількістю нерозпізнаних
+unk:<товар>:<сторінка>[:m|:w]   — список (по 5, до 50 найцікавіших); m/w — відкрито з меню / з товару
 unkm:<товар>:<№>                — «✏️ Вказати вручну»: варіанти класу
 unks:<товар>:<№>:<варіант>      — зберегти обраний клас
 unkk / unkr / unkf:<товар>:<№>  — «👌 Залишити як є» / «❌ Інший товар» / «🚩 Для розробника»
@@ -17,7 +18,7 @@ from telegram.ext import ContextTypes
 
 from db import get_watch
 from learning import learned_words_note, reject_and_learn
-from panel import _ack_callback, show_panel
+from panel import _ack_callback, run_with_progress, show_panel
 from access import require_access
 from textparse import _group_label, plural
 from unrecognized import (
@@ -28,6 +29,8 @@ from unrecognized import (
     developer_report,
     flag_for_developer,
     keep_as_is,
+    drop_unavailable,
+    unrecognized_by_watch,
     unrecognized_items,
 )
 
@@ -55,10 +58,20 @@ def _card(n, it):
 
 async def _render(update, context, watch, page=0, note=""):
     items = await asyncio.to_thread(unrecognized_items, watch)
-    _, flagged = await asyncio.to_thread(developer_report, watch)
-    context.user_data[_key(watch["id"])] = {"items": items, "page": page}
     pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
     page = min(max(page, 0), pages - 1)
+    # Продані й завершені не показуємо: оголошення сторінки — перевірка на eBay (не частіше раз на 30 хв)
+    shown = items[page * PER_PAGE:(page + 1) * PER_PAGE]
+    removed = await run_with_progress(update, context, "🛠 ⏳ Перевіряю на eBay, чи оголошення ще продаються…",
+                                      drop_unavailable, watch, shown) if shown else 0
+    if removed:
+        items = await asyncio.to_thread(unrecognized_items, watch)
+        pages = max(1, (len(items) + PER_PAGE - 1) // PER_PAGE)
+        page = min(page, pages - 1)
+        gone = f"🗑 Прибрано вже проданих чи завершених: {removed}"
+        note = f"{note}\n{gone}" if note else gone
+    _, flagged = await asyncio.to_thread(developer_report, watch)
+    context.user_data[_key(watch["id"])] = {"items": items, "page": page}
     context.user_data[_key(watch["id"])]["page"] = page
     shown = items[page * PER_PAGE:(page + 1) * PER_PAGE]
     wid = watch["id"]
@@ -92,7 +105,28 @@ async def _render(update, context, watch, page=0, note=""):
         rows.append(nav)
     if flagged:
         rows.append([InlineKeyboardButton(f"📋 Для розробника ({flagged})", callback_data=f"unkrep:{wid}")])
-    rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{wid}")])
+    if context.user_data.get("unk_origin") == "menu":
+        rows.append([InlineKeyboardButton("◀️ До всіх товарів", callback_data="unkall:0"),
+                     InlineKeyboardButton("📌 До товару", callback_data=f"watch_details:{wid}")])
+    else:
+        rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{wid}")])
+    await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+
+
+async def _render_all(update, context):
+    """З головного меню: товари, де є нерозпізнані оголошення, — від найбільшої кількості."""
+    per_watch = await asyncio.to_thread(unrecognized_by_watch, update.effective_chat.id)
+    total = sum(n for _, n in per_watch)
+    lines = [f"🛠 <b>Нерозпізнані оголошення</b> ({total})",
+             "<i>Оголошення, клас яких бот не визначив повністю навіть після назви, характеристик і опису. "
+             "Обери товар — там можна вказати клас вручну, залишити як є, прибрати чи надіслати "
+             "приклад розробнику.</i>"]
+    if not per_watch:
+        lines.append("Усе розпізнано 👍")
+    rows = [[InlineKeyboardButton(f"📦 {w['label']} ({n})"[:60], callback_data=f"unk:{w['id']}:0:m")]
+            for w, n in per_watch]
+    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
 
@@ -107,12 +141,17 @@ def _item(context, watch_id, index):
 async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _ack_callback(update)
     parts = update.callback_query.data.split(":")
+    if parts[0] == "unkall":
+        context.user_data["unk_origin"] = "menu"
+        return await _render_all(update, context)
     action, wid = parts[0], int(parts[1])
     watch = get_watch(wid, update.effective_chat.id)
     if watch is None:
         return
 
     if action == "unk":
+        if len(parts) > 3:   # звідки відкрито — щоб «◀️» вела назад туди ж
+            context.user_data["unk_origin"] = "menu" if parts[3] == "m" else "watch"
         return await _render(update, context, watch, int(parts[2]) if len(parts) > 2 else 0)
     if action == "unkrep":
         text, count = await asyncio.to_thread(developer_report, watch)

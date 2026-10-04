@@ -249,7 +249,7 @@ async def _show_watch_details(update, context, watch, note=""):
     ]
     unknown = await asyncio.to_thread(_count_unrecognized, watch)
     if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
-        rows.append([InlineKeyboardButton(f"🛠 Нерозпізнані ({unknown})", callback_data=f"unk:{watch_id}:0")])
+        rows.append([InlineKeyboardButton(f"🛠 Нерозпізнані ({unknown})", callback_data=f"unk:{watch_id}:0:w")])
     if learned:   # кнопка лише коли є що прибирати
         rows.append([InlineKeyboardButton(f"🧠 Вивчені слова ({len(learned)})",
                                           callback_data=f"lwords:{watch_id}")])

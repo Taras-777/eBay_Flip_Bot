@@ -5,7 +5,9 @@
 для розробника. Усе — з бази, без запитів до eBay.
 """
 
+import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from db import (
     clear_flagged,
@@ -17,6 +19,7 @@ from db import (
     get_market_stats,
     get_reviewed_ids,
     get_watch_categories,
+    list_watches,
     mark_market_stale,
     save_manual_spec,
     set_listing_spec,
@@ -85,8 +88,53 @@ def unrecognized_items(watch):
     return result[:MAX_UNRECOGNIZED]
 
 
+RECHECK_MINUTES = 30
+_checked: dict = {}   # item_id → коли перевіряли, що ще продається (щоб не питати eBay щоразу)
+
+
+def drop_unavailable(watch, items):
+    """Перед показом: чи оголошення ще продаються. Продані чи завершені більше не показуються
+    (у базі позначаються «gone» лише для цього списку — статистику продажів веде звичайне сканування).
+    Викликати з потоку. Повертає кількість прибраних."""
+    from deal_check import listing_available   # тут, щоб не було циклу імпортів
+    now = time.time()
+    todo = [it for it in items if now - _checked.get(it["item_id"], 0) > RECHECK_MINUTES * 60]
+    if not todo:
+        return 0
+
+    def check(it):
+        available = listing_available(it["item_id"])
+        if available is False:
+            set_review(watch["id"], it["item_id"], "gone")
+            return 1
+        if available:
+            _checked[it["item_id"]] = now
+        return 0
+
+    with ThreadPoolExecutor(max_workers=min(5, len(todo))) as pool:
+        return sum(pool.map(check, todo))
+
+
 def count_unrecognized(watch):
     return len(unrecognized_items(watch))
+
+
+def unrecognized_by_watch(chat_id):
+    """[(товар, кількість)] для «🛠 Нерозпізнані» в головному меню — від найбільшої кількості."""
+    result = []
+    for w in list_watches(chat_id=chat_id, active_only=True):
+        try:
+            n = count_unrecognized(w)
+        except Exception:   # один товар з помилкою не має ламати меню
+            n = 0
+        if n:
+            result.append((w, n))
+    result.sort(key=lambda wn: -wn[1])
+    return result
+
+
+def total_unrecognized(chat_id):
+    return sum(n for _, n in unrecognized_by_watch(chat_id))
 
 
 def class_options(watch, item):

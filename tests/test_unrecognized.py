@@ -1,12 +1,24 @@
 """«🛠 Нерозпізнані»: оголошення з неповним класом і рішення користувача."""
 import asyncio
 
+import pytest
+
 import db
 import market
 import unrecognized
 from test_sales import _screen
 
 FULL = "RTX 4060 · i7 13 gen · 16GB"
+
+
+@pytest.fixture(autouse=True)
+def available(monkeypatch):
+    """Без мережі: усі оголошення «ще продаються», якщо тест не каже інакше."""
+    import deal_check
+    state = {"gone": set()}
+    monkeypatch.setattr(deal_check, "listing_available", lambda item_id: item_id not in state["gone"])
+    unrecognized._checked.clear()
+    return state
 CHECKED = {"marke": "MSI", "_beschreibung_geprueft": "1"}
 
 
@@ -89,3 +101,37 @@ def test_screen_manual_class(monkeypatch):
     upd.callback_query.data = f"unks:{wid}:0:0"
     asyncio.run(handlers.unknown_callback(upd, ctx))
     assert "збережено" in shown[-1][0] and db.get_manual_specs(["u1"]) == {"u1": FULL}
+
+
+def test_main_menu_button_and_products_list(monkeypatch):
+    import panel
+    labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert not any(x.startswith("🛠") for x in labels)                     # немає — немає кнопки
+    wid, watch = _setup()
+    labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert "🛠 Нерозпізнані (1)" in labels
+
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("unkall:0")
+    ctx.user_data = {}
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    text, buttons = shown[-1]
+    assert "🛠 <b>Нерозпізнані оголошення</b> (1)" in text and "📦 MSI Katana (1)" in buttons
+    upd.callback_query.data = f"unk:{wid}:0:m"                              # товар зі списку меню
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    assert "◀️ До всіх товарів" in shown[-1][1] and "📌 До товару" in shown[-1][1]
+    upd.callback_query.data = f"unk:{wid}:0:w"                              # той самий список з екрана товару
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    assert "◀️ До товару" in shown[-1][1] and "◀️ До всіх товарів" not in shown[-1][1]
+
+
+def test_sold_or_ended_not_shown(monkeypatch, available):
+    wid, watch = _setup()
+    available["gone"].add("u1")                                             # уже продано на eBay
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"unk:{wid}:0")
+    ctx.user_data = {}
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    text = shown[-1][0]
+    assert "Прибрано вже проданих чи завершених: 1" in text and "Усе розпізнано" in text
+    assert unrecognized.count_unrecognized(watch) == 0
