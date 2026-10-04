@@ -161,6 +161,28 @@ def estimate_resale_profit(sale_price, purchase_price):
     return sale_price, net_sale - purchase_price
 
 
+def offer_key(title, price):
+    """Однакова пропозиція: та сама назва (без регістру й зайвих пробілів) і та сама ціна."""
+    return " ".join((title or "").lower().split()), round(price or 0)
+
+
+def dedupe_offers(items, price_field="total_price"):
+    """Однакові пропозиції (той самий магазин виставив кілька разів, варіанти одного оголошення
+    з однаковою ціною) — один раз; у першої — copies = скільки їх було. Без назви не склеюємо."""
+    result, index = [], {}
+    for it in items:
+        if not it.get("title"):
+            result.append(it)
+            continue
+        key = (it.get("cond_group"), it.get("spec_group")) + offer_key(it["title"], it.get(price_field))
+        if key in index:
+            index[key]["copies"] = index[key].get("copies", 1) + 1
+            continue
+        index[key] = it
+        result.append(it)
+    return result
+
+
 def filter_outliers(prices):
     if len(prices) < MIN_SAMPLE_SIZE:
         return prices
@@ -467,7 +489,7 @@ def _compute_group_stats(watch_id, items):
                      інакше SALE_PRICE_PERCENTILE-й перцентиль пропозицій.
     """
     groups = {}
-    for it in items:
+    for it in dedupe_offers(items):   # одна пропозиція, виставлена кілька разів, — один голос
         if it.get("auction"):
             continue   # «аукціон + купити зараз»: у списках для купівлі є, у статистиці — ні
         groups.setdefault((it["cond_group"], "*"), []).append(it["total_price"])

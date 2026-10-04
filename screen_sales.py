@@ -24,7 +24,7 @@ from db import (
     watch_obs_summary,
     get_watch,
 )
-from market import recent_median, refresh_sale_prices, typical_range
+from market import dedupe_offers, recent_median, refresh_sale_prices, typical_range
 from panel import _ack_callback, show_panel
 from access import require_access
 from ebay_user import is_connected
@@ -281,7 +281,7 @@ async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT
         if r["cond_group"] == cond and spec_matches(r["spec_group"], spec) and r.get("url")
     ]
     rows_db.sort(key=lambda r: r["price"])
-    top = rows_db
+    top = dedupe_offers(rows_db, price_field="price")   # однакові пропозиції — одним рядком «×N»
 
     spec_txt = "усі конфігурації" if spec == "*" else ("без конфігурації" if spec == "unspecified" else spec)
     header = (f"🔎 <b>{html.escape(watch['label'])}</b>\n"
@@ -305,7 +305,7 @@ async def config_listings_callback(update: Update, context: ContextTypes.DEFAULT
             {"item_id": r["item_id"], "title": r["title"] or "без назви", "price": r["price"],
              "currency": "€", "condition": None, "url": r["url"],
              "auction": "AUCTION" in (r.get("buying_options") or ""), "current_bid": r.get("current_bid"),
-             "bid_count": r.get("bid_count"), "end_at": r.get("end_at")}
+             "bid_count": r.get("bid_count"), "end_at": r.get("end_at"), "copies": r.get("copies", 1)}
             for r in top
         ],
         "nav": [("◀️ До конфігурацій", f"configs:{watch_id}"), ("📌 До товару", f"watch_details:{watch_id}")],

@@ -438,3 +438,41 @@ def test_configs_screen_folds_small_groups(monkeypatch):
     text, buttons = shown[-1]
     assert "дрібні конфігурації" in text and any("· M4 (1)" in b for b in buttons)
     assert "◀️ До конфігурацій" in buttons and not any("усі (" in b for b in buttons)
+
+
+def test_new_cpu_generations():
+    L = laptops.laptop_spec
+    assert L("HP VICTUS 15-fb3450ng Ryzen 5 240 12GB/512GB RTX5050") == "RTX 5050 · Ryzen 5 200 · 16GB"
+    assert L("HP OmniBook Ryzen AI 7 350 32GB RTX 5060") == "RTX 5060 · Ryzen AI 7 300 · 32GB+"
+    assert L("ASUS ROG Ryzen AI 9 HX 370 RTX 5070 32GB") == "RTX 5070 · Ryzen AI 9 300 · 32GB+"
+    assert L("Lenovo LOQ Core 7 240H RTX 5060 16GB") == "RTX 5060 · Core 7 (S2) · 16GB"
+    assert L("MSI Ryzen 7 8845HS RTX 4060 16GB") == "RTX 4060 · Ryzen 7 8000 · 16GB"          # старі — як раніше
+    assert L("HP Victus Ryzen 5 5 GHz RTX 5050 16GB") == "RTX 5050 · Ryzen 5 · 16GB"
+    assert not laptops.wants_aspects("RTX 5050 · Ryzen 5 200 · 16GB")
+
+
+def test_same_offer_counted_once_in_stats():
+    import market
+    same = [{"item_id": f"d{i}", "title": "HP Victus 15-fb3357ng Ryzen 5", "total_price": 874,
+             "cond_group": "new", "spec_group": "RTX 5050"} for i in range(3)]
+    other = [{"item_id": f"o{i}", "title": f"HP Victus 15 Nr{i}", "total_price": 900 + i,
+              "cond_group": "new", "spec_group": "RTX 5050"} for i in range(2)]
+    unique = market.dedupe_offers(same + other)
+    assert len(unique) == 3 and unique[0]["copies"] == 3
+    assert len(market.dedupe_offers([{"total_price": 5}, {"total_price": 5}])) == 2   # без назви не склеюємо
+
+
+def test_group_listings_collapse_identical_offers(monkeypatch):
+    from test_sales import _screen
+    wid = db.add_watch(1, "HP Victus 15", "HP Victus 15", "", "", 15)
+    obs = [{"item_id": f"d{i}", "title": "HP Victus 15-fb3357ng Ryzen 5", "total_price": 874,
+            "cond_group": "new", "spec_group": "RTX 5050", "url": f"https://www.ebay.de/itm/d{i}"} for i in range(3)]
+    obs.append({"item_id": "x", "title": "HP VICTUS 15-fb3450ng Ryzen 5 240", "total_price": 1457,
+                "cond_group": "new", "spec_group": "RTX 5050", "url": "https://www.ebay.de/itm/x"})
+    db.update_listing_observations(wid, obs)
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"cfgl:{wid}:0")
+    ctx.user_data = {f"cfg_groups_{wid}": [("new", "RTX 5050")]}
+    asyncio.run(handlers.config_listings_callback(upd, ctx))
+    text = shown[-1][0]
+    assert "з 2" in text and "💶 874 € · ×3 однакових" in text

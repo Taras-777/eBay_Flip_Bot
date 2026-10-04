@@ -37,7 +37,7 @@ from db import (
     update_discovery_obs,
 )
 from ebay_api import browse_budget_left, search_active_items
-from market import estimate_resale_profit, filter_outliers, max_buy_price, percentile
+from market import dedupe_offers, estimate_resale_profit, filter_outliers, max_buy_price, percentile
 from sales import summarize
 
 DISCOVERY_INTERVAL_HOURS = 4     # ~135 товарів × 6 разів = ~800 запитів на добу (мінус приховані)
@@ -257,6 +257,7 @@ def analyze_candidate(emoji, name, query, floor):
 
     created = [it["created_at"] for it in items if it.get("created_at")]
     update_discovery_obs(name, items, min(created) if created else None)
+    items = dedupe_offers(items)   # для цін — однакові пропозиції один раз
 
     # Ринок рахуємо для найпоширенішої конфігурації серед вживаних (їх перепродають найчастіше)
     used = [it for it in items if it["cond_group"] == "used"] or items

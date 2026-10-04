@@ -126,6 +126,8 @@ _DESC_CPU_PATTERNS = [
     re.compile(r"\bCore\s+Ultra\s+[3579]\s+\d{3}[A-Za-z]{0,2}\b", re.I),
     re.compile(r"\bi[3579][-\s]?\d{3,5}[A-Za-z]{0,2}\d{0,2}\b", re.I),
     re.compile(r"\bRyzen\s?[3579]\s?\d{3,4}[A-Za-z]{0,2}\b", re.I),
+    re.compile(r"\bRyzen\s+AI\s+(?:Max\+?\s+)?[3579]\s+(?:HX\s+|PRO\s+)?\d{3}\b", re.I),
+    re.compile(r"\bCore\s+[3579]\s+\d{3}[A-Za-z]{0,2}\b", re.I),
 ]
 # «1 TB PCIe 4.0 NVMe M.2 SSD» або «SSD: 512 GB»; між об'ємом і «SSD» — без іншого об'єму
 # (інакше «16 GB RAM, 512 GB SSD» дало б 16GB)
@@ -237,6 +239,16 @@ def _cpu_from(token, title, cpu_text=""):
     m = re.match(r"COREULTRA([3579])-(\d)", token)
     if m:
         return f"Core Ultra {m.group(1)} (S{m.group(2)})"
+    m = re.match(r"RYZENAI([3579])-(\d)\d{2}", token)
+    if m:
+        return f"Ryzen AI {m.group(1)} {m.group(2)}00"
+    m = re.match(r"CORE([3579])-(\d)\d{2}", token)
+    if m:
+        return f"Core {m.group(1)} (S{m.group(2)})"
+    # Ryzen 200 (2025): «Ryzen 5 240» — тризначний номер; старші — чотиризначні («Ryzen 5 5600H»)
+    m = re.match(r"RYZEN([3579])-(\d)\d{2}(?!\d)", token)
+    if m:
+        return f"Ryzen {m.group(1)} {m.group(2)}00"
     m = re.match(r"RYZEN([3579])(?:-(\d)\d{3})?", token)
     if m:
         return f"Ryzen {m.group(1)} {m.group(2)}000" if m.group(2) else f"Ryzen {m.group(1)}"
@@ -335,7 +347,7 @@ def needs_aspects(spec):
     return spec == "unspecified" or spec.startswith(UNKNOWN_GPU)
 
 
-_FULL_CPU = re.compile(r"\bgen\b|Ryzen \d \d000|Core Ultra")
+_FULL_CPU = re.compile(r"\bgen\b|Ryzen (?:AI )?\d \d000?\b|Core (?:Ultra )?\d \(S")
 _RAM_PART = re.compile(r"\d+GB\+?")
 
 

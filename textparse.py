@@ -603,6 +603,16 @@ def extract_cpu_token(title: str):
         variant = (m.group(2) or "").upper()
         return f"M{m.group(1)}{variant}"
 
+    # AMD Ryzen AI (2024+): Ryzen AI 7 350, Ryzen AI 9 HX 370, Ryzen AI Max+ 395
+    m = re.search(r"\bRyzen\s+AI\s+(?:Max\+?\s+)?([3579])\s+(?:HX\s+|PRO\s+)?(\d{3})\b", title, re.IGNORECASE)
+    if m:
+        return f"RYZENAI{m.group(1)}-{m.group(2)}"
+
+    # Intel Core 5/7 без «Ultra» (Series 1/2, 2024+): Core 7 150U, Core 5 210H
+    m = re.search(r"\bCore\s+([3579])\s+(\d{3}[A-Za-z]{0,2})\b", title, re.IGNORECASE)
+    if m:
+        return f"CORE{m.group(1)}-{m.group(2).upper()}"
+
     # Intel Core Ultra (новіше позначення): Core Ultra 7 155H
     m = re.search(r"\bCore\s+Ultra\s+([3579])\s+(\d{3}[A-Za-z]{0,2})\b", title, re.IGNORECASE)
     if m:

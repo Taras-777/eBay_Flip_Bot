@@ -279,8 +279,9 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         listed += "".join(f"\n{w}" for w in laptop_warnings(it["title"]))
         if it.get("auction"):
             listed += "\n" + auction_note(it.get("current_bid"), it.get("bid_count"), it.get("end_at"))
+        copies = f" · ×{it['copies']} однакових" if it.get("copies", 1) > 1 else ""
         lines.append(f"<b>{i}. {html.escape(it['title'][:160])}</b>\n"
-                     f"💶 {it['price']:.0f} {html.escape(it['currency'])}{cond}{listed}")
+                     f"💶 {it['price']:.0f} {html.escape(it['currency'])}{copies}{cond}{listed}")
         row = []
         if it.get("url"):
             row.append(InlineKeyboardButton(
