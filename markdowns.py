@@ -109,7 +109,10 @@ def markdown_list(chat_id):
             continue   # навіть після знижки дорожче за ринок
         _, profit = estimate_resale_profit(sale, r["price"])
         r.update(sale_price=sale, profit=profit, buy_limit=max_buy_price(sale, min_profit),
-                 drop_pct=(r["first_price"] - r["price"]) / r["first_price"] * 100)
+                 drop_pct=(r["first_price"] - r["price"]) / r["first_price"] * 100,
+                 # звідки ціна «продати» — для рядка «📊 Ціна продажу …» у картці
+                 sale_source=stat["sale_source"], sale_sample=stat["sample_size"],
+                 sale_cond=stat["cond_group"], sale_spec=stat["spec_group"])
         result.append(r)
     result.sort(key=lambda r: -r["profit"])
     return result

@@ -159,3 +159,16 @@ def test_deal_card_mentions_earlier_price_cut():
     deal_id = db.add_deal(wid, "a", "iPhone", 450, "EUR", 600, 25, "u", False)
     d = {**db.get_deal(deal_id), "watch_label": "iPhone"}
     assert "📉 Продавець уже знизив ціну на 36% (було 700€)" in screen_deals._deal_card(1, d)
+
+
+def test_card_shows_where_sale_price_comes_from():
+    import screen_markdowns
+    wid = _setup(sale=600)
+    db.upsert_market_stats(wid, "used", "*", 650, 40, sale_price=620, sale_source="за 12 проданими")
+    db.track_prices(wid, [_item("a", 700), _item("b", 700, spec_group="512GB")])
+    db.track_prices(wid, [_item("a", 540), _item("b", 540, spec_group="512GB")])
+    rows = {r["item_id"]: r for r in markdowns.markdown_list(1)}
+    own = screen_markdowns._card(1, rows["a"])
+    assert "📊 Ціна продажу за проданими · вживані, 256GB" in own and "⚠️" not in own
+    wide = screen_markdowns._card(2, rows["b"])                 # 512GB немає — ціна за всіма
+    assert "📊 Ціна продажу за 12 проданими · вживані, усі конфігурації" in wide and "⚠️" in wide

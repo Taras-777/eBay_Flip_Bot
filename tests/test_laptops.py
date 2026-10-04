@@ -344,3 +344,44 @@ def test_incomplete_laptop_class_reads_aspects(fake_ebay):
     items = [{"item_id": "g5", "title": "GIGABYTE G5 Gaming | RTX 3060 6GB | 300Hz", "category_names": []}]
     market._annotate_items(items, max_lookups=10, watch=db.get_watch(w["id"], 1))
     assert items[0]["spec_group"] == "RTX 3060 · i5 12 gen · 16GB"
+
+
+# ---------- відеокарта з опису ----------
+
+DESC = ('<style>.x{color:red}</style><div><h1>ASUS ROG Strix G18</h1><ul><li>Intel&reg; Core&trade; Ultra 9 290HX</li>'
+        '<li>NVIDIA GeForce RTX&trade; 5070 Ti Laptop GPU mit 12 GB GDDR7</li></ul></div>')
+
+
+def test_gpu_from_description():
+    from laptops import gpu_from_description
+    assert gpu_from_description(DESC) == "RTX 5070 Ti"
+    assert gpu_from_description("Erhältlich mit RTX 5060 oder RTX 5070") is None   # дві різні — невідомо яка
+    assert gpu_from_description("") is None
+
+
+def test_description_gpu_used_when_specifics_lack_it(monkeypatch, fake_ebay):
+    import ebay_api
+    from conftest import FakeResponse
+    monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(
+        {"localizedAspects": [{"name": "Marke", "value": "ASUS"}], "description": DESC}))
+    aspects = ebay_api.fetch_item_aspects("v1|g18|0")
+    title = "ASUS ROG Strix G18 G815LR Ultra 9 290HX 32GB 1TB"
+    assert laptops.laptop_spec(title, aspects).startswith("RTX 5070 Ti")
+    assert laptops.laptop_spec(title, {"marke": "ASUS"}).startswith("GPU ?")
+
+
+def test_old_cached_aspects_reread_for_description(monkeypatch):
+    fetched = []
+    monkeypatch.setattr(market, "fetch_item_aspects",
+                        lambda item_id: fetched.append(item_id) or {"marke": "ASUS",
+                                                                     "grafikkarte (aus beschreibung)": "RTX 5070 Ti",
+                                                                     "_beschreibung_geprueft": "1"})
+    monkeypatch.setattr(market, "browse_budget_left", lambda: 5000)
+    wid = db.add_watch(1, "ROG Strix G18", "ROG Strix G18", "", "", 15)
+    db.save_cached_spec("old", "GPU ? · Ultra 9", {"marke": "ASUS"})          # прочитано до цієї зміни
+    db.save_cached_spec("done", "GPU ? · Ultra 9", {"marke": "ASUS", "_beschreibung_geprueft": "1"})
+    items = [{"item_id": "old", "title": "ASUS ROG Strix G18 Ultra 9 275HX"},
+             {"item_id": "done", "title": "ASUS ROG Strix G18 Ultra 9 275HX"}]
+    market._annotate_items(items, max_lookups=5, watch=db.get_watch(wid, 1))
+    assert fetched == ["old"]                                                 # опис уже читали — не повторюємо
+    assert items[0]["spec_group"].startswith("RTX 5070 Ti") and not items[1]["spec_group"].startswith("RTX")

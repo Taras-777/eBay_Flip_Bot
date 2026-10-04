@@ -11,6 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from settings import PRICE_DROP_CHOICES, PRICE_DROP_MIN_DAYS
+from deal_reprice import basis_line
 from db import get_drop_pct, get_watch, mark_track_seen, set_drop_pct
 from learning import hide_item, learned_words_note, reject_and_learn
 from laptops import laptop_warnings
@@ -44,6 +45,11 @@ def _card(n, r):
                      f"(купувати до {r['buy_limit']:.0f}€)")
         if r["has_best_offer"] and r["buy_limit"] > 0:
             lines.append(f"🎯 Можна торгуватись: запропонуй ~{r['buy_limit']:.0f}€")
+    basis = basis_line({"sale_source": r.get("sale_source"), "sale_sample": r.get("sale_sample"),
+                        "cond_group": r.get("sale_cond"), "spec_group": r.get("sale_spec"),
+                        "item_spec": r.get("spec_group")})
+    if basis:
+        lines.append(basis)
     lines += laptop_warnings(r["title"])
     if r.get("url"):
         lines.append(f'<a href="{html.escape(r["url"])}">🔗 Відкрити на eBay</a>')

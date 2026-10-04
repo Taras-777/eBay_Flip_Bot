@@ -42,7 +42,7 @@ from textparse import (
     _title_matches_search,
     condition_group_from_item,
 )
-from laptops import is_laptop
+from laptops import DESC_CHECKED, DESC_GPU_ASPECT, gpu_from_description, is_laptop
 from db import (
     get_watch_categories,
     get_api_calls_today,
@@ -369,10 +369,16 @@ def fetch_item_aspects(item_id):
     resp.raise_for_status()
     data = resp.json()
     _save_availability(item_id, data)
-    return {
+    aspects = {
         (a.get("name") or "").strip().lower(): a.get("value") or ""
         for a in data.get("localizedAspects") or []
     }
+    # Відеокарта, яку продавець написав лише в описі (опис — у цій самій відповіді)
+    gpu = gpu_from_description(data.get("description") or data.get("shortDescription"))
+    if gpu:
+        aspects[DESC_GPU_ASPECT] = gpu
+    aspects[DESC_CHECKED] = "1"
+    return aspects
 
 
 def _save_availability(item_id, data):

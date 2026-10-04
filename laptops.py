@@ -14,6 +14,7 @@
 Тут же — попередження, специфічні для ноутбуків (розкладка, блок живлення, BIOS…).
 """
 
+import html
 import re
 
 from textparse import SPEC_SIZE_PATTERN, _search_tokens, extract_cpu_token
@@ -105,6 +106,26 @@ def detect_gpu(text):
     if _IGPU_PATTERN.search(text or ""):
         return "iGPU"
     return None
+
+
+# Відеокарта з опису оголошення: деякі продавці (часто магазини) пишуть її лише в описі,
+# а не в назві й не в характеристиках. Опис приходить у тій самій відповіді getItem,
+# що й характеристики, — окремого запиту немає. Зберігаємо лише знайдену відеокарту.
+DESC_GPU_ASPECT = "grafikkarte (aus beschreibung)"
+DESC_CHECKED = "_beschreibung_geprueft"   # опис уже переглянуто (щоб не перечитувати)
+_HTML_BLOCKS = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.I | re.S)
+_HTML_TAGS = re.compile(r"<[^>]+>")
+
+
+def gpu_from_description(description):
+    """Відеокарта з опису (HTML або текст). Якщо в описі кілька різних відеокарт (напр. «є з RTX 5060
+    і RTX 5070») — невідомо, яка саме в цьому ноутбуці, тоді None."""
+    if not description:
+        return None
+    text = html.unescape(_HTML_TAGS.sub(" ", _HTML_BLOCKS.sub(" ", description)))
+    text = _plain(text)
+    found = {fmt(m) for pattern, fmt in _GPU_PATTERNS for m in pattern.finditer(text)}
+    return found.pop() if len(found) == 1 else None
 
 
 def _sizes(text):
@@ -199,7 +220,8 @@ def laptop_spec(title, aspects=None, query=""):
         return SEP.join(p for p in parts if p)
 
     # Windows-ноутбук: відеокарта · процесор · RAM
-    gpu = detect_gpu(title) or detect_gpu(_aspect(aspects, GPU_ASPECTS))
+    gpu = (detect_gpu(title) or detect_gpu(_aspect(aspects, GPU_ASPECTS))
+           or detect_gpu(_aspect(aspects, {DESC_GPU_ASPECT})))
     if gpu is None:
         lines = _search_tokens(query) | _search_tokens(title)
         gpu = "iGPU" if lines & IGPU_LINE_TERMS else UNKNOWN_GPU

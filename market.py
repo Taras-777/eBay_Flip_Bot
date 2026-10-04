@@ -30,6 +30,7 @@ from settings import (
     log,
 )
 from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, spec_matches, spec_parents
+from laptops import DESC_CHECKED
 from laptops import needs_aspects as laptop_needs_aspects
 from laptops import wants_aspects as laptop_wants_aspects
 from textparse import (
@@ -252,6 +253,13 @@ def _annotate_items(items, max_lookups=0, watch=None):
                 if aspects is not None:   # клас ноутбука — завжди заново з назви й характеристик
                     it["spec_group"] = _spec(it, aspects)
                     it["aspects"] = aspects
+                    # Відеокарти немає ні в назві, ні в характеристиках, а опис бот ще не читав
+                    # (характеристики завантажено до того, як він навчився) — читаємо ще раз
+                    if not (laptop_needs_aspects(it["spec_group"]) and DESC_CHECKED not in aspects):
+                        continue
+                    if lookups_left > 0:
+                        lookups_left -= 1
+                        to_fetch.append(it)
                     continue
             elif it["spec_group"] == "unspecified":
                 # Характеристики могли прийти з перевірки продажів (Trading API) — тоді рахуємо з них
@@ -281,8 +289,8 @@ def _annotate_items(items, max_lookups=0, watch=None):
         results = list(pool.map(_fetch, [it["item_id"] for it in to_fetch]))
 
     for it, aspects in zip(to_fetch, results):
-        if aspects is None:
-            continue
+        if aspects is None or (not aspects and it["aspects"]):
+            continue   # помилка або лот уже зник — збережені характеристики не затираємо
         spec = _spec(it, aspects)
         save_cached_spec(it["item_id"], spec, aspects)
         it["spec_group"] = spec
