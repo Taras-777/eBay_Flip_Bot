@@ -40,7 +40,8 @@ from textparse import (
     GENERIC_ASPECTS,
     _search_tokens,
     _title_matches_search,
-    condition_group_from_item,
+    market_group,
+    seller_type_of,
 )
 from laptops import DESC_CHECKED, is_laptop, specs_from_description
 from db import (
@@ -786,7 +787,7 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
             continue
         has_best_offer = "BEST_OFFER" in buying_options
 
-        cond_group = condition_group_from_item(it)
+        cond_group = market_group(it)   # 🏪 магазин / 👤 приватний (див. textparse.market_group)
         if cond_group == "parts":
             continue  # "на запчастини" — не той товар, що ми перепродаємо
 
@@ -855,6 +856,7 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 "condition": it.get("condition"),
                 "condition_id": str(it.get("conditionId") or ""),
                 "cond_group": cond_group,
+                "seller_type": seller_type_of(it),   # лише тип (магазин/приватний), без імені продавця
                 "created_at": _parse_ebay_ts(it.get("itemCreationDate")),
                 # варіантне оголошення (кілька кольорів/обсягів) — ціна стрибає між варіантами
                 "is_variation": bool(it.get("itemGroupHref") or it.get("itemGroupType")),

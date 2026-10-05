@@ -102,13 +102,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             return
 
-    context.user_data.pop("panel_message_id", None)
+    context.user_data["panel_force_new"] = True
     await show_main_menu(update, context)
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показати головне меню знову (напр. якщо панель загубилась вище в чаті)."""
-    context.user_data.pop("panel_message_id", None)
+    context.user_data["panel_force_new"] = True
     await show_main_menu(update, context)
 
 
@@ -189,7 +189,7 @@ def _watch_details_text(watch):
         lines.append(f"🧠 Відсіюю за вивченими словами: {html.escape(', '.join(learned))}")
     if not stats:
         lines.append("\n💰 <b>Ціни ще не пораховані</b> — потрібно щонайменше "
-                     f"{plural(MIN_SAMPLE_SIZE, 'оголошення', 'оголошення', 'оголошень')} одного стану.")
+                     f"{plural(MIN_SAMPLE_SIZE, 'оголошення', 'оголошення', 'оголошень')} одного типу продавця (🏪 магазин чи 👤 приватні).")
         return "\n".join(lines)
 
     lines.append("\n💰 <b>Купівля і продаж:</b>")
@@ -823,7 +823,7 @@ async def recalculate_median_callback(update: Update, context: ContextTypes.DEFA
             watch,
             f"Знайдено {plural(len(items), 'оголошення', 'оголошення', 'оголошень')}, але після фільтрації "
             f"їх замало, щоб порахувати ціни. Потрібно щонайменше "
-            f"{plural(minimum, 'оголошення', 'оголошення', 'оголошень')} одного стану й конфігурації.",
+            f"{plural(minimum, 'оголошення', 'оголошення', 'оголошень')} одного типу продавця (🏪 магазин чи 👤 приватні) й конфігурації.",
         )
 
     await _show_watch_details(update, context, get_watch(watch_id, chat_id))
@@ -838,7 +838,7 @@ def _few_listings_note(watch, items):
     parts = ", ".join(f"{CONDITION_LABELS.get(c, c)} {n}" for c, n in sorted(counts.items(), key=lambda x: -x[1]))
     found = f"{len(items or [])}: {parts}" if parts else "0"
     return (f"📉 Замало оголошень: {html.escape(watch['label'])} "
-            f"({found} — треба {minimum} одного стану)")
+            f"({found} — треба {minimum} в одній групі)")
 
 
 async def refresh_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

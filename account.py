@@ -182,7 +182,7 @@ async def backup_send_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         log.exception("Не вдалося надіслати резервну копію: %s", e)
         note = "⚠️ Не вдалося зробити резервну копію — деталі в логах."
-    context.user_data.pop("panel_message_id", None)   # екран — нижче за файл
+    context.user_data["panel_force_new"] = True   # екран — нижче за файл
     await show_settings(update, context, note=note)
 
 

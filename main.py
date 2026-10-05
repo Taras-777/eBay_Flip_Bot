@@ -100,7 +100,7 @@ from handlers import (
     learned_words_callback,
 )
 from screen_undo import undo_callback
-from screen_markdowns import drop_pct_callback, markdown_action_callback, markdowns_callback
+from screen_markdowns import drop_pct_callback, markdown_action_callback, markdowns_callback, markdowns_clear_callback
 from scheduler import error_handler, post_init, post_shutdown
 
 
@@ -253,6 +253,7 @@ def main():
     # Кнопки головного меню (коли жоден діалог не активний)
     app.add_handler(CallbackQueryHandler(undo_callback, pattern="^undo:"))
     app.add_handler(CallbackQueryHandler(markdowns_callback, pattern="^mkd:"))
+    app.add_handler(CallbackQueryHandler(markdowns_clear_callback, pattern="^mkdclr(:yes)?$"))
     app.add_handler(CallbackQueryHandler(markdown_action_callback, pattern="^mact:"))
     app.add_handler(CallbackQueryHandler(drop_pct_callback, pattern="^mdpct:"))
     app.add_handler(CallbackQueryHandler(menu_home_callback, pattern="^menu:home$"))

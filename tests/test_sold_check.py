@@ -66,7 +66,7 @@ def test_sale_details_saved(monkeypatch):
     assert info["result"] == "sold" and info["details"] == {
         "sold_price": 579.0, "sold_at": 1790856000, "bid_count": 0, "offer_count": 4, "quantity": 3,
         "listing_type": "FixedPriceItem", "watch_count": None,
-        "aspects": None}
+        "aspects": None, "seller_type": "unknown"}
     assert trading_api.parse_get_item(xml_item())["details"]["sold_price"] is None   # полів немає — None
 
     for wid in (1, 2):   # той самий лот у двох товарах (спільний ринок)

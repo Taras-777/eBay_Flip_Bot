@@ -71,6 +71,34 @@ def condition_group_from_item(it):
     return "new"
 
 
+# Стан у боті — це ХТО продає, а не «новий/вживаний» (див. market_group):
+#   "new"  — 🏪 магазин (gewerblich): гарантія, 14 днів на повернення, refurbished, нові;
+#   "used" — 👤 приватний продавець (privat): ринок, на якому ти купуєш і продаєш;
+#   "parts" — на запчастини / дефектні (у статистику не йдуть).
+# Назви "new"/"used" лишились від старого поділу, щоб не переписувати історію в базі: старі записи
+# без типу продавця розкладені за станом (нові й refurbished — магазин, вживані — приватні).
+SEALED_CONDITION_IDS = {"1000", "1500"}   # «Neu» / «Neu: Sonstige» — запаковане нове
+
+
+def seller_type_of(item):
+    """Тип продавця з відповіді Browse API: 'business', 'individual' або None (eBay не віддав)."""
+    value = ((item.get("seller") or {}).get("sellerAccountType") or "").upper()
+    return {"BUSINESS": "business", "INDIVIDUAL": "individual"}.get(value)
+
+
+def group_for_seller(seller_type, fallback):
+    """'business' → "new" (🏪 магазин), 'individual' → "used" (👤 приватний), інакше — fallback
+    (група за станом). Запчастини лишаються запчастинами."""
+    if fallback == "parts":
+        return "parts"
+    return {"business": "new", "individual": "used"}.get(seller_type, fallback)
+
+
+def market_group(item):
+    """Група оголошення: магазин / приватний / запчастини (див. вище)."""
+    return group_for_seller(seller_type_of(item), condition_group_from_item(item))
+
+
 # Виявлення обсягу пам'яті/накопичувача прямо з назви оголошення.
 # iPhone 12 256GB і iPhone 12 512GB мають РІЗНІ справедливі ціни —
 # якщо рахувати одну медіану на весь запит "iPhone 12", вона вийде
@@ -729,6 +757,9 @@ BUNDLE_PATTERN = re.compile(
     re.I)
 
 
+PICKUP_NOTE = "🚗 Лише самовивіз — доставки немає, забирати особисто"
+
+
 def is_bundle(title):
     return bool(BUNDLE_PATTERN.search(title or ""))
 
@@ -776,7 +807,7 @@ def extract_spec_key(title: str) -> str:
     return normalize_spec(title, "+".join(sorted(tokens)))
 
 
-CONDITION_LABELS = {"new": "нові", "used": "вживані", "unknown": "стан невідомий"}
+CONDITION_LABELS = {"new": "🏪 магазин", "used": "👤 приватні", "unknown": "продавець невідомий"}
 
 
 def _group_label(cond, spec):

@@ -21,9 +21,12 @@ from db import (
     apply_sold_check,
     get_pending_discovery_checks,
     get_pending_sold_checks,
+    get_sold_without_seller_type,
     known_sold_check,
+    mark_market_stale,
     record_api_call,
     save_item_aspects,
+    set_seller_type,
 )
 from ebay_api import _request_with_retries, trading_calls_today
 from ebay_user import UserAuthError, _token_cache, get_user_access_token, is_connected
@@ -112,6 +115,9 @@ def _sale_details(item):
         "listing_type": _text(item, "e:ListingType"),
         "watch_count": _num(_text(item, "e:WatchCount"), int),   # скільки людей стежать
         "aspects": _item_specifics(item),
+        # 🏪 магазин / 👤 приватний (лише тип; ім'я продавця не зберігаємо)
+        "seller_type": {"Commercial": "business", "Private": "individual"}.get(
+            _text(item, "e:Seller/e:SellerInfo/e:SellerBusinessType") or "", "unknown"),
     }
 
 
@@ -145,6 +151,7 @@ def get_item_status(item_id):
         "<OutputSelector>Item.ListingType</OutputSelector>"
         "<OutputSelector>Item.WatchCount</OutputSelector>"
         "<OutputSelector>Item.ItemSpecifics</OutputSelector>"
+        "<OutputSelector>Item.Seller.SellerInfo.SellerBusinessType</OutputSelector>"
         "</GetItemRequest>"
     )
     resp = _request_with_retries(
@@ -232,6 +239,7 @@ def _run_checks(queue):
             log.info("eBay не віддав статус оголошення %s (%s) — рахую за зникненням", item_id, info["error"])
         apply(owner, item_id, info["result"], info.get("details"))
         counts[info["result"]] = counts.get(info["result"], 0) + 1
+        _keep_seller_type(item_id, info)
         # Характеристики з тієї самої відповіді — у базу: далі бот бере їх звідти, а не з eBay
         if _keep_aspects(item_id, info):
             with_aspects.append(item_id)
@@ -246,6 +254,48 @@ def _keep_aspects(item_id, info):
         return False
     save_item_aspects(item_id, aspects)
     return True
+
+
+def _keep_seller_type(item_id, info):
+    """Тип продавця з тієї самої відповіді — в історію (група магазин/приватний). Змінені товари
+    перераховуються найближчим циклом."""
+    # Немає відповіді з деталями (оголошення вже недоступне) — «невідомо», щоб більше не питати
+    seller_type = (info.get("details") or {}).get("seller_type") or "unknown"
+    for watch_id in set_seller_type(item_id, seller_type):
+        mark_market_stale(watch_id)
+
+
+SELLER_BACKFILL_DAYS = 85   # eBay віддає завершені оголошення ~90 днів
+
+
+def backfill_seller_types(limit=SPEC_BACKFILL_BATCH):
+    """Стара історія продажів без типу продавця — дочитуємо через Trading API з вільного запасу
+    (по `limit` за цикл, кожне оголошення один раз; заодно й характеристики). Повертає кількість запитів."""
+    if not is_connected():
+        return 0
+    ids = get_sold_without_seller_type(SELLER_BACKFILL_DAYS, _budget_left(limit))
+    done, with_aspects = 0, []
+    for item_id in ids:
+        record_api_call("trading:watch")
+        try:
+            info = get_item_status(item_id)
+        except UserAuthError as e:
+            log.warning("Дочитування типу продавців зупинено: %s", e)
+            break
+        except Exception as e:
+            log.debug("Не вдалося прочитати продавця %s: %s", item_id, e)
+            continue
+        done += 1
+        if info.get("details"):
+            _keep_seller_type(item_id, info)
+            if _keep_aspects(item_id, info):
+                with_aspects.append(item_id)
+        else:
+            set_seller_type(item_id, "unknown")   # eBay уже не віддає — більше не питаємо
+    _reclassify(with_aspects)
+    if done:
+        log.info("Дочитано тип продавця (магазин/приватний) для проданих: %s", done)
+    return done
 
 
 def _reclassify(item_ids):
@@ -311,6 +361,8 @@ def verify_disappeared(limit=SOLD_CHECK_BATCH):
                  ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())))
     if done < left:   # черга порожня — вільні запити на дочитування характеристик ноутбуків
         done += backfill_laptop_specs(min(SPEC_BACKFILL_BATCH, left - done))
+    if done < left:   # і на тип продавця в старій історії продажів
+        done += backfill_seller_types(min(SPEC_BACKFILL_BATCH, left - done))
     return done
 
 

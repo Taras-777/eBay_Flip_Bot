@@ -436,7 +436,7 @@ def test_configs_screen_shows_priced_groups_first(monkeypatch):
     asyncio.run(handlers.all_configs_callback(upd, ctx))
     text, buttons = shown[-1]
     # Як у «💰 Купівля і продаж»: «усі», потім класи з ціною (разом із ширшим «M4 Pro»)
-    assert buttons[:3] == ["🔎 Нові — усі (10)", "🔎 Нові · M4 Pro · усі екрани (8)", f"🔎 Нові · {big} (8)"]
+    assert buttons[:3] == ["🔎 🏪 магазин — усі (10)", "🔎 🏪 магазин · M4 Pro · усі екрани (8)", f"🔎 🏪 магазин · {big} (8)"]
     assert "📂 Інші конфігурації (2)" in buttons and not any("· M4 (1)" in b for b in buttons)
     upd, ctx = press(f"configs:{wid}:other")
     asyncio.run(handlers.all_configs_callback(upd, ctx))
@@ -485,9 +485,26 @@ def test_group_listings_collapse_identical_offers(monkeypatch):
 
 def test_wider_laptop_groups_are_labelled():
     from textparse import _group_label
-    assert _group_label("new", "RTX 5050") == "нові, RTX 5050 · усі процесори"
-    assert _group_label("new", "RTX 3050 · i5 14 gen") == "нові, RTX 3050 · i5 14 gen · уся RAM"
-    assert _group_label("new", "RTX 3050 · i5 14 gen · 16GB") == "нові, RTX 3050 · i5 14 gen · 16GB"
-    assert _group_label("used", 'M4 Pro · 14"') == 'вживані, M4 Pro · 14" · уся RAM'
-    assert _group_label("used", "RTX 4060 · 16GB") == "вживані, RTX 4060 · 16GB"     # точний клас, не ширший
-    assert _group_label("used", "Slim · 1TB") == "вживані, Slim · 1TB"               # не ноутбук
+    assert _group_label("new", "RTX 5050") == "🏪 магазин, RTX 5050 · усі процесори"
+    assert _group_label("new", "RTX 3050 · i5 14 gen") == "🏪 магазин, RTX 3050 · i5 14 gen · уся RAM"
+    assert _group_label("new", "RTX 3050 · i5 14 gen · 16GB") == "🏪 магазин, RTX 3050 · i5 14 gen · 16GB"
+    assert _group_label("used", 'M4 Pro · 14"') == '👤 приватні, M4 Pro · 14" · уся RAM'
+    assert _group_label("used", "RTX 4060 · 16GB") == "👤 приватні, RTX 4060 · 16GB"     # точний клас, не ширший
+    assert _group_label("used", "Slim · 1TB") == "👤 приватні, Slim · 1TB"               # не ноутбук
+
+
+def test_pickup_only_marked(monkeypatch):
+    from test_sales import _screen
+    wid = db.add_watch(1, "HP Victus 15", "HP Victus 15", "", "", 15)
+    db.update_listing_observations(wid, [
+        {"item_id": "p1", "title": "HP Victus 15 Abholung", "total_price": 700, "cond_group": "used",
+         "spec_group": "RTX 5050", "url": "https://www.ebay.de/itm/p1", "pickup_only": True},
+        {"item_id": "s1", "title": "HP Victus 15 Versand", "total_price": 720, "cond_group": "used",
+         "spec_group": "RTX 5050", "url": "https://www.ebay.de/itm/s1", "pickup_only": False}])
+    assert db.pickup_only_items(["p1", "s1"]) == {"p1"}
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"cfgl:{wid}:0")
+    ctx.user_data = {f"cfg_groups_{wid}": [("used", "RTX 5050")]}
+    asyncio.run(handlers.config_listings_callback(upd, ctx))
+    text = shown[-1][0]
+    assert "700 € · 🚗 лише самовивіз" in text and "720 € · 🚗" not in text

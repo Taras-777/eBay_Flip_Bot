@@ -417,3 +417,29 @@ def test_laptop_skips_aspect_step_and_keeps_only_parent_category(screen, monkeyp
     assert db.get_required_aspects(watch) == [] and watch["require_spec"] == 0
     assert [c["id"] for c in db.get_watch_categories(watch)] == ["58058"]  # лише батьківська
     assert "💻 Ноутбук" in screen.text
+
+
+def test_menu_command_moves_panel_down_without_duplicate():
+    """/menu (кнопка «Меню» в Telegram): нова панель унизу, стара прибирається."""
+    ctx = _panel_context(panel_id=10)
+    ctx.user_data["panel_force_new"] = True
+    upd = make_update()
+    upd.callback_query = None
+    upd.message.delete = AsyncMock()
+    run(panel.show_panel(upd, ctx, "menu"))
+    ctx.bot.edit_message_text.assert_not_called()
+    ctx.bot.delete_message.assert_called_once_with(chat_id=1, message_id=10)
+    assert ctx.user_data["panel_message_id"] == 99
+
+
+def test_old_panel_removed_even_after_restart():
+    """Після перезапуску бот міг «забути» панель (стан не встиг зберегтись) — номер є в базі."""
+    first = _panel_context(panel_id=None)
+    upd = make_update()
+    upd.callback_query = None
+    upd.message.delete = AsyncMock()
+    first.bot.send_message = AsyncMock(return_value=MagicMock(message_id=50))
+    run(panel.show_panel(upd, first, "menu"))                 # панель №50, записана в базу
+    after_restart = _panel_context(panel_id=None)            # пам'ять бота порожня
+    run(panel.show_panel(upd, after_restart, "menu"))
+    after_restart.bot.delete_message.assert_called_once_with(chat_id=1, message_id=50)

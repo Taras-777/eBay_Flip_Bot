@@ -48,7 +48,7 @@ def _key(watch_id):
 def _card(n, it):
     copies = f" · ×{it['copies']} однакових" if it.get("copies", 1) > 1 else ""
     lines = [f"<b>{n}. {html.escape((it['title'] or 'без назви')[:140])}</b>",
-             f"💶 {it['price']:.0f} €{copies}",
+             f"💶 {it['price']:.0f} €{copies}" + (" · 🚗 лише самовивіз" if it.get("pickup_only") else ""),
              f"🔍 {html.escape(it['info'])}"]
     if it.get("ref"):
         stat, sale = it["ref"]

@@ -272,6 +272,8 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         cond = f" · стан: {html.escape(it['condition'])}" if it.get("condition") else ""
         if is_bundle(it["title"]):
             cond += " · 📦 комплект"
+        if it.get("pickup_only"):
+            cond += " · 🚗 лише самовивіз"
         listed = ""
         if it.get("created_at"):
             old = time.time() - it["created_at"] > old_days * 86400

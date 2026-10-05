@@ -407,9 +407,15 @@ def init_db():
                          ("condition_id", "TEXT"), ("shipping_cost", "REAL"), ("pickup_only", "INTEGER"),
                          ("country", "TEXT"), ("sold_price", "REAL"), ("sold_at", "INTEGER"),
                          ("bid_count", "INTEGER"), ("offer_count", "INTEGER"), ("quantity", "INTEGER"),
-                         ("listing_type", "TEXT"), ("watch_count", "INTEGER"), ("current_bid", "REAL")]:
+                         ("listing_type", "TEXT"), ("watch_count", "INTEGER"), ("current_bid", "REAL"),
+                         ("seller_type", "TEXT")]:
             if obs_cols and col not in obs_cols:
                 conn.execute(f"ALTER TABLE listing_obs ADD COLUMN {col} {ddl}")
+
+        track_cols = {r["name"] for r in conn.execute("PRAGMA table_info(price_track)").fetchall()}
+        if track_cols and "dismissed_price" not in track_cols:
+            # «🧹 Очистити список» у «📉 Знизили ціну»: ціна, за якої оголошення прибрали зі списку
+            conn.execute("ALTER TABLE price_track ADD COLUMN dismissed_price REAL")
 
         deal_cols = {r["name"] for r in conn.execute("PRAGMA table_info(deals)").fetchall()}
         if deal_cols and "seen_at" not in deal_cols:
@@ -980,8 +986,9 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                 """INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price,
                                             created_at, end_at, first_seen, last_seen, miss_count, status,
                                             title, url, category_id, category_name, buying_options,
-                                            condition_id, shipping_cost, pickup_only, country, current_bid, bid_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            condition_id, shipping_cost, pickup_only, country, current_bid, bid_count,
+                                            seller_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(watch_id, item_id) DO UPDATE SET
                      cond_group=excluded.cond_group, spec_group=excluded.spec_group,
                      price=excluded.price, end_at=excluded.end_at, last_seen=excluded.last_seen,
@@ -995,13 +1002,14 @@ def update_listing_observations(watch_id, items, window_start=None, present_ids=
                      pickup_only=COALESCE(excluded.pickup_only, listing_obs.pickup_only),
                      country=COALESCE(excluded.country, listing_obs.country),
                      current_bid=excluded.current_bid,
-                     bid_count=COALESCE(excluded.bid_count, listing_obs.bid_count)""",
+                     bid_count=COALESCE(excluded.bid_count, listing_obs.bid_count),
+                     seller_type=COALESCE(excluded.seller_type, listing_obs.seller_type)""",
                 (watch_id, it["item_id"], it["cond_group"], it.get("spec_group", "unspecified"),
                  it["total_price"], it.get("created_at"), it.get("end_at"), now, now,
                  it.get("title"), it.get("url"), it.get("category_id"), it.get("category_name"),
                  it.get("buying_options"), it.get("condition_id") or None, it.get("shipping_cost"),
                  None if it.get("pickup_only") is None else int(it["pickup_only"]), it.get("country"),
-                 it.get("current_bid"), it.get("bid_count")),
+                 it.get("current_bid"), it.get("bid_count"), it.get("seller_type")),
             )
 
         if window_start is None:
@@ -1123,7 +1131,7 @@ def _sold_filter():
 def get_gone_rows(watch_id, cond_group, spec_group=None):
     """Ціни й час зникнення лотів за останні SOLD_LOOKBACK_DAYS днів → [{'price', 'gone_at'}]."""
     since = int(time.time()) - SOLD_LOOKBACK_DAYS * 86400
-    q = ("SELECT price, gone_at FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? "
+    q = ("SELECT price, gone_at, condition_id FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? "
          "AND cond_group = ?" + _sold_filter())
     params = [watch_id, since, cond_group]
     if spec_group is not None:
@@ -1183,7 +1191,7 @@ def watch_obs_summary(watch_id, days=SOLD_LOOKBACK_DAYS):
     return {k: int(row[k] or 0) for k in ("active", "sold", "confirmed", "pending", "withdrawn")}
 
 
-def copy_listing_history(src_watch_ids, dst_watch_id, allowed_groups=None, exclude_tokens=(), min_price=0):
+def copy_listing_history(src_watch_ids, dst_watch_id, allowed_conditions=None, exclude_tokens=(), min_price=0):
     """Копіює спостереження (активні й продані лоти) з товарів-«сусідів» новому товару,
     з урахуванням його фільтрів. Повертає кількість скопійованих."""
     from textparse import _search_tokens
@@ -1204,7 +1212,8 @@ def copy_listing_history(src_watch_ids, dst_watch_id, allowed_groups=None, exclu
             r = dict(r)
             if r["item_id"] in rejected:
                 continue
-            if allowed_groups and r["cond_group"] not in allowed_groups:
+            # Стани товару (коди eBay) — група тепер «магазин/приватний», тож фільтруємо за кодом стану
+            if allowed_conditions and r["condition_id"] and str(r["condition_id"]) not in allowed_conditions:
                 continue
             if exclude and _search_tokens(r.get("title") or "") & exclude:
                 continue
@@ -1241,7 +1250,7 @@ def get_current_listings(watch_id):
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT item_id, cond_group, spec_group, price, title, url, buying_options, current_bid,
-                      bid_count, end_at FROM listing_obs
+                      bid_count, end_at, pickup_only FROM listing_obs
                WHERE watch_id = ? AND status = 'active' AND last_seen >= ? AND price IS NOT NULL""",
             (watch_id, since),
         ).fetchall()]
@@ -1786,6 +1795,7 @@ def get_markdown_candidates(chat_id, min_drop_pct, min_days, fresh_seconds):
                WHERE w.chat_id = ? AND w.active = 1
                  AND t.last_seen >= ? AND t.price <= t.first_price * (1 - ? / 100.0)
                  AND COALESCE(t.listed_at, t.first_seen) <= ?
+                 AND (t.dismissed_price IS NULL OR t.price < t.dismissed_price - 0.01)
                  AND NOT EXISTS (SELECT 1 FROM rejected_items r
                                  WHERE r.watch_id = t.watch_id AND r.item_id = t.item_id)
                  AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.watch_id = t.watch_id
@@ -1793,6 +1803,14 @@ def get_markdown_candidates(chat_id, min_drop_pct, min_days, fresh_seconds):
             (chat_id, now - fresh_seconds, min_drop_pct, now - min_days * 86400),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def dismiss_tracks(rows):
+    """«🧹 Очистити список»: оголошення зникають з «📉 Знизили ціну» і повертаються, лише якщо
+    продавець знизить ціну ще раз. rows: [(watch_id, item_id, поточна ціна)]."""
+    with get_conn() as conn:
+        conn.executemany("UPDATE price_track SET dismissed_price = ? WHERE watch_id = ? AND item_id = ?",
+                         [(price, wid, item) for wid, item, price in rows])
 
 
 def get_track_row(watch_id, item_id):
@@ -2207,3 +2225,49 @@ def forget_seen_item(watch_id, item_id):
     """Оголошення оціниться заново наступного циклу (напр. після того, як користувач вказав клас)."""
     with get_conn() as conn:
         conn.execute("DELETE FROM seen_items WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))
+
+
+# ---------- 🏪 магазин / 👤 приватний ----------
+
+def set_seller_type(item_id, seller_type):
+    """Тип продавця з Trading API ('business' / 'individual' / 'unknown' — eBay не віддав) — в історію
+    всіх товарів з цим оголошенням; група магазин/приватний — відповідно (запчастини не чіпаємо).
+    Повертає товари, де група змінилась (їм перерахувати ринок)."""
+    group = {"business": "new", "individual": "used"}.get(seller_type)
+    with get_conn() as conn:
+        changed = [r["watch_id"] for r in conn.execute(
+            "SELECT DISTINCT watch_id FROM listing_obs WHERE item_id = ? AND cond_group NOT IN ('parts', ?)",
+            (item_id, group)).fetchall()] if group else []
+        if group:
+            conn.execute("UPDATE listing_obs SET seller_type = ? WHERE item_id = ?", (seller_type, item_id))
+        else:   # «eBay не віддав» не затирає тип, відомий з пошуку
+            conn.execute("UPDATE listing_obs SET seller_type = ? WHERE item_id = ? AND seller_type IS NULL",
+                         (seller_type, item_id))
+        if group:
+            conn.execute("UPDATE listing_obs SET cond_group = ? WHERE item_id = ? AND cond_group != 'parts'",
+                         (group, item_id))
+    return changed
+
+
+def get_sold_without_seller_type(max_age_days, limit):
+    """Продані (зниклі) оголошення без типу продавця, які eBay ще віддає (≤ max_age_days), свіжі першими."""
+    if limit <= 0:
+        return []
+    since = int(time.time()) - max_age_days * 86400
+    with get_conn() as conn:
+        return [r["item_id"] for r in conn.execute(
+            """SELECT item_id, MAX(gone_at) AS g FROM listing_obs
+               WHERE status = 'gone' AND gone_at >= ? AND seller_type IS NULL
+                 AND COALESCE(sold_check, '') NOT IN ('pending', 'unsold')
+               GROUP BY item_id ORDER BY g DESC LIMIT ?""", (since, limit)).fetchall()]
+
+
+def pickup_only_items(item_ids):
+    """Оголошення «лише самовивіз» (без доставки) серед item_ids — для позначки 🚗 у картках."""
+    ids = [i for i in item_ids if i]
+    if not ids:
+        return set()
+    with get_conn() as conn:
+        return {r["item_id"] for r in conn.execute(
+            f"SELECT DISTINCT item_id FROM listing_obs WHERE pickup_only = 1 AND item_id IN "
+            f"({','.join('?' * len(ids))})", ids).fetchall()}

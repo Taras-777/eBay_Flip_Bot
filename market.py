@@ -35,6 +35,7 @@ from laptops import needs_aspects as laptop_needs_aspects
 from laptops import wants_aspects as laptop_wants_aspects
 from textparse import (
     COMPAT_ASPECTS,
+    SEALED_CONDITION_IDS,
     _aspect_satisfied_by_title,
     extract_spec_key,
     normalize_spec,
@@ -160,6 +161,18 @@ def estimate_resale_profit(sale_price, purchase_price):
     """
     net_sale = sale_price * (1 - EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
     return sale_price, net_sale - purchase_price
+
+
+def drop_private_sealed(rows, all_private=False):
+    """👤 Приватні продають і запаковане нове («Neu», «Neu: Sonstige» — подарунок, OVP). Воно дорожче
+    за вживане, тож у ціні приватного ринку не враховується, якщо таких — меншість (інакше товар,
+    мабуть, і є «нове», напр. свіжа модель). all_private — усі рядки вже з групи «приватні»."""
+    private = rows if all_private else [r for r in rows if r.get("cond_group") == "used"]
+    sealed = [r for r in private if str(r.get("condition_id") or "") in SEALED_CONDITION_IDS]
+    if not sealed or len(sealed) * 2 >= len(private):
+        return rows
+    drop = {id(r) for r in sealed}
+    return [r for r in rows if id(r) not in drop]
 
 
 def offer_key(title, price):
@@ -501,7 +514,8 @@ def _compute_group_stats(watch_id, items):
                      інакше SALE_PRICE_PERCENTILE-й перцентиль пропозицій.
     """
     groups = {}
-    for it in dedupe_offers(items):   # одна пропозиція, виставлена кілька разів, — один голос
+    # одна пропозиція, виставлена кілька разів, — один голос; запаковане нове від приватних — окремо
+    for it in drop_private_sealed(dedupe_offers(items)):
         if it.get("auction"):
             continue   # «аукціон + купити зараз»: у списках для купівлі є, у статистиці — ні
         groups.setdefault((it["cond_group"], "*"), []).append(it["total_price"])
@@ -526,6 +540,8 @@ def _compute_group_stats(watch_id, items):
             continue
         median_price = statistics.median(clean)
         gone_rows = get_gone_rows(watch_id, cond, None if spec == "*" else spec)
+        if cond == "used":
+            gone_rows = drop_private_sealed(gone_rows, all_private=True)
         gone = filter_outliers([r["price"] for r in gone_rows])
         if len(gone) >= MIN_SOLD_SAMPLE:
             sale_price = min(recent_median(gone_rows), median_price)
@@ -683,6 +699,8 @@ def refresh_sale_prices(watch_id):
     for s in get_market_stats(watch_id):
         cond, spec = s["cond_group"], s["spec_group"]
         gone_rows = get_gone_rows(watch_id, cond, None if spec == "*" else spec)
+        if cond == "used":
+            gone_rows = drop_private_sealed(gone_rows, all_private=True)
         gone = filter_outliers([r["price"] for r in gone_rows])
         if len(gone) >= MIN_SOLD_SAMPLE:
             sale = min(recent_median(gone_rows), s["median_price"])

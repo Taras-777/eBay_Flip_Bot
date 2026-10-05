@@ -12,13 +12,13 @@ from telegram.ext import ContextTypes
 
 from settings import PRICE_DROP_CHOICES, PRICE_DROP_MIN_DAYS
 from deal_reprice import basis_line
-from db import get_drop_pct, get_watch, mark_track_seen, set_drop_pct
+from db import dismiss_tracks, get_drop_pct, get_watch, mark_track_seen, pickup_only_items, set_drop_pct
 from learning import hide_item, learned_words_note, reject_and_learn
 from laptops import laptop_warnings
 from markdowns import markdown_list, recheck_rows
 from panel import _ack_callback, run_with_progress, show_panel
 from access import require_access
-from textparse import plural
+from textparse import PICKUP_NOTE, plural
 from undo import record as undo_record, short
 
 PER_PAGE = 5
@@ -51,6 +51,8 @@ def _card(n, r):
     if basis:
         lines.append(basis)
     lines += laptop_warnings(r["title"])
+    if pickup_only_items([r["item_id"]]):
+        lines.append(PICKUP_NOTE)
     if r.get("url"):
         lines.append(f'<a href="{html.escape(r["url"])}">🔗 Відкрити на eBay</a>')
     return "\n".join(lines)
@@ -95,6 +97,8 @@ async def _render_markdowns(update, context, page=0, note=""):
         nav.append(InlineKeyboardButton("Далі ▶️", callback_data=f"mkd:{page + 1}"))
     if nav:
         buttons.append(nav)
+    if rows:
+        buttons.append([InlineKeyboardButton("🧹 Очистити список", callback_data="mkdclr")])
     buttons.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
     if shown:
         lines.append("<i>🙈 — сховати це оголошення; ❌ Інший товар — не той товар, бот запам'ятає.</i>")
@@ -163,3 +167,26 @@ async def drop_pct_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")]]),
         parse_mode=ParseMode.HTML,
     )
+
+
+@require_access
+async def markdowns_clear_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """mkdclr — спитати; mkdclr:yes — прибрати весь список (повернеться те, що знову подешевшає)."""
+    await _ack_callback(update)
+    chat_id = update.effective_chat.id
+    if update.callback_query.data != "mkdclr:yes":
+        rows = await asyncio.to_thread(markdown_list, chat_id)
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🧹 Так, очистити", callback_data="mkdclr:yes")],
+            [InlineKeyboardButton("◀️ Ні, назад", callback_data="mkd:0")],
+        ])
+        await show_panel(update, context,
+                         f"🧹 <b>Очистити «📉 Знизили ціну»?</b>\n\nЗі списку зникнуть усі "
+                         f"{plural(len(rows), 'оголошення', 'оголошення', 'оголошень')}. Кожне повернеться, "
+                         "лише якщо продавець знизить ціну ще раз.",
+                         reply_markup=keyboard, parse_mode=ParseMode.HTML)
+        return
+    rows = await asyncio.to_thread(markdown_list, chat_id)
+    await asyncio.to_thread(dismiss_tracks, [(r["watch_id"], r["item_id"], r["price"]) for r in rows])
+    await _render_markdowns(update, context, 0,
+                            note=f"🧹 Список очищено ({len(rows)}). Оголошення повернуться, якщо подешевшають ще.")

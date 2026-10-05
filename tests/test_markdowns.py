@@ -169,6 +169,26 @@ def test_card_shows_where_sale_price_comes_from():
     db.track_prices(wid, [_item("a", 540), _item("b", 540, spec_group="512GB")])
     rows = {r["item_id"]: r for r in markdowns.markdown_list(1)}
     own = screen_markdowns._card(1, rows["a"])
-    assert "📊 Ціна продажу за проданими · вживані, 256GB" in own and "⚠️" not in own
+    assert "📊 Ціна продажу за проданими · 👤 приватні, 256GB" in own and "⚠️" not in own
     wide = screen_markdowns._card(2, rows["b"])                 # 512GB немає — ціна за всіма
-    assert "📊 Ціна продажу за 12 проданими · вживані, усі конфігурації" in wide and "⚠️" in wide
+    assert "📊 Ціна продажу за 12 проданими · 👤 приватні, усі конфігурації" in wide and "⚠️" in wide
+
+
+def test_clear_list_returns_only_after_new_drop(monkeypatch):
+    wid = _setup()
+    db.track_prices(wid, [_item("a", 700), _item("b", 650)])
+    db.track_prices(wid, [_item("a", 520), _item("b", 430)])
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("mkd:0")
+    ctx.user_data = {}
+    asyncio.run(handlers.markdowns_callback(upd, ctx))
+    assert "🧹 Очистити список" in shown[-1][1]
+    upd.callback_query.data = "mkdclr"
+    asyncio.run(handlers.markdowns_clear_callback(upd, ctx))
+    assert "Очистити «📉 Знизили ціну»?" in shown[-1][0] and markdowns.markdown_list(1)   # спершу питає
+    upd.callback_query.data = "mkdclr:yes"
+    asyncio.run(handlers.markdowns_clear_callback(upd, ctx))
+    assert "Список очищено (2)" in shown[-1][0] and markdowns.markdown_list(1) == []
+    assert not any(b.text.startswith("📉") for r in panel.build_main_menu(1).inline_keyboard for b in r)
+    db.track_prices(wid, [_item("a", 480), _item("b", 430)])          # «a» подешевшало ще — повертається
+    assert [r["item_id"] for r in markdowns.markdown_list(1)] == ["a"]

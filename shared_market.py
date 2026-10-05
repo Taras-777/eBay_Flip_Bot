@@ -17,7 +17,7 @@ import threading
 import time
 
 from settings import log
-from textparse import _search_tokens, condition_group_from_item
+from textparse import _search_tokens
 from db import copy_listing_history, get_watch_categories, list_watches, watch_category_ids
 from ebay_api import effective_exclude, effective_min_price, search_active_items, search_in_categories
 
@@ -141,10 +141,9 @@ def attach_shared_history(watch):
     if not others:
         return 0
     conds = _conditions(watch)
-    groups = {condition_group_from_item({"conditionId": c}) for c in conds} if conds else None
     copied = copy_listing_history(
         [s["id"] for s in others], watch["id"],
-        allowed_groups=groups,
+        allowed_conditions=set(conds) if conds else None,
         exclude_tokens=_search_tokens(watch.get("exclude") or ""),
         min_price=watch.get("min_price") or 0,
     )

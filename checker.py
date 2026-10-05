@@ -19,7 +19,7 @@ from textparse import (
     _group_label,
     _search_tokens,
     _title_matches_search,
-    condition_group_from_item,
+    market_group,
     extract_spec_key,
     spec_key_from_aspects,
 )
@@ -89,7 +89,7 @@ def check_listing(watch, text):
 
     # 3. Стан
     condition = item.get("condition") or "невідомий"
-    cond_group = condition_group_from_item(item)
+    cond_group = market_group(item)
     allowed = {c.strip() for c in (watch.get("condition_ids") or "").split(",") if c.strip()}
     if cond_group == "parts":
         checks.append((FAIL, f"Стан «{condition}» — на запчастини/дефектний, такі бот не враховує"))

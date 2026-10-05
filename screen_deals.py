@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 from settings import LAPTOP_SALES_WINDOW_DAYS, MIN_PROFIT_CHOICES, SALES_WINDOW_DAYS
 from learning import hide_item, learned_words_note, reject_and_learn
 from db import (
+    pickup_only_items,
     get_deal,
     get_track_row,
     get_inbox_deals,
@@ -30,7 +31,7 @@ from sales import sales_note
 from deal_check import recheck_shown_deals
 from deal_reprice import basis_line, reprice_deals
 from laptops import laptop_warnings
-from textparse import is_bundle
+from textparse import PICKUP_NOTE, is_bundle
 from undo import record as undo_record, short
 
 
@@ -93,6 +94,10 @@ def _deal_card(n, d, sold=None):
         warn += "\n" + auction_note(d.get("current_bid"), d.get("bid_count"), d.get("end_at"),
                                     as_of="(на момент знахідки)")
     basis = basis_line(d)
+    if pickup_only_items([d["item_id"]]):
+        warn += "\n" + PICKUP_NOTE
+    if d.get("cond_group") == "new":
+        warn = (warn or "") + "\n🏪 Продає магазин — є 14 днів на повернення і гарантія"
     listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
     return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
             f"{html.escape(d['title'][:90])}\n{listed}"

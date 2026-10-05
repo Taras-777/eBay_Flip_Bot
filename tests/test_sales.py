@@ -182,7 +182,7 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
     assert sorted(recalculated) == sorted([w1, w2]) and fetched == [1]
     assert any("(1/2)" in t for t in shown)
     assert "✅ Ціни оновлено: 1 товар" in shown[-1] and "Не вдалося" not in shown[-1]
-    assert "📉 Замало оголошень: iPhone (8: вживані 5, нові 3 — треба 8 одного стану)" in shown[-1]
+    assert "📉 Замало оголошень: iPhone (8: 👤 приватні 5, 🏪 магазин 3 — треба 8 в одній групі)" in shown[-1]
     assert ctx.bot_data["refresh_all_running"] is False
 
 

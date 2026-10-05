@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 
 import config
@@ -15,7 +16,7 @@ from telegram.ext import ContextTypes
 from markdowns import markdown_counts
 from undo import attach_offer, menu_offer, undo_button
 from settings import CHECK_INTERVAL_MINUTES, LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import (count_notices, count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users,
+from db import (count_notices, count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, set_meta,
                 sold_confirmed_today)
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, seconds_until_reset, trading_calls_today
@@ -203,14 +204,15 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
     chat_id = update.effective_chat.id
     reply_markup = attach_offer(context, reply_markup)   # «↩️ Скасувати» одразу після дії
     _remember_panel(context, text, reply_markup, parse_mode)
+    # /menu, /start, файл над панеллю — панель має з'явитись унизу новим повідомленням
+    force_new = context.user_data.pop("panel_force_new", False)
     previous_id = context.user_data.get("panel_message_id")
     if update.callback_query:
         # Натиснута кнопка на повідомленні — воно й стає панеллю. Якщо панеллю
         # досі було інше повідомлення, прибираємо його, щоб меню не двоїлось.
         clicked_id = update.callback_query.message.message_id
-        if previous_id and previous_id != clicked_id:
-            await _delete_quietly(context.bot, chat_id, previous_id)
         context.user_data["panel_message_id"] = clicked_id
+        await _drop_old_panels(context.bot, chat_id, keep=clicked_id, extra=[previous_id])
     elif update.message:
         try:
             await update.message.delete()
@@ -218,7 +220,7 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
             log.debug("Не вдалося видалити повідомлення користувача: %s", e)
 
     panel_id = context.user_data.get("panel_message_id")
-    if panel_id:
+    if panel_id and not force_new:
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id, message_id=panel_id, text=text,
@@ -237,8 +239,8 @@ async def show_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, text: s
         link_preview_options=NO_PREVIEW,
     )
     context.user_data["panel_message_id"] = msg.message_id
-    if panel_id and panel_id != msg.message_id:
-        await _delete_quietly(context.bot, chat_id, panel_id)  # стара панель не має лишатись
+    # Стара панель не має лишатись (і ті, що «загубились», напр. після перезапуску бота)
+    await _drop_old_panels(context.bot, chat_id, keep=msg.message_id, extra=[panel_id])
 
 
 PROGRESS_AFTER_SECONDS = 0.8
@@ -259,6 +261,24 @@ async def run_with_progress(update, context, text, func, *args):
             except Exception as e:
                 log.debug("Не вдалося показати «⏳»: %s", e)
     return await task
+
+
+def _known_panels(chat_id):
+    try:
+        return [int(x) for x in json.loads(get_meta(f"panels:{chat_id}", "[]") or "[]")]
+    except (ValueError, TypeError):
+        return []
+
+
+async def _drop_old_panels(bot, chat_id, keep, extra=()):
+    """Панель у чаті — одна. Номери панелей зберігаються в базі (а не лише в пам'яті бота), тож
+    і після перезапуску бот знає про попередню панель і прибирає її, коли з'являється нова."""
+    known = await asyncio.to_thread(_known_panels, chat_id)
+    old = {m for m in list(known) + list(extra) if m and m != keep}
+    for message_id in old:
+        await _delete_quietly(bot, chat_id, message_id)
+    if known != [keep]:
+        await asyncio.to_thread(set_meta, f"panels:{chat_id}", json.dumps([keep]))
 
 
 async def _delete_quietly(bot, chat_id, message_id):
@@ -321,10 +341,7 @@ async def repost_panel(app, chat_id):
         log.debug("Не вдалося перенести панель у чаті %s: %s", chat_id, e)
         return
     user_data["panel_message_id"] = msg.message_id
-    try:
-        await app.bot.delete_message(chat_id=chat_id, message_id=old_id)
-    except Exception as e:
-        log.debug("Не вдалося видалити стару панель у чаті %s: %s", chat_id, e)
+    await _drop_old_panels(app.bot, chat_id, keep=msg.message_id, extra=[old_id])
 
 
 async def notify(app, chat_id, text, reply_markup=None, parse_mode=None):
@@ -398,5 +415,7 @@ async def refresh_owner_menu(bot):
             parse_mode=ParseMode.HTML,
         )
         _owner_notice_state["message_id"] = msg.message_id
+        # Це теж головне меню: попередню панель прибираємо, щоб меню не двоїлось
+        await _drop_old_panels(bot, config.OWNER_TELEGRAM_ID, keep=msg.message_id)
     except Exception as e:
         log.warning("Не вдалося оновити меню власника: %s", e)

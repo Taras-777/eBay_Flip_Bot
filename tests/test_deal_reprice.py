@@ -62,13 +62,13 @@ def test_card_explains_price(monkeypatch):
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
     text = shown[-1][0]
-    assert "📊 Ціна продажу за 30 поточними оголошеннями (продажів ще мало) · вживані, усі конфігурації" in text
+    assert "📊 Ціна продажу за 30 поточними оголошеннями (продажів ще мало) · 👤 приватні, усі конфігурації" in text
     assert "Для цієї конфігурації даних замало" in text           # 256GB окремо ще не пораховано
 
     db.upsert_market_stats(wid, "used", "256GB", 720, 12, sale_price=700, sale_source="за 7 проданими")
     asyncio.run(handlers.deals_callback(upd, ctx))
     text = shown[-1][0]
-    assert "продати ~700€" in text and "📊 Ціна продажу за 7 проданими · вживані, 256GB" in text
+    assert "продати ~700€" in text and "📊 Ціна продажу за 7 проданими · 👤 приватні, 256GB" in text
     assert "даних замало" not in text and "перераховано" not in text   # нічого не прибрано
 
 
