@@ -183,7 +183,7 @@ def test_shop_listing_sold_quantity_saved(fake_ebay, monkeypatch):
     monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(
         {"localizedAspects": [{"name": "Speicherkapazität", "value": "256 GB"}],
          "estimatedAvailabilities": [{"estimatedSoldQuantity": 14, "estimatedAvailableQuantity": 6}]}))
-    assert ebay_api.fetch_item_aspects("v1|shop|0") == {"speicherkapazität": "256 GB", "_beschreibung_geprueft": "1"}
+    assert ebay_api.fetch_item_aspects("v1|shop|0") == {"speicherkapazität": "256 GB", "_beschreibung_geprueft": "2"}
     db.save_cached_spec("v1|shop|0", "256GB", {"speicherkapazität": "256 GB"})   # як після читання характеристик
     with db.get_conn() as conn:
         row = dict(conn.execute("SELECT spec_group, est_sold, est_available FROM item_specs").fetchone())

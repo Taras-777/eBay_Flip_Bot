@@ -43,7 +43,7 @@ from textparse import (
     market_group,
     seller_type_of,
 )
-from laptops import DESC_CHECKED, is_laptop, specs_from_description
+from laptops import DESC_CHECKED, DESC_VERSION, is_laptop, specs_from_description
 from db import (
     get_watch_categories,
     get_api_calls_today,
@@ -376,7 +376,7 @@ def fetch_item_aspects(item_id):
     }
     # Відеокарта, процесор, пам'ять, які продавець написав лише в описі (опис — у цій самій відповіді)
     aspects.update(specs_from_description(data.get("description") or data.get("shortDescription")))
-    aspects[DESC_CHECKED] = "1"
+    aspects[DESC_CHECKED] = DESC_VERSION
     return aspects
 
 

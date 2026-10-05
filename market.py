@@ -30,7 +30,7 @@ from settings import (
     log,
 )
 from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, spec_matches, spec_parents
-from laptops import DESC_CHECKED
+from laptops import DESC_CHECKED, DESC_VERSION
 from laptops import needs_aspects as laptop_needs_aspects
 from laptops import wants_aspects as laptop_wants_aspects
 from textparse import (
@@ -302,7 +302,7 @@ def _annotate_items_auto(items, max_lookups=0, watch=None):
                     it["aspects"] = aspects
                     # Класу бракує відеокарти, процесора чи пам'яті, а опис бот ще не читав
                     # (характеристики завантажено до того, як він навчився) — читаємо ще раз
-                    if not (laptop_wants_aspects(it["spec_group"]) and DESC_CHECKED not in aspects):
+                    if not (laptop_wants_aspects(it["spec_group"]) and aspects.get(DESC_CHECKED) != DESC_VERSION):
                         continue
                     if lookups_left > 0:
                         lookups_left -= 1

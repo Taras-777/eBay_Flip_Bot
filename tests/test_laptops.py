@@ -376,11 +376,11 @@ def test_old_cached_aspects_reread_for_description(monkeypatch):
     monkeypatch.setattr(market, "fetch_item_aspects",
                         lambda item_id: fetched.append(item_id) or {"marke": "ASUS",
                                                                      "grafikkarte (aus beschreibung)": "RTX 5070 Ti",
-                                                                     "_beschreibung_geprueft": "1"})
+                                                                     "_beschreibung_geprueft": "2"})
     monkeypatch.setattr(market, "browse_budget_left", lambda: 5000)
     wid = db.add_watch(1, "ROG Strix G18", "ROG Strix G18", "", "", 15)
     db.save_cached_spec("old", "GPU ? · Ultra 9", {"marke": "ASUS"})          # прочитано до цієї зміни
-    db.save_cached_spec("done", "GPU ? · Ultra 9", {"marke": "ASUS", "_beschreibung_geprueft": "1"})
+    db.save_cached_spec("done", "GPU ? · Ultra 9", {"marke": "ASUS", "_beschreibung_geprueft": "2"})
     items = [{"item_id": "old", "title": "ASUS ROG Strix G18 Ultra 9 275HX"},
              {"item_id": "done", "title": "ASUS ROG Strix G18 Ultra 9 275HX"}]
     market._annotate_items(items, max_lookups=5, watch=db.get_watch(wid, 1))
@@ -508,3 +508,26 @@ def test_pickup_only_marked(monkeypatch):
     asyncio.run(handlers.config_listings_callback(upd, ctx))
     text = shown[-1][0]
     assert "700 € · 🚗 лише самовивіз" in text and "720 € · 🚗" not in text
+
+
+def test_description_ram_with_label_and_comma():
+    from laptops import specs_from_description
+    desc = ("Prozessor:<br>Intel Core i5-12500H 12 x 1.8 - 4.5 GHz<br>Grafikkarte:<br>NVIDIA GeForce RTX 4060 "
+            "Laptop GPU -<br>8 GB VRAM, GDDR6<br>RAM: 16 GB , DDR4-3200, Dual-Channel-Mode, two memory slots")
+    found = specs_from_description(desc)
+    assert found["arbeitsspeicher (aus beschreibung)"] == "16 GB"          # «8 GB VRAM» — відеопам'ять
+    assert laptops.laptop_spec("Gigabyte G5 KF (G5 Serie)", found).startswith("RTX 4060 · i5 12 gen · 16GB")
+    assert specs_from_description("Arbeitsspeicher: 32 GB")["arbeitsspeicher (aus beschreibung)"] == "32 GB"
+
+
+def test_old_description_version_reread(monkeypatch):
+    fetched = []
+    monkeypatch.setattr(market, "fetch_item_aspects",
+                        lambda item_id: fetched.append(item_id) or {"_beschreibung_geprueft": "2",
+                                                                     "arbeitsspeicher (aus beschreibung)": "16 GB"})
+    monkeypatch.setattr(market, "browse_budget_left", lambda: 5000)
+    wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15)
+    db.save_cached_spec("old", "RTX 4060 · i5 12 gen", {"_beschreibung_geprueft": "1"})   # прочитано старою версією
+    items = [{"item_id": "old", "title": "MSI Katana i5-12500H RTX 4060"}]
+    market._annotate_items(items, max_lookups=5, watch=db.get_watch(wid, 1))
+    assert fetched == ["old"] and items[0]["spec_group"] == "RTX 4060 · i5 12 gen · 16GB"

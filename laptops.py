@@ -118,6 +118,9 @@ DESC_RAM_ASPECT = "arbeitsspeicher (aus beschreibung)"
 DESC_SSD_ASPECT = "ssd (aus beschreibung)"
 DESC_SCREEN_ASPECT = "bildschirm (aus beschreibung)"
 DESC_CHECKED = "_beschreibung_geprueft"   # опис уже переглянуто (щоб не перечитувати)
+# Версія розбору опису: коли бот навчився читати більше (напр. «RAM: 16 GB , DDR4»), оголошення
+# з неповним класом, прочитані старішою версією, перечитуються один раз
+DESC_VERSION = "2"
 _HTML_BLOCKS = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.I | re.S)
 _HTML_TAGS = re.compile(r"<[^>]+>")
 # Процесори в описі. Apple — лише з «Apple» перед чипом або «Chip» після (інакше «M2 SSD» — це M.2)
@@ -136,8 +139,10 @@ _DESC_SSD = re.compile(r"\b(\d{2,4}|[1-8])\s?(GB|TB)\b(?:(?!\d+\s?(?:GB|TB))[\s\
 
 
 # RAM в описі: «32 GB DDR5», «24 GB gemeinsamer Arbeitsspeicher», «16 GB Unified Memory»
-_DESC_RAM = re.compile(r"\b(\d+)\s?gb\s*(?:[a-zäöü]+\s+)?(?:ram|ddr\d\w*|lpddr\d\w*|arbeitsspeicher|unified|memory)\b",
-                       re.I)
+_DESC_RAM = re.compile(
+    r"\b(\d+)\s?gb\s*[,;:/-]?\s*(?:[a-zäöü]+\s+)?(?:ram|ddr\d\w*|lpddr\d\w*|arbeitsspeicher|unified|memory)\b"
+    # «RAM: 16 GB», «Arbeitsspeicher: 32 GB»
+    r"|\b(?:ram|arbeitsspeicher(?:größe)?|memory)\s*[:\-]?\s*(\d+)\s?gb\b", re.I)
 
 
 def _description_text(description):
@@ -178,7 +183,7 @@ def specs_from_description(description):
     if len(cpus) == 1:
         result[DESC_CPU_ASPECT] = next(iter(cpus.values()))
     no_vram = _VRAM_TAGGED.sub(" ", text)
-    ram = _unique(int(n) for n in _DESC_RAM.findall(no_vram) if 4 <= int(n) <= 128)
+    ram = _unique(int(a or b) for a, b in _DESC_RAM.findall(no_vram) if 4 <= int(a or b) <= 128)
     if ram:
         result[DESC_RAM_ASPECT] = f"{ram} GB"
     ssd = _unique(int(m.group(1) or m.group(3)) * (1024 if (m.group(2) or m.group(4)).upper() == "TB" else 1)
