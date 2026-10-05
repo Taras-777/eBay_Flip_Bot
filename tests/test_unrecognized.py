@@ -179,3 +179,12 @@ def test_build_class_step_by_step(monkeypatch):
     text, buttons = press_again(f"unkbp:{wid}:l:{buttons.index('16GB')}")
     assert "Клас «RTX 3060 · 16GB» збережено" in text
     assert db.get_manual_specs(["u1"]) == {"u1": "RTX 3060 · 16GB"}
+
+
+def test_item_refreshed_when_bot_now_knows_full_class():
+    wid, watch = _setup()
+    # Опис уже перечитано новою версією — RAM знайдено, а в історії ще старий неповний клас
+    db.save_cached_spec("u1", "GPU ? · i7 13 gen · 16GB",
+                        {"_beschreibung_geprueft": "2", "grafikkarte (aus beschreibung)": "RTX 4060"})
+    assert unrecognized.unrecognized_items(watch) == []
+    assert {r["item_id"]: r["spec_group"] for r in db.get_current_listings(wid)}["u1"] == FULL

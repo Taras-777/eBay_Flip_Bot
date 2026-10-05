@@ -33,6 +33,7 @@ from laptops import (
     group_scope,
     spec_kind,
     is_laptop,
+    laptop_spec,
     sources_line,
     wants_aspects,
 )
@@ -64,7 +65,7 @@ def unrecognized_items(watch):
     ids = [r["item_id"] for r in rows]
     manual = get_manual_specs(ids)
     cached = get_cached_specs(ids)
-    result = []
+    result, refreshed = [], False
     for r in rows:
         if r["item_id"] in manual:
             continue
@@ -75,9 +76,19 @@ def unrecognized_items(watch):
             continue
         if not laptop and entry is None:
             continue
+        if laptop:
+            # Бот уже знає більше, ніж записано в історії (опис перечитано новою версією) — клас
+            # оновлюється одразу, не чекаючи наступного сканування ринку
+            fresh = laptop_spec(r["title"] or "", aspects, watch.get("query") or "")
+            if fresh != r["spec_group"] and not _incomplete(fresh, laptop):
+                set_listing_spec(watch["id"], r["item_id"], fresh)
+                refreshed = True
+                continue
         info = (sources_line(class_sources(r["title"] or "", aspects, watch.get("query") or "")) if laptop
                 else "пам'ять / конфігурація: ❓ (ні в назві, ні в характеристиках)")
         result.append(dict(r, info=info))
+    if refreshed:
+        mark_market_stale(watch["id"])
     result = dedupe_offers(result, price_field="price")
 
     stats = {(s["cond_group"], s["spec_group"]): s for s in get_market_stats(watch["id"])}
