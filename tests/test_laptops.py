@@ -18,9 +18,9 @@ import market
     ("MSI RTX 4070 8GB GDDR6 32GB DDR5 1TB", "RTX 4070 · 32GB+"),
     ("Lenovo ThinkPad X1 Carbon Gen 10 i5-1240P 16GB 256GB", "iGPU · i5 12 gen · 16GB"),
     ("Dell XPS 13 Core Ultra 7 155H 16GB 1TB", "iGPU · Core Ultra 7 (S1) · 16GB"),
-    ("Apple MacBook Pro 14 M3 Pro 18GB 512GB", 'M3 Pro · 14" · 18GB · 512GB'),
-    ("Apple MacBook Pro 14,2 Zoll M3 8GB RAM 512GB SSD", 'M3 · 14" · 8GB · 512GB'),
-    ('MacBook Pro 16" M3 Max 36GB 1TB', 'M3 Max · 16" · 36GB · 1TB'),
+    ("Apple MacBook Pro 14 M3 Pro 18GB 512GB", 'M3 Pro · 14" · 18GB'),
+    ("Apple MacBook Pro 14,2 Zoll M3 8GB RAM 512GB SSD", 'M3 · 14" · 8GB'),
+    ('MacBook Pro 16" M3 Max 36GB 1TB', 'M3 Max · 16" · 36GB'),
     ("HP Victus 15 Gaming Laptop", "unspecified"),
 ])
 def test_laptop_class(title, spec):
@@ -406,17 +406,18 @@ def test_specs_from_description_cpu_ram_ssd_screen():
                                {"prozessor (aus beschreibung)": "i7-13620H"}) == "RTX 4060 · i7 13 gen · 16GB"
 
 
-def test_macbook_ssd_rounding_default_screen_and_suspicious_16():
+def test_macbook_class_without_ssd_default_screen_and_suspicious_16():
     q = "MacBook Pro M4"
-    assert laptops.laptop_spec("Apple MacBook Pro M4 16GB 500GB", {}, q) == 'M4 · 14" · 16GB · 512GB'
-    assert laptops.laptop_spec('MacBook Pro M4 Pro 16" 24GB 1000GB', {}, q) == 'M4 Pro · 16" · 24GB · 1TB'
-    assert laptops.laptop_spec("MacBook Pro M2 8GB 256GB", {}, "") == 'M2 · 13" · 8GB · 256GB'
-    assert laptops.laptop_spec("MacBook Air M4 16GB 256GB", {}, "MacBook Air") == "M4 · 16GB · 256GB"   # Air: 13 або 15
+    assert laptops.laptop_spec("Apple MacBook Pro M4 16GB 500GB", {}, q) == 'M4 · 14" · 16GB'     # SSD не в класі
+    assert laptops.laptop_spec('MacBook Pro M4 Pro 16" 24GB 1000GB', {}, q) == 'M4 Pro · 16" · 24GB'
+    assert laptops.laptop_spec("MacBook Pro M2 8GB 256GB", {}, "") == 'M2 · 13" · 8GB'
+    assert laptops.laptop_spec("MacBook Air M4 16GB 256GB", {}, "MacBook Air") == "M4 · 16GB"   # Air: 13 або 15
     assert laptops.laptop_spec('MacBook Pro 16" M4 24GB 512GB', {}, q).startswith("M4 Pro/Max ?")
     # Чип у назві «M4», а в характеристиках точніший «M4 Pro» — береться точніший
     assert laptops.laptop_spec('MacBook Pro M4 16" 24GB 512GB', {"prozessor": "Apple M4 Pro"}, q) == \
-        'M4 Pro · 16" · 24GB · 512GB'
-    assert laptops.wants_aspects('M4 · 14"') and not laptops.wants_aspects('M4 · 14" · 16GB · 512GB')
+        'M4 Pro · 16" · 24GB'
+    assert laptops.wants_aspects('M4 · 14"') and not laptops.wants_aspects('M4 · 14" · 16GB')
+    assert laptops.group_scope('M4 Pro · 14"') == "уся RAM" and laptops.group_scope('M4 Pro · 14" · 24GB') == ""
 
 
 def test_configs_screen_shows_priced_groups_first(monkeypatch):

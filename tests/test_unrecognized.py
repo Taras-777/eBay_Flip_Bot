@@ -135,3 +135,47 @@ def test_sold_or_ended_not_shown(monkeypatch, available):
     text = shown[-1][0]
     assert "Прибрано вже проданих чи завершених: 1" in text and "Усе розпізнано" in text
     assert unrecognized.count_unrecognized(watch) == 0
+
+
+def test_options_only_same_kind_and_kind_by_majority():
+    wid, watch = _setup()
+    db.update_listing_observations(wid, [{"item_id": "x", "title": "Speicher 32GB 64GB", "total_price": 50,
+                                          "cond_group": "used", "spec_group": "32GB+64GB"}])
+    item = unrecognized.unrecognized_items(watch)[0]
+    assert "32GB+64GB" not in unrecognized.class_options(watch, item)
+    # Товар не позначено як ноутбук, але більшість його оголошень — ноутбуки
+    other = db.add_watch(1, "Gigabyte g5", "Gigabyte g5", "", "", 15)
+    db.update_listing_observations(other, [
+        {"item_id": f"g{i}", "title": f"Gigabyte G5 Nr{i}", "total_price": 700, "cond_group": "used",
+         "spec_group": "RTX 3060 · i5 12 gen · 16GB"} for i in range(3)])
+    g5 = db.get_watch(other, 1)
+    assert unrecognized.item_kind(g5, {"spec_group": "unspecified"}) == "win"
+    assert unrecognized.builder_steps(g5, {"spec_group": "unspecified"})[0]["local"] == ["RTX 3060"]
+
+
+def test_build_class_step_by_step(monkeypatch):
+    wid, watch = _setup()
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"unk:{wid}:0")
+    ctx.user_data = {}
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    upd.callback_query.data = f"unkm:{wid}:0"
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    assert "🧩 Немає потрібного — зібрати клас" in shown[-1][1]
+
+    def press_again(data):
+        upd.callback_query.data = data
+        asyncio.run(handlers.unknown_callback(upd, ctx))
+        return shown[-1]
+
+    text, buttons = press_again(f"unkb:{wid}:0")
+    assert "крок 1 з 3: <b>відеокарта</b>" in text and buttons[0] == "RTX 4060" and "⏭ Невідомо" not in buttons
+    text, buttons = press_again(f"unkbl:{wid}")                               # усі відеокарти
+    k = buttons.index("RTX 3060")
+    text, buttons = press_again(f"unkbp:{wid}:a:{k}")
+    assert "крок 2 з 3: <b>процесор</b>" in text and "Вибрано: RTX 3060" in text
+    text, buttons = press_again(f"unkbs:{wid}")                                # процесор невідомий
+    assert "крок 3 з 3: <b>RAM</b>" in text
+    text, buttons = press_again(f"unkbp:{wid}:l:{buttons.index('16GB')}")
+    assert "Клас «RTX 3060 · 16GB» збережено" in text
+    assert db.get_manual_specs(["u1"]) == {"u1": "RTX 3060 · 16GB"}

@@ -4,8 +4,8 @@
 Ціну ноутбука визначають не SSD чи точна модель процесора, а:
   * Windows-ноутбук — відеокарта · покоління процесора · RAM
     («RTX 4060 · i7 13 gen · 16GB»);
-  * MacBook — чип · екран · RAM · SSD («M3 Pro · 14" · 18GB · 512GB»);
-    графіка в Mac вбудована в чип, RAM і SSD не замінити.
+  * MacBook — чип · екран · RAM («M3 Pro · 14" · 18GB»);
+    графіка в Mac вбудована в чип, RAM не замінити. SSD не враховується.
 
 Частини класу йдуть від найважливішої, тож «батьківські» групи — це префікси:
 «RTX 4060 · i7 13 gen · 16GB» → «RTX 4060 · i7 13 gen» → «RTX 4060» → усі.
@@ -303,15 +303,13 @@ def laptop_spec(title, aspects=None, query=""):
     cpu_text = _aspect(aspects, CPU_ASPECTS) or _aspect(aspects, {DESC_CPU_ASPECT})
     token = _best_cpu_token(extract_cpu_token(title), extract_cpu_token(_aspect(aspects, CPU_ASPECTS)),
                             extract_cpu_token(_aspect(aspects, {DESC_CPU_ASPECT})))
-    ram, ssd = _sizes(title)
+    ram = _sizes(title)[0]
     if ram is None:
         ram = _sizes(_aspect(aspects, RAM_ASPECTS) + " RAM")[0]
     if ram is None:
         ram = _sizes(_aspect(aspects, {DESC_RAM_ASPECT}) + " RAM")[0]
-    if ssd is None:
-        ssd = _sizes(_aspect(aspects, SSD_ASPECTS))[1] or _sizes(_aspect(aspects, {DESC_SSD_ASPECT}))[1]
 
-    # MacBook: чип · екран · RAM · SSD
+    # MacBook: чип · екран · RAM
     if token and re.fullmatch(r"M\d+(PRO|MAX|ULTRA)?", token):
         chip = re.sub(r"(PRO|MAX|ULTRA)$", lambda m: " " + m.group(1).capitalize(), token)
         screen = _screen(title, aspects)
@@ -324,9 +322,9 @@ def laptop_spec(title, aspects=None, query=""):
         elif plain_chip and screen is None and macbook_pro:
             # MacBook Pro зі звичайним чипом: M1/M2 — лише 13", з M3 — лише 14"
             screen = '14"' if int(token[1:]) >= 3 else '13"'
-        parts = [chip, screen]
-        parts += [_size_label(ram) if ram and ram <= 128 else None,
-                  _size_label(_apple_ssd(ssd)) if ssd else None]
+        # SSD у класі не враховуємо: ціну Mac визначають чип, екран і RAM (SSD — дрібніша різниця,
+        # а групи без нього більші й надійніші)
+        parts = [chip, screen, _size_label(ram) if ram and ram <= 128 else None]
         return SEP.join(p for p in parts if p)
 
     # Windows-ноутбук: відеокарта · процесор · RAM
@@ -368,10 +366,7 @@ def class_sources(title, aspects=None, query=""):
                         (aspects.get(DESC_SCREEN_ASPECT), "опис"))
         if screen[0] is None and len(parts) > 1 and parts[1].endswith('"'):
             screen = (parts[1], "типово для моделі")
-        ssd = _first((_sizes(t)[1], "назва"), (_sizes(_aspect(aspects, SSD_ASPECTS))[1], "характеристики"),
-                     (_sizes(_aspect(aspects, {DESC_SSD_ASPECT}))[1], "опис"))
-        ssd = (_size_label(_apple_ssd(ssd[0])) if ssd[0] else None, ssd[1])
-        return [("чип", parts[0], chip_src), ("екран", *screen), ("RAM", *ram), ("SSD", *ssd)]
+        return [("чип", parts[0], chip_src), ("екран", *screen), ("RAM", *ram)]
     gpu = _first((detect_gpu(t), "назва"), (detect_gpu(_aspect(aspects, GPU_ASPECTS)), "характеристики"),
                  (detect_gpu(_aspect(aspects, {DESC_GPU_ASPECT})), "опис"))
     cpu = _first((_cpu_class(t), "назва"), (_cpu_class("", _aspect(aspects, CPU_ASPECTS)), "характеристики"),
@@ -400,8 +395,8 @@ def wants_aspects(spec):
         return True
     parts = spec.split(SEP)
     if re.fullmatch(r"M\d+( Pro| Max| Ultra| Pro/Max \?)?", parts[0]):
-        # MacBook: чип · екран · RAM · SSD — бракує частини або чип під питанням
-        return len(parts) < 4 or "?" in parts[0]
+        # MacBook: чип · екран · RAM — бракує частини або чип під питанням
+        return len(parts) < 3 or "?" in parts[0]
     has_cpu = any(_FULL_CPU.search(p) for p in parts[1:])
     has_ram = any(_RAM_PART.fullmatch(p) for p in parts[1:])
     return not (has_cpu and has_ram)
@@ -410,6 +405,16 @@ def wants_aspects(spec):
 _MAC_CHIP = re.compile(r"M\d+( Pro| Max| Ultra| Pro/Max \?)?")
 _WIN_GPU = re.compile(r"(RTX|GTX|RX|MX|Arc) .+|iGPU")
 _RAM_LABEL = re.compile(r"\d+GB\+?")
+
+
+def spec_kind(spec):
+    """Тип класу: 'mac' (чип · …), 'win' (відеокарта · …) або None — не ноутбук."""
+    first = (spec or "").split(SEP)[0]
+    if _MAC_CHIP.fullmatch(first):
+        return "mac"
+    if _WIN_GPU.fullmatch(first) or first == UNKNOWN_GPU:
+        return "win"
+    return None
 
 
 def group_scope(spec):
@@ -424,7 +429,7 @@ def group_scope(spec):
             return ""          # екрана немає, а далі RAM/SSD — це точний клас, а не ширша група
         if len(parts) >= 3 and not _RAM_LABEL.fullmatch(parts[2]):
             return ""
-        return ("усі екрани", "уся RAM", "усі SSD", "")[min(len(parts), 4) - 1]
+        return ("усі екрани", "уся RAM", "")[min(len(parts), 3) - 1]
     if _WIN_GPU.fullmatch(parts[0]):
         if len(parts) >= 2 and _RAM_LABEL.fullmatch(parts[1]):
             return ""          # процесор невідомий, RAM відома — точний клас

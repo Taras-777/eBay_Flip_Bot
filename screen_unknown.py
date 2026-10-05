@@ -5,6 +5,9 @@ unkall:0                        — з головного меню: товари
 unk:<товар>:<сторінка>[:m|:w]   — список (по 5, до 50 найцікавіших); m/w — відкрито з меню / з товару
 unkm:<товар>:<№>                — «✏️ Вказати вручну»: варіанти класу
 unks:<товар>:<№>:<варіант>      — зберегти обраний клас
+unkb:<товар>:<№>                — «🧩 Зібрати клас» по кроках (відеокарта → процесор → RAM;
+                                  MacBook: чип → екран → RAM); unkbp:<товар>:<l|a>:<k> — вибір,
+                                  unkbl:<товар> — усі варіанти кроку, unkbs:<товар> — «невідомо»
 unkk / unkr / unkf:<товар>:<№>  — «👌 Залишити як є» / «❌ Інший товар» / «🚩 Для розробника»
 unkrep:<товар>, unkrepc:<товар> — звіт для розробника / очистити його
 """
@@ -24,6 +27,7 @@ from textparse import _group_label, plural
 from unrecognized import (
     MAX_UNRECOGNIZED,
     apply_manual_class,
+    builder_steps,
     class_options,
     clear_report,
     developer_report,
@@ -161,6 +165,8 @@ async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<pre>{html.escape(text[:3500])}</pre>")
         return await show_panel(update, context, body, reply_markup=InlineKeyboardMarkup(rows),
                                 parse_mode=ParseMode.HTML)
+    if action in ("unkbp", "unkbl", "unkbs"):
+        return await _builder_step(update, context, watch, action, parts)
     if action == "unkrepc":
         await asyncio.to_thread(clear_report, watch)
         return await _render(update, context, watch, 0, note="🗑 Приклади для розробника очищено.")
@@ -174,13 +180,25 @@ async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[f"unkopt_{wid}"] = options
         rows = [[InlineKeyboardButton(opt[:60], callback_data=f"unks:{wid}:{parts[2]}:{k}")]
                 for k, opt in enumerate(options)]
+        can_build = await asyncio.to_thread(builder_steps, watch, item) is not None
+        if can_build:
+            rows.append([InlineKeyboardButton("🧩 Немає потрібного — зібрати клас", callback_data=f"unkb:{wid}:{parts[2]}")])
         rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"unk:{wid}:{page}")])
-        text = (f"✏️ <b>Вказати клас вручну</b>\n\n{_card(int(parts[2]) + 1, item)}\n\n"
-                + ("Обери, що це за конфігурація (варіанти — з оголошень цього товару, "
-                   "що збігаються з уже відомим):" if options else
-                   "Повних класів у цьому товарі ще немає — нема з чого обрати. Спробуй пізніше."))
+        if options:
+            hint = ("Обери, що це за конфігурація (варіанти — з оголошень цього товару, що збігаються "
+                    "з уже відомим)." + (" Немає потрібної — «🧩 Зібрати клас»." if can_build else ""))
+        else:
+            hint = ("Готових варіантів у цьому товарі немає — «🧩 Зібрати клас» по кроках." if can_build
+                    else "Готових варіантів у цьому товарі ще немає. Можна «👌 Залишити як є» чи «❌ Інший товар».")
+        text = f"✏️ <b>Вказати клас вручну</b>\n\n{_card(int(parts[2]) + 1, item)}\n\n{hint}"
         return await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows),
                                 parse_mode=ParseMode.HTML)
+    if action == "unkb":
+        steps = await asyncio.to_thread(builder_steps, watch, item)
+        if not steps:
+            return await _render(update, context, watch, page, note="Зібрати клас можна лише для ноутбука.")
+        context.user_data[f"unkb_{wid}"] = {"idx": int(parts[2]), "steps": steps, "parts": []}
+        return await _show_builder(update, context, watch)
     if action == "unks":
         options = context.user_data.get(f"unkopt_{wid}") or []
         k = int(parts[3])
@@ -205,3 +223,64 @@ async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
     await _render(update, context, watch, page, note=note)
+
+
+# ---------- «🧩 Зібрати клас» ----------
+
+async def _show_builder(update, context, watch, full=False):
+    wid = watch["id"]
+    state = context.user_data.get(f"unkb_{wid}")
+    if not state:
+        return await _render(update, context, watch, 0, note="Список оновився — спробуй ще раз.")
+    step_no = len(state["parts"])
+    step = state["steps"][step_no]
+    item, page = _item(context, wid, state["idx"])
+    chosen = " · ".join(p for p in state["parts"] if p) or "—"
+    lines = [f"🧩 <b>Зібрати клас</b> · крок {step_no + 1} з {len(state['steps'])}: <b>{step['name']}</b>",
+             f"Вибрано: {html.escape(chosen)}"]
+    if item:
+        lines.append(_card(state["idx"] + 1, item))
+    options, kind, per_row = (step["all"], "a", 3) if full or not step["local"] else (step["local"], "l", 2)
+    lines.append("Усі варіанти:" if kind == "a" else "Варіанти з оголошень цього товару:")
+    buttons = [InlineKeyboardButton(opt, callback_data=f"unkbp:{wid}:{kind}:{k}") for k, opt in enumerate(options)]
+    rows = [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+    extra = []
+    if kind == "l":
+        extra.append(InlineKeyboardButton("📋 Усі варіанти", callback_data=f"unkbl:{wid}"))
+    if step_no > 0:   # відеокарта / чип — обов'язково; далі можна пропустити
+        extra.append(InlineKeyboardButton("⏭ Невідомо", callback_data=f"unkbs:{wid}"))
+    if extra:
+        rows.append(extra)
+    rows.append([InlineKeyboardButton("◀️ Скасувати", callback_data=f"unk:{wid}:{page}")])
+    await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+
+
+async def _builder_step(update, context, watch, action, parts):
+    wid = watch["id"]
+    state = context.user_data.get(f"unkb_{wid}")
+    if not state:
+        return await _render(update, context, watch, 0, note="Список оновився — спробуй ще раз.")
+    if action == "unkbl":
+        return await _show_builder(update, context, watch, full=True)
+    step = state["steps"][len(state["parts"])]
+    if action == "unkbs":
+        state["parts"].append(None)
+    else:
+        options = step["all"] if parts[2] == "a" else step["local"]
+        k = int(parts[3])
+        if not 0 <= k < len(options):
+            return await _show_builder(update, context, watch)
+        state["parts"].append(options[k])
+    if len(state["parts"]) < len(state["steps"]):
+        return await _show_builder(update, context, watch)
+
+    spec = " · ".join(p for p in state["parts"] if p)
+    item, page = _item(context, wid, state["idx"])
+    context.user_data.pop(f"unkb_{wid}", None)
+    if item is None:
+        return await _render(update, context, watch, 0, note="Список оновився — спробуй ще раз.")
+    await asyncio.to_thread(apply_manual_class, watch, item["item_id"], spec)
+    await _render(update, context, watch, page,
+                  note=f"🧩 Клас «{html.escape(spec)}» збережено. Оголошення враховується в цінах "
+                       "і буде оцінене як можлива знахідка.")
