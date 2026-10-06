@@ -29,7 +29,7 @@ from panel import _ack_callback, run_with_progress, show_panel
 from access import require_access
 from sales import sales_note
 from deal_check import recheck_shown_deals
-from deal_reprice import basis_line, reprice_deals
+from deal_reprice import basis_line, reprice_deals, specs_line
 from laptops import laptop_warnings
 from textparse import PICKUP_NOTE, is_bundle
 from undo import record as undo_record, short
@@ -94,6 +94,7 @@ def _deal_card(n, d, sold=None):
         warn += "\n" + auction_note(d.get("current_bid"), d.get("bid_count"), d.get("end_at"),
                                     as_of="(на момент знахідки)")
     basis = basis_line(d)
+    specs = specs_line(d["item_id"], d["title"], d.get("item_spec") or d.get("spec_group"))
     if pickup_only_items([d["item_id"]]):
         warn += "\n" + PICKUP_NOTE
     if d.get("cond_group") == "new":
@@ -101,6 +102,7 @@ def _deal_card(n, d, sold=None):
     listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
     return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
             f"{html.escape(d['title'][:90])}\n{listed}"
+            + (f"{html.escape(specs)}\n" if specs else "") +
             f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток ~<b>{profit:.0f}€</b>{offer}\n"
             + (f"{html.escape(basis)}\n" if basis else "") + (f"{warn.lstrip()}\n" if warn else "")
             + (f"{html.escape(note)}\n" if note else "") +

@@ -69,6 +69,7 @@ def test_card_explains_price(monkeypatch):
     asyncio.run(handlers.deals_callback(upd, ctx))
     text = shown[-1][0]
     assert "продати ~700€" in text and "📊 Ціна продажу за 7 проданими · 👤 приватні, 256GB" in text
+    assert "🧩 Конфігурація: 256GB" in text                       # характеристики самого оголошення
     assert "даних замало" not in text and "перераховано" not in text   # нічого не прибрано
 
 
@@ -145,3 +146,17 @@ def test_scheduler_skips_listing_priced_deals_when_sold_only(fake_ebay):
     asyncio.run(scheduler.check_all_watches(app))
     with db.get_conn() as conn:
         assert conn.execute("SELECT COUNT(*) AS c FROM deals").fetchone()["c"] == 0   # продажів ще немає
+
+
+def test_laptop_card_shows_specs_and_sources(monkeypatch):
+    wid = _laptop_watch()
+    db.save_cached_spec("v1|k|0", "RTX 3050 · i7 · 16GB", {"grafikkarte (aus beschreibung)": "RTX 3050",
+                                                          "_beschreibung_geprueft": "2"})
+    db.upsert_market_stats(wid, "used", "*", 700, 30, sale_price=700, sale_source="за 7 проданими")
+    db.add_deal(wid, "v1|k|0", "MSI Katana Gaming Notebook Core i7 16GB 512GB SSD RTX Win11", 440, "EUR", 700, 37,
+                "u", False, cond_group="used", spec_group="*", item_spec="RTX 3050 · i7 · 16GB")
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (True, None))
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("deals:0")
+    asyncio.run(handlers.deals_callback(upd, ctx))
+    assert "🧩 відеокарта: RTX 3050 (опис) · процесор: i7 (назва) · RAM: 16GB (назва)" in shown[-1][0]

@@ -23,7 +23,7 @@ from db import (
     set_deals_status,
     update_deal_price,
 )
-from laptops import is_laptop, laptop_spec
+from laptops import UNKNOWN_GPU, class_sources, is_laptop, laptop_spec, sources_line, spec_kind
 from laptops import needs_aspects as laptop_needs_aspects
 from market import _stat_for_item, estimate_resale_profit
 from textparse import _group_label, extract_spec_key, plural
@@ -38,6 +38,18 @@ def price_basis(source, sample):
         return (f"за {plural(sample, 'поточним оголошенням', 'поточними оголошеннями', 'поточними оголошеннями')}"
                 " (продажів ще мало)")
     return source or "оцінка"
+
+
+def specs_line(item_id, title, spec, query=""):
+    """«🧩 відеокарта: RTX 3050 (опис) · процесор: i7 (назва) · RAM: 16GB (назва)» для ноутбука;
+    «🧩 Конфігурація: 256GB» для решти. Порожньо, якщо конфігурація невідома. Без запитів до eBay."""
+    spec = spec or "unspecified"
+    if spec_kind(spec) or spec.startswith(UNKNOWN_GPU):
+        cached = get_cached_specs([item_id]).get(item_id)
+        return "🧩 " + sources_line(class_sources(title or "", cached[1] if cached else None, query))
+    if spec in ("unspecified", "*"):
+        return ""
+    return f"🧩 Конфігурація: {spec.replace(' · ', ', ')}"
 
 
 def basis_line(d):

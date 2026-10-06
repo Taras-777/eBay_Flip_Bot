@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from settings import PRICE_DROP_CHOICES, PRICE_DROP_MIN_DAYS
-from deal_reprice import basis_line
+from deal_reprice import basis_line, specs_line
 from db import dismiss_tracks, get_drop_pct, get_watch, mark_track_seen, pickup_only_items, set_drop_pct
 from learning import hide_item, learned_words_note, reject_and_learn
 from laptops import laptop_warnings
@@ -36,6 +36,7 @@ def _card(n, r):
     lines = [
         f"<b>{n}. {new}{html.escape(r['watch_label'])}</b> · висить {plural(days, 'день', 'дні', 'днів')}",
         html.escape((r["title"] or "")[:90]),
+        *([html.escape(sp)] if (sp := specs_line(r["item_id"], r["title"], r.get("spec_group"))) else []),
         f"📉 було {r['first_price']:.0f}€ → зараз <b>{r['price']:.0f}€</b> (−{r['drop_pct']:.0f}%){changed}",
     ]
     if r["price"] <= r["buy_limit"]:
