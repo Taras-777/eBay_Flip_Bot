@@ -671,7 +671,7 @@ def api_usage_line(extra_line=""):
 
 def _browse_search(query, condition_ids="", exclude_terms="", limit=50,
                    category_id=None, min_price=None, fieldgroups=None, fresh=False,
-                   sort="newlyListed", offset=0):
+                   sort="newlyListed", offset=0, buying="FIXED_PRICE", extra_filters=()):
     """
     Спільний низькорівневий запит до item_summary/search.
 
@@ -706,7 +706,8 @@ def _browse_search(query, condition_ids="", exclude_terms="", limit=50,
         # тому конвертуємо тут.
         ids_piped = condition_ids.replace(",", "|")
         filters_list.append(f"conditionIds:{{{ids_piped}}}")
-    filters_list.append("buyingOptions:{FIXED_PRICE}")
+    filters_list.append(f"buyingOptions:{{{buying}}}")
+    filters_list.extend(extra_filters)
     filters_list.append(f"itemLocationRegion:{ITEM_LOCATION_REGION}")
     filters_list.append(f"deliveryCountry:{DELIVERY_COUNTRY}")
     if min_price and float(min_price) > 0:
@@ -755,7 +756,8 @@ def get_category_options(query, condition_ids=DEFAULT_CONDITION_IDS):
 
 
 def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fresh=False,
-                        category_id=None, min_price=None, sort="newlyListed", offset=0, stats=None):
+                        category_id=None, min_price=None, sort="newlyListed", offset=0, stats=None,
+                        auctions=False, end_between=None):
     """
     Пошук активних оголошень через eBay Browse API.
     Сортування — за датою публікації (newlyListed), а не за ціною.
@@ -766,10 +768,18 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
     Регіон: лот мусить бути в межах ЄС (itemLocationRegion:EUROPEAN_UNION),
     і мусить бути можливість доставки саме в Німеччину (deliveryCountry).
     Категорія й мінімальна ціна — див. _browse_search().
+
+    auctions=True — навпаки, лише аукціони («🔨 Аукціони»): ціна оголошення = поточна ставка
+    + доставка; end_between=(від, до) — unix-час, коли аукціон закінчується.
     """
+    extra = ()
+    if auctions and end_between:
+        start, end = (datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") for t in end_between)
+        extra = (f"itemEndDate:[{start}..{end}]",)
     data = _browse_search(
         query, condition_ids=condition_ids, exclude_terms=exclude_terms, limit=limit,
         category_id=category_id, min_price=min_price, fresh=fresh, sort=sort, offset=offset,
+        buying="AUCTION" if auctions else "FIXED_PRICE", extra_filters=extra,
     )
 
     if stats is not None:
@@ -783,9 +793,9 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
             continue
 
         buying_options = it.get("buyingOptions") or []
-        if "FIXED_PRICE" not in buying_options:
+        if ("AUCTION" if auctions else "FIXED_PRICE") not in buying_options:
             continue
-        has_best_offer = "BEST_OFFER" in buying_options
+        has_best_offer = "BEST_OFFER" in buying_options and not auctions
 
         cond_group = market_group(it)   # 🏪 магазин / 👤 приватний (див. textparse.market_group)
         if cond_group == "parts":
@@ -830,6 +840,11 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
         if feedback_pct is not None and feedback_pct < MIN_SELLER_FEEDBACK_PCT:
             suspicious = True
 
+        auction = _auction_info(it, buying_options, exchange_rate, price)
+        if auctions:
+            # Аукціон оцінюється за поточною ставкою (а не «купити зараз»), торгу немає
+            price = auction["current_bid"] / exchange_rate if auction.get("current_bid") is not None else price
+            auction["bid_is_price"] = False
         total_price = (price + shipping_cost) * exchange_rate
         effective_price = (
             total_price * (1 - BEST_OFFER_ASSUMED_DISCOUNT_PCT / 100)
@@ -861,7 +876,7 @@ def search_active_items(query, condition_ids="", exclude_terms="", limit=50, fre
                 # варіантне оголошення (кілька кольорів/обсягів) — ціна стрибає між варіантами
                 "is_variation": bool(it.get("itemGroupHref") or it.get("itemGroupType")),
                 # «Аукціон + купити зараз»: поточна ставка й кількість ставок (позначка 🔨)
-                **_auction_info(it, buying_options, exchange_rate, price),
+                **auction,
                 "end_at": _parse_ebay_ts(it.get("itemEndDate")),
                 "seller_feedback_score": feedback_score,
                 "seller_feedback_pct": feedback_pct,

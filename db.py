@@ -337,6 +337,22 @@ CREATE TABLE IF NOT EXISTS review_items (
     at INTEGER NOT NULL,
     PRIMARY KEY (watch_id, item_id)
 );
+CREATE TABLE IF NOT EXISTS auction_alerts (
+    chat_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    watch_id INTEGER NOT NULL,
+    end_at INTEGER NOT NULL,
+    buy_limit REAL NOT NULL,
+    shipping REAL NOT NULL DEFAULT 0,
+    bid REAL,
+    text TEXT,
+    url TEXT,
+    message_id INTEGER,
+    final_at INTEGER,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_auction_end ON auction_alerts (end_at);
 """
 
 
@@ -1155,7 +1171,7 @@ def get_sold_listings(watch_id, days=SOLD_LOOKBACK_DAYS):
     with get_conn() as conn:
         return [dict(r) for r in conn.execute(
             """SELECT item_id, cond_group, spec_group, price, created_at, first_seen, gone_at,
-                      title, url, sold_check
+                      title, url, sold_check, buying_options, offer_count
                FROM listing_obs WHERE watch_id = ? AND status = 'gone' AND gone_at >= ? AND price IS NOT NULL"""
             + _sold_filter() + " ORDER BY gone_at DESC",
             (watch_id, since),
@@ -2271,3 +2287,76 @@ def pickup_only_items(item_ids):
         return {r["item_id"] for r in conn.execute(
             f"SELECT DISTINCT item_id FROM listing_obs WHERE pickup_only = 1 AND item_id IN "
             f"({','.join('?' * len(ids))})", ids).fetchall()}
+
+
+# ---------- «🔨 Аукціони» ----------
+
+def get_auctions_enabled(chat_id):
+    """Пошук аукціонів увімкнено в «⚙️ Налаштування» (за замовчуванням вимкнено — витрачає ліміт eBay)."""
+    return get_meta(f"auctions:{chat_id}") == "1"
+
+
+def set_auctions_enabled(chat_id, value):
+    set_meta(f"auctions:{chat_id}", "1" if value else "0")
+
+
+def auction_chats():
+    """Чати, де пошук аукціонів увімкнено."""
+    with get_conn() as conn:
+        rows = conn.execute("SELECT key FROM meta WHERE key LIKE 'auctions:%' AND value = '1'").fetchall()
+    return {int(r["key"].split(":", 1)[1]) for r in rows}
+
+
+def get_alerted_auctions(chat_id, item_ids):
+    """Аукціони, про які в цьому чаті вже сповіщали."""
+    ids = list(item_ids)
+    if not ids:
+        return set()
+    found = set()
+    with get_conn() as conn:
+        for i in range(0, len(ids), 500):
+            part = ids[i:i + 500]
+            found |= {r["item_id"] for r in conn.execute(
+                f"SELECT item_id FROM auction_alerts WHERE chat_id = ? AND item_id IN ({','.join('?' * len(part))})",
+                [chat_id, *part]).fetchall()}
+    return found
+
+
+def add_auction_alert(chat_id, item_id, watch_id, end_at, buy_limit, shipping, bid, text, url):
+    """Запам'ятати вигідний аукціон. False — про нього в цьому чаті вже сповіщали."""
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO auction_alerts
+               (chat_id, item_id, watch_id, end_at, buy_limit, shipping, bid, text, url, at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (chat_id, item_id, watch_id, int(end_at), buy_limit, shipping or 0, bid, text, url, int(time.time())))
+        return cur.rowcount > 0
+
+
+def set_auction_message(chat_id, item_id, message_id):
+    with get_conn() as conn:
+        conn.execute("UPDATE auction_alerts SET message_id = ? WHERE chat_id = ? AND item_id = ?",
+                     (message_id, chat_id, item_id))
+
+
+def due_auction_finals(minutes, now=None):
+    """Аукціони, яким до кінця лишилось ≤ minutes, а друге сповіщення ще не надсилали."""
+    now = int(now or time.time())
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM auction_alerts WHERE final_at IS NULL AND end_at > ? AND end_at <= ?
+               ORDER BY end_at""", (now, now + minutes * 60)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_auction_final(chat_id, item_id, bid=None):
+    with get_conn() as conn:
+        conn.execute("UPDATE auction_alerts SET final_at = ?, bid = COALESCE(?, bid) WHERE chat_id = ? AND item_id = ?",
+                     (int(time.time()), bid, chat_id, item_id))
+
+
+def cleanup_auction_alerts(days=3):
+    """Давно завершені аукціони більше не потрібні."""
+    with get_conn() as conn:
+        return conn.execute("DELETE FROM auction_alerts WHERE end_at < ?",
+                            (int(time.time() - days * 86400),)).rowcount

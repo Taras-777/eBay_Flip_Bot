@@ -24,6 +24,7 @@ from account import (
     ebay_account_code,
     ebay_account_disconnect,
     sold_only_callback,
+    auctions_callback,
     ebay_account_interrupt,
     ebay_account_start,
     backup_send_callback,
@@ -228,6 +229,7 @@ def main():
     update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv]
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
+    app.add_handler(CallbackQueryHandler(auctions_callback, pattern="^auctions$"))
     app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear)?$"))
     app.add_handler(CallbackQueryHandler(unknown_callback, pattern="^unk[a-z]*:"))
     app.add_handler(CallbackQueryHandler(notices_callback, pattern="^ntc:(\\d+|clear)$"))

@@ -70,6 +70,7 @@ from deal_check import recheck_deals
 from deal_reprice import reprice_deals
 from markdowns import run_markdown_scan
 from backup import daily_backup
+from auctions import auction_final_loop, run_auction_cycle
 
 
 async def check_all_watches(app: Application):
@@ -349,6 +350,11 @@ async def scheduler_loop(app: Application):
             if task is None or task.done():
                 app.bot_data["markdown_task"] = asyncio.create_task(asyncio.to_thread(run_markdown_scan))
 
+            # «🔨 Аукціони» (якщо увімкнено в налаштуваннях): аукціони, що закінчуються через 6–12 год
+            task = app.bot_data.get("auction_task")
+            if task is None or task.done():
+                app.bot_data["auction_task"] = asyncio.create_task(run_auction_cycle(app))
+
             # «🔥 Вигідні пропозиції»: чи лоти ще продаються — продані/зняті зникають зі списку
             task = app.bot_data.get("deal_check_task")
             if task is None or task.done():
@@ -400,12 +406,14 @@ async def post_init(app: Application):
     asyncio.get_running_loop().set_default_executor(
         ThreadPoolExecutor(max_workers=THREAD_POOL_SIZE, thread_name_prefix="bot"))
     app.bot_data["scheduler_task"] = asyncio.create_task(scheduler_loop(app))
+    # «🔨 Аукціони»: друге сповіщення перед кінцем — окремим циклом, щоб не запізнитись
+    app.bot_data["auction_final_task"] = asyncio.create_task(auction_final_loop(app))
     # Список команд, що випадає над клавіатурою в Telegram
     await app.bot.set_my_commands([("menu", "📋 Головне меню")])
 
 
 async def post_shutdown(app: Application):
-    for key in ("scheduler_task", "telegram_watch_task"):
+    for key in ("scheduler_task", "telegram_watch_task", "auction_final_task", "auction_task"):
         task = app.bot_data.pop(key, None)
         if task:
             task.cancel()

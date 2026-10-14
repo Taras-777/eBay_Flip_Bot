@@ -13,7 +13,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import get_drop_pct, get_sold_only, set_sold_only, sold_check_stats
+from db import get_auctions_enabled, get_drop_pct, get_sold_only, set_auctions_enabled, set_sold_only, sold_check_stats
 from ebay_api import trading_calls_today
 from deal_check import trading_breakdown_lines
 from ebay_user import (
@@ -120,6 +120,9 @@ def _settings_keyboard(chat_id=None):
         rows.append([InlineKeyboardButton(
             "💰 Ціна для знахідок: " + ("лише за продажами ✅" if get_sold_only(chat_id) else "продажі або оголошення"),
             callback_data="soldonly")])
+        rows.append([InlineKeyboardButton(
+            "🔨 Аукціони: " + ("увімкнено ✅" if get_auctions_enabled(chat_id) else "вимкнено"),
+            callback_data="auctions")])
     rows.append([InlineKeyboardButton("🐢 Журнал повільних дій", callback_data="slowlog")])
     rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
     rows.append(BACK_ROW)
@@ -142,6 +145,24 @@ async def sold_only_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     value = not get_sold_only(chat_id)
     set_sold_only(chat_id, value)
     await show_settings(update, context, note=SOLD_ONLY_NOTE[value])
+
+
+AUCTIONS_NOTE = {
+    True: ("✅ <b>🔨 Аукціони увімкнено.</b> Раз на 3 год бот шукає аукціони твоїх товарів, що закінчуються "
+           "через 6–12 год, і порівнює ставку з доставкою з «купувати до». Вигідний — сповіщення одразу "
+           "і ще одне за 45 хв до кінця з актуальною ставкою. Ставки робиш сам — бот їх не ставить.\n"
+           "<i>Витрачає частину ліміту eBay: шукає лише поки на сьогодні лишається ≥1500 запитів.</i>"),
+    False: "✅ <b>🔨 Аукціони вимкнено</b> — бот їх не шукає і не нагадує про вже знайдені.",
+}
+
+
+async def auctions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """auctions — увімкнути / вимкнути пошук аукціонів."""
+    await _ack_callback(update)
+    chat_id = update.effective_chat.id
+    value = not get_auctions_enabled(chat_id)
+    set_auctions_enabled(chat_id, value)
+    await show_settings(update, context, note=AUCTIONS_NOTE[value])
 
 
 async def show_settings(update, context, note=""):

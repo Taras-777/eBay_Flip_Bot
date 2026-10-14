@@ -29,7 +29,7 @@ from panel import _ack_callback, show_panel
 from access import require_access
 from ebay_user import is_connected
 from trading_api import verify_watch_now
-from sales import speed_text, summarize
+from sales import mark_offer_sales, priced, speed_text, summarize
 
 
 SALES_LIST_MAX = 20   # скільки останніх продажів показувати в списку (з фільтром — лише потрібної конфігурації)
@@ -87,6 +87,7 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
         return text + ("\n\n💡 Підключи «🔐 Акаунт eBay» в меню — тоді бот перевірятиме кожен продаж через eBay."
                        if show_account_hint else "")
 
+    mark_offer_sales(sold)
     week_ago = time.time() - 7 * 86400
     confirmed = sum(1 for r in sold if r["sold_check"] == "sold")
     week = sum(1 for r in sold if r["gone_at"] >= week_ago)
@@ -105,16 +106,25 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
         if cond != current_cond:
             current_cond = cond
             lines.append(f"\n<b>{html.escape(CONDITION_LABELS.get(cond, cond).capitalize())}</b>")
-        prices = [r["price"] for r in rows]
+        known = priced(rows)   # без «🤝 ціна невідома» — вони не впливають на ціну й швидкість
+        prices = [r["price"] for r in known]
+        offers = len(rows) - len(known)
         spec_txt = "конфігурація не вказана" if spec == "unspecified" else spec
         n_confirmed = sum(1 for r in rows if r["sold_check"] == "sold")
+        if not prices:
+            price_txt = "\n  💶 ціна невідома (прийнято пропозицію)"
+        elif min(prices) != max(prices):
+            price_txt = f"\n  💶 типова ціна <b>{recent_median(known):.0f}€</b>" + _range_text(prices)
+        else:
+            price_txt = f"\n  💶 ціна <b>{prices[0]:.0f}€</b>"
+        if offers and prices:
+            price_txt += f"\n  🤝 ще {offers} — за прийнятою пропозицією, ціна невідома"
+        speed = summarize(known)["median_days"] if known else None
         lines.append(
             f"• <b>{html.escape(spec_txt)}</b> — {plural(len(rows), 'продаж', 'продажі', 'продажів')}"
             + (f" (✅{n_confirmed})" if n_confirmed else "")
-            + (f"\n  💶 типова ціна <b>{recent_median(rows):.0f}€</b>" + _range_text(prices)
-               if min(prices) != max(prices) else f"\n  💶 ціна <b>{prices[0]:.0f}€</b>")
-            + (f"\n  ⏱ продається {speed_text(summarize(rows)['median_days'])}"
-               if summarize(rows)["median_days"] is not None else "")
+            + price_txt
+            + (f"\n  ⏱ продається {speed_text(speed)}" if speed is not None else "")
             + f"\n  🕒 останній {_ago(rows[0]['gone_at'])}"
             + (f"\n  📋 зараз у продажу: {active[(cond, spec)]}" if active.get((cond, spec)) else "")
         )
@@ -132,10 +142,14 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
         name = html.escape((r["title"] or "оголошення")[:45])
         link = f'<a href="{html.escape(r["url"])}">{name}</a>' if r["url"] else name
         bundle = " 📦" if is_bundle(r["title"]) else ""
-        lines.append(f"{n}. {mark}{date}{html.escape(spec)} · <b>{r['price']:.0f}€</b>{bundle} — {link}")
+        price = (f"🤝 ціна невідома (в оголошенні {r['price']:.0f}€)" if r.get("offer_unknown")
+                 else f"<b>{r['price']:.0f}€</b>")
+        lines.append(f"{n}. {mark}{date}{html.escape(spec)} · {price}{bundle} — {link}")
 
     lines.append("\n<i>Ціна — з доставкою, остання, яку бачив бот. ✅ — продаж підтвердив eBay; "
                  "📦 — комплект (додаткові геймпади чи ігри); "
+                 "🤝 — продано за прийнятою пропозицією: eBay не показує її ціну, а ціна оголошення набагато "
+                 "вища за ринок, тож у типову ціну й швидкість продажу такий продаж не входить; "
                  "⏳ — ще в черзі на перевірку; без позначки — eBay не відповів, оцінка за "
                  "зникненням (оголошення зникло задовго до кінця строку). "
                  "Чужий товар у списку — натисни ❌ з його номером, і він більше не впливатиме на ціни.</i>")

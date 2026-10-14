@@ -379,3 +379,47 @@ def test_inbox_sorted_by_profit_and_has_min_profit_button(monkeypatch):
     upd, ctx = press("mprof:show")
     asyncio.run(handlers.min_profit_callback(upd, ctx))
     assert "◀️ До пропозицій" in shown[-1][1]
+
+
+# ---------- 🤝 продаж за прийнятою пропозицією ----------
+
+def _sale(wid, item_id, price, cond="used", spec="M4 Pro · 14\" · 24GB", days_listed=2, opts="FIXED_PRICE", offers=None):
+    now = int(time.time())
+    with db.get_conn() as conn:
+        conn.execute(
+            """INSERT INTO listing_obs (watch_id, item_id, cond_group, spec_group, price, created_at, first_seen,
+                                        last_seen, status, gone_at, buying_options, offer_count, title)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'gone', ?, ?, ?, ?)""",
+            (wid, item_id, cond, spec, price, now - (days_listed + 1) * DAY, now - (days_listed + 1) * DAY,
+             now - DAY, now - DAY, opts, offers, f"MacBook Pro {item_id}"))
+
+
+def test_offer_sale_with_fantasy_price_marked():
+    wid = db.add_watch(1, "MacBook Pro M4", "MacBook Pro M4", "", "", 15)
+    for i, p in enumerate((1800, 1774, 1808, 1650)):
+        _sale(wid, f"p{i}", p)
+    _sale(wid, "shop", 1849, cond="new", days_listed=3)
+    _sale(wid, "fantasy", 5000, cond="new", days_listed=270, opts="BEST_OFFER,FIXED_PRICE")
+    _sale(wid, "dear", 2600, days_listed=1)            # дорого, але без пропозиції — справжня ціна
+    sold = db.get_sold_listings(wid)
+    sales.mark_offer_sales(sold)
+    flagged = {r["item_id"] for r in sold if r["offer_unknown"]}
+    assert flagged == {"fantasy"}
+
+    import handlers
+    text = handlers._sales_text(db.get_watch(wid, 1), db.get_sold_listings(wid))
+    shop = text.split("🏪")[1].split("👤")[0]
+    assert "2 продажі" in shop and "5000" not in shop                  # у кількості є, в ціні — ні
+    assert "💶 ціна <b>1849€</b>" in shop and "🤝 ще 1" in shop
+    assert "за ~3 дні" in shop and "270" not in shop                    # швидкість — без нього
+    assert "🤝 ціна невідома (в оголошенні 5000€)" in text
+
+
+def test_offer_sale_needs_reference():
+    wid = db.add_watch(1, "MacBook Pro M4", "MacBook Pro M4", "", "", 15)
+    _sale(wid, "a", 1800)
+    _sale(wid, "b", 5000, offers=2)                     # порівнювати ні з чим — не позначаємо
+    sold = sales.mark_offer_sales(db.get_sold_listings(wid))
+    assert not any(r["offer_unknown"] for r in sold)
+    text = sales.summarize([dict(r, offer_unknown=True) for r in sold])
+    assert text["count"] == 2

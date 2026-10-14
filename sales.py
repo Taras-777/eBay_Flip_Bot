@@ -23,6 +23,34 @@ from market import recent_median
 from db import get_meta, get_price_history, set_meta
 
 
+# «🤝 ціна невідома»: продаж за прийнятою пропозицією, а ціна оголошення набагато вища за ринок.
+# Ціну прийнятої пропозиції eBay не показує — бот бачить лише ціну оголошення (напр., 5000€ за
+# ноутбук, що продається за ~1800€). Такий продаж рахується як продаж, але не впливає на типову
+# ціну, діапазон і швидкість продажу.
+OFFER_SALE_MARKUP = 1.3     # ціна оголошення вища за типову ціну конфігурації щонайменше на 30%
+OFFER_SALE_MIN_SAMPLE = 3   # з чим порівнювати: щонайменше стільки продажів тієї ж конфігурації
+
+
+def mark_offer_sales(sold):
+    """Позначає r['offer_unknown'] у продажах (усі продажі товару). Типова ціна — медіана продажів
+    тієї ж конфігурації (магазин і приватні разом: так порівнювати є з чим навіть у малій групі)."""
+    by_spec: dict = {}
+    for r in sold:
+        by_spec.setdefault(r.get("spec_group") or "unspecified", []).append(r["price"])
+    for r in sold:
+        spec = r.get("spec_group") or "unspecified"
+        offer = (r.get("offer_count") or 0) > 0 or "BEST_OFFER" in (r.get("buying_options") or "")
+        prices = by_spec[spec]
+        ref = statistics.median(prices) if spec != "unspecified" and len(prices) >= OFFER_SALE_MIN_SAMPLE else None
+        r["offer_unknown"] = bool(offer and ref and r["price"] > ref * OFFER_SALE_MARKUP)
+    return sold
+
+
+def priced(rows):
+    """Продажі з відомою ціною (без «🤝 ціна невідома»)."""
+    return [r for r in rows if not r.get("offer_unknown")]
+
+
 def days_to_sell(row):
     """Скільки днів оголошення висіло до продажу (None — невідомо)."""
     start = row.get("created_at") or row.get("first_seen")
@@ -49,11 +77,12 @@ def summarize(rows):
     if not rows:
         return None
     week_ago = time.time() - 7 * 86400
-    durations = [d for d in (days_to_sell(r) for r in rows) if d is not None]
+    known = priced(rows) or rows   # «🤝 ціна невідома» — лише в кількості продажів
+    durations = [d for d in (days_to_sell(r) for r in known) if d is not None]
     return {
         "count": len(rows),
         "week": sum(1 for r in rows if r["gone_at"] >= week_ago),
-        "median_price": recent_median(rows),   # свіжі продажі важать більше
+        "median_price": recent_median(known),   # свіжі продажі важать більше
         "median_days": statistics.median(durations) if durations else None,
     }
 
@@ -69,6 +98,7 @@ def speed_text(median_days):
 
 def sales_note(sold, cond, spec):
     """Рядок для сповіщення: як продаються такі ж. Порожній, якщо даних немає."""
+    mark_offer_sales(sold)
     summary = summarize(group_rows(sold, cond, spec))
     if not summary:
         return ""
