@@ -75,7 +75,8 @@ def usage_text(page=0, today=None):
     if full:
         lines.append(f"\nУ середньому за повну добу: Browse <b>{sum(full) / len(full):.0f}</b>, "
                      f"найбільше {max(full)} ({len(full)} дн.)")
-    for day in days[page * DAYS_PER_PAGE:(page + 1) * DAYS_PER_PAGE]:
+    # Сторінка 0 — останні дні; усередині сторінки — від старішого до сьогоднішнього (сьогодні внизу)
+    for day in reversed(days[page * DAYS_PER_PAGE:(page + 1) * DAYS_PER_PAGE]):
         lines.append("\n" + _day_block(day, data[day], today))
     if pages > 1:
         lines.append(f"\n<i>Сторінка {page + 1} з {pages}</i>")
@@ -85,10 +86,10 @@ def usage_text(page=0, today=None):
 def usage_keyboard(page, pages):
     rows = []
     nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Новіші", callback_data=f"apistat:{page - 1}"))
     if page < pages - 1:
-        nav.append(InlineKeyboardButton("Старіші ▶️", callback_data=f"apistat:{page + 1}"))
+        nav.append(InlineKeyboardButton("◀️ Старіші", callback_data=f"apistat:{page + 1}"))
+    if page > 0:
+        nav.append(InlineKeyboardButton("Новіші ▶️", callback_data=f"apistat:{page - 1}"))
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton("🔄 Оновити", callback_data=f"apistat:{page}")])

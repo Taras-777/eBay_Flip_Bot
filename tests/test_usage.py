@@ -27,7 +27,7 @@ def test_usage_by_day_text():
     assert "Trading: <b>40</b>" in text and "мої товари 30" in text and "🔥 10" in text
     assert "▰▰▰▰▰▰▰▰▰▰ 100%" in text and "перевірка 🔥: 60" in text and "Taxonomy): 3" in text
     assert "У середньому за повну добу: Browse <b>3500</b>, найбільше 4500 (2 дн.)" in text
-    assert text.index("(сьогодні)") < text.index("(вчора)")            # найновіші першими
+    assert text.index("(вчора)") < text.index("(сьогодні)")            # сьогодні — внизу
 
 
 def test_usage_pages_and_empty():
@@ -40,9 +40,10 @@ def test_usage_pages_and_empty():
     assert pages == 3
     text, _ = screen_usage.usage_text(2, today=today)
     assert "Сторінка 3 з 3" in text and "Browse: <b>122</b>" in text and "Browse: <b>100</b>" not in text
+    assert text.index("<b>122</b>") < text.index("<b>120</b>")         # старіший день — вище
     kb = screen_usage.usage_keyboard(1, 3)
     labels = [b.text for r in kb.inline_keyboard for b in r]
-    assert labels[:2] == ["◀️ Новіші", "Старіші ▶️"] and "◀️ До налаштувань" in labels
+    assert labels[:2] == ["◀️ Старіші", "Новіші ▶️"] and "◀️ До налаштувань" in labels
 
 
 def test_settings_button_and_callback(monkeypatch):
