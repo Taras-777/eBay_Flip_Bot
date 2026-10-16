@@ -16,7 +16,7 @@ from telegram.ext import ContextTypes
 from markdowns import markdown_counts
 from undo import attach_offer, menu_offer, undo_button
 from settings import CHECK_INTERVAL_MINUTES, LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from db import (count_notices, count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, set_meta,
+from db import (count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, set_meta,
                 sold_confirmed_today)
 from ebay_user import is_connected
 from ebay_api import api_usage_line, fetch_browse_rate_limit, seconds_until_reset, trading_calls_today
@@ -50,7 +50,6 @@ MENU_LABELS = {
     "discover": "💡 Що перепродавати",
     "list": "📦 Мої товари",
     "stats": "📊 Статистика",
-    "notices": "🔔 Повідомлення",
     "unknown": "🛠 Нерозпізнані",
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
@@ -163,10 +162,6 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         unknown = 0
     if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
         rows.append([InlineKeyboardButton(f"{MENU_LABELS['unknown']} ({unknown})", callback_data="unkall:0")])
-    total_nt, unseen_nt = count_notices(user_id)
-    if total_nt:   # «🔔 Повідомлення» — лише коли там щось є
-        rows.append([InlineKeyboardButton(MENU_LABELS["notices"] + (f" · 🆕 {unseen_nt}" if unseen_nt else ""),
-                                          callback_data="ntc:0")])
     if total_md:   # «📉 Знизили ціну» — лише коли там щось є
         rows.insert(1, [InlineKeyboardButton(md_label, callback_data="mkd:0")])
     offer = menu_offer(user_id)

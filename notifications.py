@@ -2,7 +2,6 @@
 Повідомлення про знахідки та проблеми з ринковими даними.
 """
 
-import asyncio
 import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,8 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from settings import log
 from textparse import _group_label, plural
 from market import estimate_resale_profit, max_buy_price
-from panel import refresh_menu_in_place
-from db import add_notice, count_unseen_deals
+from db import count_unseen_deals
 
 
 DEAL_RENOTIFY_MINUTES = 60   # поки попередні не переглянуті — нове сповіщення не частіше
@@ -66,13 +64,9 @@ async def _notify_new_deals(app, chat_id, found):
 
 
 async def _to_inbox(app, chat_id, kind, text, watch_id=None):
-    """Службове повідомлення — не окремим повідомленням у чаті, а в «🔔 Повідомлення»
-    (кнопка з'являється в головному меню, коли там щось є)."""
-    try:
-        await asyncio.to_thread(add_notice, chat_id, kind, text, watch_id)
-        await refresh_menu_in_place(app, chat_id)
-    except Exception as e:
-        log.warning("Не вдалося зберегти повідомлення для чату %s: %s", chat_id, e)
+    """Службові повідомлення (ринок проаналізовано, ціни падають, проблема з даними) не надсилаються
+    в чат і ніде не збираються — лише в лог сервера. «Купувати до» бот і так підлаштовує сам."""
+    log.info("Службове повідомлення (%s) для чату %s: %s", kind, chat_id, text.replace("\n", " | "))
 
 
 async def _notify_price_drops(app, w, drops):

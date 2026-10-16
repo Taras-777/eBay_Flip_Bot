@@ -311,16 +311,6 @@ CREATE TABLE IF NOT EXISTS action_log (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_action_log_at ON action_log (at);
-CREATE TABLE IF NOT EXISTS notices (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER NOT NULL,
-    at INTEGER NOT NULL,
-    kind TEXT NOT NULL,
-    text TEXT NOT NULL,
-    watch_id INTEGER,
-    seen_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_notices_chat ON notices (chat_id, id);
 CREATE TABLE IF NOT EXISTS manual_specs (
     item_id TEXT PRIMARY KEY,
     spec_group TEXT NOT NULL,
@@ -373,6 +363,7 @@ def get_conn():
 def init_db():
     with get_conn() as conn:
         conn.execute("PRAGMA journal_mode=WAL")  # зберігається у файлі бази
+        conn.execute("DROP TABLE IF EXISTS notices")   # колишні «🔔 Повідомлення» — прибрано
         # Міграції: якщо таблиця вже існує зі старою структурою (без
         # нових колонок), перестворюємо її — це лише кеш статистики й
         # трекінгу, дані відновлюються самі на наступній перевірці.
@@ -971,6 +962,17 @@ def get_api_calls_today(api="browse"):
             "SELECT count FROM api_usage WHERE day = ? AND api = ?", (_utc_day(), api)
         ).fetchone()
         return row["count"] if row else 0
+
+
+def api_usage_by_day(days=60):
+    """{день 'YYYY-MM-DD' (UTC): {api: кількість}} за останні days днів, найновіші першими."""
+    oldest = datetime.fromtimestamp(time.time() - days * 86400, timezone.utc).strftime("%Y-%m-%d")
+    result: dict = {}
+    with get_conn() as conn:
+        for r in conn.execute("SELECT day, api, count FROM api_usage WHERE day > ? ORDER BY day DESC",
+                              (oldest,)).fetchall():
+            result.setdefault(r["day"], {})[r["api"]] = r["count"]
+    return result
 
 
 # ---------- спостереження за лотами ("зниклі" = ймовірно продані) ----------
@@ -2137,51 +2139,6 @@ def action_log_summary(days=7, limit=10):
 def clear_action_log():
     with get_conn() as conn:
         conn.execute("DELETE FROM action_log")
-
-
-# ---------- 🔔 Повідомлення (службові сповіщення замість окремих повідомлень у чаті) ----------
-
-NOTICES_KEEP = 100          # на чат
-NOTICES_KEEP_DAYS = 30
-
-
-def add_notice(chat_id, kind, text, watch_id=None):
-    now = int(time.time())
-    with get_conn() as conn:
-        conn.execute("INSERT INTO notices (chat_id, at, kind, text, watch_id) VALUES (?, ?, ?, ?, ?)",
-                     (chat_id, now, kind, text, watch_id))
-        conn.execute("DELETE FROM notices WHERE at < ?", (now - NOTICES_KEEP_DAYS * 86400,))
-        conn.execute("""DELETE FROM notices WHERE chat_id = ? AND id NOT IN
-                        (SELECT id FROM notices WHERE chat_id = ? ORDER BY id DESC LIMIT ?)""",
-                     (chat_id, chat_id, NOTICES_KEEP))
-
-
-def get_notices(chat_id, limit=5, offset=0):
-    with get_conn() as conn:
-        return [dict(r) for r in conn.execute(
-            "SELECT * FROM notices WHERE chat_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-            (chat_id, limit, offset)).fetchall()]
-
-
-def count_notices(chat_id):
-    """(усього, непрочитаних)."""
-    with get_conn() as conn:
-        r = conn.execute("SELECT COUNT(*) AS total, SUM(seen_at IS NULL) AS unseen FROM notices WHERE chat_id = ?",
-                         (chat_id,)).fetchone()
-    return int(r["total"] or 0), int(r["unseen"] or 0)
-
-
-def mark_notices_seen(ids):
-    if not ids:
-        return
-    with get_conn() as conn:
-        conn.execute(f"UPDATE notices SET seen_at = ? WHERE id IN ({','.join('?' * len(ids))}) AND seen_at IS NULL",
-                     (int(time.time()), *ids))
-
-
-def clear_notices(chat_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM notices WHERE chat_id = ?", (chat_id,))
 
 
 # ---------- 🛠 Нерозпізнані оголошення ----------

@@ -123,7 +123,8 @@ def _settings_keyboard(chat_id=None):
         rows.append([InlineKeyboardButton(
             "🔨 Аукціони: " + ("увімкнено ✅" if get_auctions_enabled(chat_id) else "вимкнено"),
             callback_data="auctions")])
-    rows.append([InlineKeyboardButton("🐢 Журнал повільних дій", callback_data="slowlog")])
+    rows.append([InlineKeyboardButton("📡 Статистика запитів", callback_data="apistat:0"),
+                 InlineKeyboardButton("🐢 Журнал повільних дій", callback_data="slowlog")])
     rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
     rows.append(BACK_ROW)
     return InlineKeyboardMarkup(rows)
