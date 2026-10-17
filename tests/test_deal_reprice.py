@@ -152,7 +152,7 @@ def test_laptop_card_shows_specs_and_sources(monkeypatch):
     wid = _laptop_watch()
     db.save_cached_spec("v1|k|0", "RTX 3050 · i7 · 16GB", {"grafikkarte (aus beschreibung)": "RTX 3050",
                                                           "_beschreibung_geprueft": "2"})
-    db.upsert_market_stats(wid, "used", "*", 700, 30, sale_price=700, sale_source="за 7 проданими")
+    db.upsert_market_stats(wid, "used", "RTX 3050", 700, 30, sale_price=700, sale_source="за 7 проданими")
     db.add_deal(wid, "v1|k|0", "MSI Katana Gaming Notebook Core i7 16GB 512GB SSD RTX Win11", 440, "EUR", 700, 37,
                 "u", False, cond_group="used", spec_group="*", item_spec="RTX 3050 · i7 · 16GB")
     monkeypatch.setattr(deal_check, "listing_state", lambda item: (True, None))
@@ -160,3 +160,11 @@ def test_laptop_card_shows_specs_and_sources(monkeypatch):
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
     assert "🧩 відеокарта: RTX 3050 (опис) · процесор: i7 (назва) · RAM: 16GB (назва)" in shown[-1][0]
+
+
+def test_mac_deal_priced_by_all_screens_removed():
+    wid = db.add_watch(1, "MacBook Pro M3", "MacBook Pro M3", "", "", 15, categories=LAPTOPS)
+    db.upsert_market_stats(wid, "new", "M3 Pro", 1750, 20, sale_price=1699, sale_source="за 8 проданими")
+    did = db.add_deal(wid, "v1|mac|0", "MacBook Pro A2991 M3 Pro 18GB 512GB", 899, "EUR", 1699, 47, "u", False,
+                      cond_group="new", spec_group="M3 Pro", item_spec='M3 Pro · 16" · 18GB')
+    assert deal_reprice.reprice_deals(1) == 1 and db.get_deal(did)["status"] == "stale"

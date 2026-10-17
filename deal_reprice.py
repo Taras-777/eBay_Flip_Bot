@@ -114,6 +114,11 @@ def reprice_deals(chat_id=None):
         sold_only = sold_only_by_chat.setdefault(d["chat_id"], get_sold_only(d["chat_id"]))
         stat = _stat_for_item(stats, {"cond_group": cond, "spec_group": spec}, sold_only=sold_only)
         if stat is None:
+            if spec_kind(spec):
+                # Ноутбук без статистики свого класу (MacBook — хоча б «чип · екран»): стара ціна з надто
+                # широкої групи ненадійна, тож пропозицію прибираємо (повернеться, коли даних стане досить)
+                stale.append(d["id"])
+                removed += was_shown
             continue
         sale = stat["sale_price"] or stat["median_price"]
         changed = (abs(sale - d["median_price"]) >= 0.5 or d.get("sale_source") != stat["sale_source"]

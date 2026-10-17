@@ -29,7 +29,7 @@ from settings import (
     TRADING_DAILY_BUDGET,
     log,
 )
-from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, spec_matches, spec_parents
+from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, price_fallbacks, spec_matches, spec_parents
 from laptops import DESC_CHECKED, DESC_VERSION
 from laptops import needs_aspects as laptop_needs_aspects
 from laptops import wants_aspects as laptop_wants_aspects
@@ -457,13 +457,17 @@ def laptop_unknown(it):
     return bool(it.get("laptop")) and laptop_needs_aspects(it.get("spec_group") or "unspecified")
 
 
-def _stat_for_item(stats, it, sold_only=False):
+def _stat_for_item(stats, it, sold_only=False, any_group=False):
     """Спершу статистика точної конфігурації; якщо окремої немає (замало
     оголошень) — найближчий ширший клас, і лише тоді загальна група стану.
+    Ноутбук — не ширше за «чип · екран» / «відеокарта · процесор» і без загальної групи
+    (laptops.price_fallbacks): немає такої статистики — ціну не порівнюємо.
+    any_group — будь-яка ширша група аж до «*» (лише для приблизного порядку, напр. у «🛠 Нерозпізнані»).
     sold_only — лише групи з ціною «Продати» за реальними продажами: якщо в точній групі
     продажів замало, береться найближча ширша, де їх достатньо; немає такої — None."""
     cond, spec = it["cond_group"], it.get("spec_group") or "unspecified"
-    for key in [spec] + spec_parents(spec) + ["*"]:
+    keys = [spec] + spec_parents(spec) + ["*"] if any_group else price_fallbacks(spec)
+    for key in keys:
         stat = stats.get((cond, key))
         if stat and (not sold_only or "продан" in (stat.get("sale_source") or "")):
             return stat

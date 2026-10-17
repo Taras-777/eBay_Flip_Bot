@@ -531,3 +531,17 @@ def test_old_description_version_reread(monkeypatch):
     items = [{"item_id": "old", "title": "MSI Katana i5-12500H RTX 4060"}]
     market._annotate_items(items, max_lookups=5, watch=db.get_watch(wid, 1))
     assert fetched == ["old"] and items[0]["spec_group"] == "RTX 4060 · i5 12 gen · 16GB"
+
+
+def test_mac_price_never_from_all_screens():
+    stats = {("new", "M3 Pro"): {"sale_source": "за 8 проданими", "spec_group": "M3 Pro"},
+             ("new", "*"): {"sale_source": "за 20 проданими", "spec_group": "*"}}
+    it = {"cond_group": "new", "spec_group": 'M3 Pro · 16" · 18GB'}
+    assert market._stat_for_item(stats, it) is None                    # «M3 Pro · усі екрани» — ні
+    stats[("new", 'M3 Pro · 16"')] = {"sale_source": "за 5 проданими", "spec_group": 'M3 Pro · 16"'}
+    assert market._stat_for_item(stats, it)["spec_group"] == 'M3 Pro · 16"'   # «чип · екран» — так
+    assert market._stat_for_item(stats, it, any_group=True)["spec_group"] == 'M3 Pro · 16"'
+    assert laptops.price_fallbacks('M3 Pro · 16" · 18GB') == ['M3 Pro · 16" · 18GB', 'M3 Pro · 16"']
+    assert laptops.price_fallbacks("RTX 4060 · i7 13 gen · 16GB") == [
+        "RTX 4060 · i7 13 gen · 16GB", "RTX 4060 · i7 13 gen", "RTX 4060"]       # Windows — до відеокарти, без «*»
+    assert laptops.price_fallbacks("256GB") == ["256GB", "*"]                  # не ноутбук — як раніше

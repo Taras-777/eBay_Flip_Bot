@@ -93,7 +93,7 @@ def unrecognized_items(watch):
 
     stats = {(s["cond_group"], s["spec_group"]): s for s in get_market_stats(watch["id"])}
     for it in result:
-        stat = _stat_for_item(stats, it)
+        stat = _stat_for_item(stats, it, any_group=True)   # лише для порядку списку
         sale = (stat["sale_price"] or stat["median_price"]) if stat else None
         it["ref"] = (stat, sale) if sale else None
         it["ratio"] = it["price"] / sale if sale else 9.9

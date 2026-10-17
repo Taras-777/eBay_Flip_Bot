@@ -454,6 +454,24 @@ def spec_parents(spec):
     return [SEP.join(parts[:i]) for i in range(len(parts) - 1, 0, -1)]
 
 
+# Ціна ноутбука порівнюється не з будь-якою ширшою групою:
+#   * MacBook — щонайширше «чип · екран»: 14" і 16" з тим самим чипом коштують дуже по-різному
+#     («M3 Pro · усі екрани» давала хибну ціну продажу);
+#   * Windows — щонайширше «відеокарта» (відеокарта визначає ціну найбільше);
+#   * «*» (усі ноутбуки стану разом) — ніколи.
+LAPTOP_MIN_PRICE_PARTS = {"mac": 2, "win": 1}
+
+
+def price_fallbacks(spec):
+    """Групи, за якими можна рахувати ціну оголошення: сам клас, тоді ширші. Для ноутбука — не ширші
+    за LAPTOP_MIN_PRICE_PARTS і без «*» (усі оголошення стану); для решти — аж до «*»."""
+    spec = spec or "unspecified"
+    kind = spec_kind(spec)
+    if not kind:
+        return [spec] + spec_parents(spec) + ["*"]
+    return [spec] + [p for p in spec_parents(spec) if len(p.split(SEP)) >= LAPTOP_MIN_PRICE_PARTS[kind]]
+
+
 def spec_matches(item_spec, group_spec):
     """Чи входить оголошення з класом item_spec у групу group_spec (сама група, «*» або ширша)."""
     item_spec = item_spec or "unspecified"
