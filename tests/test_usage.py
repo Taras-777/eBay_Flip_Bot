@@ -62,3 +62,12 @@ def test_settings_button_and_callback(monkeypatch):
     upd, ctx = press("apistat:0")
     asyncio.run(screen_usage.usage_callback(upd, ctx))
     assert "Статистика запитів до eBay" in shown[-1][0] and "🔄 Оновити" in shown[-1][1]
+
+
+def test_settings_explain_buttons():
+    import account
+    text = account._settings_text()
+    for button in ("Поріг знижки", "Ціна для знахідок", "Аукціони", "Статистика запитів", "Журнал повільних дій",
+                   "Надіслати резервну копію бази"):
+        assert f"<b>{button}</b>" in text
+    assert len(text) < 4096
