@@ -10,12 +10,15 @@ unkb:<товар>:<№>                — «🧩 Зібрати клас» по
                                   unkbl:<товар> — усі варіанти кроку, unkbs:<товар> — «невідомо»
 unkk / unkr / unkf:<товар>:<№>  — «👌 Залишити як є» / «❌ Інший товар» / «🚩 Для розробника»
 unkrep:<товар>, unkrepc:<товар> — звіт для розробника / очистити його
+unkexp:0                        — «📤 Вивантажити все файлом»: усі нерозпізнані з характеристиками (.txt)
 """
 
 import asyncio
 import html
+import io
+import time
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -31,6 +34,7 @@ from unrecognized import (
     class_options,
     clear_report,
     developer_report,
+    export_report,
     flag_for_developer,
     keep_as_is,
     drop_unavailable,
@@ -118,6 +122,21 @@ async def _render(update, context, watch, page=0, note=""):
                      parse_mode=ParseMode.HTML)
 
 
+async def _send_export(update, context):
+    """unkexp:0 — усі нерозпізнані оголошення одним .txt файлом (щоб надіслати розробнику на аналіз)."""
+    chat_id = update.effective_chat.id
+    text, total = await run_with_progress(update, context, "📤 ⏳ Збираю нерозпізнані оголошення у файл…",
+                                          export_report, chat_id)
+    if total:
+        name = f"nerozpiznani_{time.strftime('%Y-%m-%d')}.txt"
+        await context.bot.send_document(
+            chat_id=chat_id, document=InputFile(io.BytesIO(text.encode("utf-8")), filename=name),
+            caption=f"📤 Нерозпізнані оголошення: {total}. Назва, ціна, посилання, клас і всі характеристики — "
+                    "надішли цей файл розробнику на аналіз. Особистих даних продавців тут немає.")
+        context.user_data["panel_force_new"] = True   # екран — нижче за файл
+    await _render_all(update, context)
+
+
 async def _render_all(update, context):
     """З головного меню: товари, де є нерозпізнані оголошення, — від найбільшої кількості."""
     per_watch = await asyncio.to_thread(unrecognized_by_watch, update.effective_chat.id)
@@ -130,6 +149,8 @@ async def _render_all(update, context):
         lines.append("Усе розпізнано 👍")
     rows = [[InlineKeyboardButton(f"📦 {w['label']} ({n})"[:60], callback_data=f"unk:{w['id']}:0:m")]
             for w, n in per_watch]
+    if per_watch:
+        rows.append([InlineKeyboardButton("📤 Вивантажити все файлом", callback_data="unkexp:0")])
     rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
@@ -148,6 +169,8 @@ async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if parts[0] == "unkall":
         context.user_data["unk_origin"] = "menu"
         return await _render_all(update, context)
+    if parts[0] == "unkexp":
+        return await _send_export(update, context)
     action, wid = parts[0], int(parts[1])
     watch = get_watch(wid, update.effective_chat.id)
     if watch is None:

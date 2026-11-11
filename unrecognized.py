@@ -259,5 +259,44 @@ def developer_report(watch):
     return "\n".join(lines), len(rows)
 
 
+EXPORT_VALUE_MAX = 150   # довгі значення характеристик обрізаємо — файл має лишатись читабельним
+
+
+def export_report(chat_id):
+    """Усі нерозпізнані оголошення всіх товарів чату — текстом для аналізу розробником:
+    назва, ціна, посилання, клас, що бот знайшов і всі характеристики (з бази, без запитів до eBay).
+    Повертає (текст, кількість оголошень)."""
+    lines, total = [f"Нерозпізнані оголошення — вивантажено {time.strftime('%Y-%m-%d %H:%M')}"], 0
+    for w, _ in unrecognized_by_watch(chat_id):
+        items = unrecognized_items(w)
+        if not items:
+            continue
+        cats = ", ".join(c["name"] for c in get_watch_categories(w)) or "—"
+        kind = item_kind(w, {}) or "не ноутбук"
+        lines.append(f"\n{'=' * 70}\nТОВАР: {w['label']} | запит: {w.get('query') or ''} | тип: {kind} | "
+                     f"категорії: {cats} | оголошень: {len(items)}\n{'=' * 70}")
+        cached = get_cached_specs([it["item_id"] for it in items])
+        for n, it in enumerate(items, 1):
+            total += 1
+            aspects = (cached.get(it["item_id"]) or (None, None))[1] or {}
+            lines.append(f"\n#{n} {it['title'] or ''}")
+            lines.append(f"   ціна: {it['price']:.0f} € | клас зараз: {it['spec_group'] or 'unspecified'} | "
+                         f"стан: {it.get('cond_group') or '?'} | id: {it['item_id']}")
+            lines.append(f"   знайдено: {it['info']}")
+            if it.get("url"):
+                lines.append(f"   {it['url']}")
+            shown = {k: v for k, v in aspects.items() if not k.startswith("_")}
+            if shown:
+                lines.append("   характеристики:")
+                for k, v in sorted(shown.items()):
+                    v = str(v).replace("\n", " ")
+                    lines.append(f"     - {k}: {v[:EXPORT_VALUE_MAX]}{'…' if len(v) > EXPORT_VALUE_MAX else ''}")
+            else:
+                lines.append("   характеристики: не збережені")
+    if not total:
+        lines.append("\nНерозпізнаних оголошень немає.")
+    return "\n".join(lines), total
+
+
 def clear_report(watch):
     clear_flagged(watch["id"])

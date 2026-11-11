@@ -188,3 +188,28 @@ def test_item_refreshed_when_bot_now_knows_full_class():
                         {"_beschreibung_geprueft": "2", "grafikkarte (aus beschreibung)": "RTX 4060"})
     assert unrecognized.unrecognized_items(watch) == []
     assert {r["item_id"]: r["spec_group"] for r in db.get_current_listings(wid)}["u1"] == FULL
+
+
+def test_export_all_to_file(monkeypatch):
+    from unittest.mock import AsyncMock
+    wid, watch = _setup()
+    db.save_cached_spec("u1", "GPU ? · i7 13 gen · 16GB",
+                        dict(CHECKED, prozessor="Intel Core i7-13620H", grafikkarte="x" * 400))
+    text, total = unrecognized.export_report(1)
+    assert total == 1
+    assert "ТОВАР: MSI Katana | запит: MSI Katana | тип: win" in text
+    assert "#1 MSI Katana 15 B13VFK i7-13620H 16GB" in text and "клас зараз: GPU ? · i7 13 gen · 16GB" in text
+    assert "https://www.ebay.de/itm/u1" in text and "- prozessor: Intel Core i7-13620H" in text
+    assert "_beschreibung" not in text and "x" * 151 not in text and "…" in text     # службове й довге — ні
+
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("unkall:0")
+    ctx.user_data = {}
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    assert "📤 Вивантажити все файлом" in shown[-1][1]
+    ctx.bot.send_document = AsyncMock()
+    upd, _ = press("unkexp:0")
+    asyncio.run(handlers.unknown_callback(upd, ctx))
+    kwargs = ctx.bot.send_document.await_args.kwargs
+    assert kwargs["document"].filename.startswith("nerozpiznani_") and "Нерозпізнані оголошення: 1" in kwargs["caption"]
+    assert ctx.user_data["panel_force_new"] is True
