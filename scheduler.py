@@ -53,6 +53,7 @@ from market import (
     normalize_saved_specs,
     laptop_unknown,
     max_buy_price,
+    RESALE_GROUP,
 )
 from panel import repost_panel
 from discovery import run_discovery
@@ -71,6 +72,9 @@ from deal_reprice import reprice_deals
 from markdowns import run_markdown_scan
 from backup import daily_backup
 from auctions import auction_final_loop, run_auction_cycle
+
+
+RENOTIFY_DROP_EUR = 5
 
 
 async def check_all_watches(app: Application):
@@ -169,7 +173,7 @@ async def check_one_watch(app: Application, w: dict):
                 seen_updates.append((it["item_id"], it["effective_price"], None))
                 continue
             # Дешево, але така конфігурація не продається (при живому ринку) — не сповіщаємо
-            if is_slow_seller(sold, it["cond_group"], it["spec_group"]):
+            if is_slow_seller(sold, RESALE_GROUP, it["spec_group"]):
                 log.info("watch #%s: %s — вигідна ціна, але %s не продається, пропускаю",
                          w["id"], it["item_id"], it["spec_group"])
                 seen_updates.append((it["item_id"], it["effective_price"], None))
@@ -178,7 +182,10 @@ async def check_one_watch(app: Application, w: dict):
             discount_pct = (sale_price - it["total_price"]) / sale_price * 100
 
             already_notified_price = seen["last_notified_price"] if seen else None
-            if already_notified_price is not None and it["effective_price"] >= already_notified_price - 0.01:
+            # Повторно — лише після помітного зниження (≥ RENOTIFY_DROP_EUR і ≥ 1%): інакше продавець, що щодня
+            # скидає по 1€, давав би щодня «нову» пропозицію
+            if already_notified_price is not None and it["effective_price"] > already_notified_price - max(
+                    RENOTIFY_DROP_EUR, already_notified_price * 0.01):
                 seen_updates.append((it["item_id"], it["effective_price"], None))
                 continue
 

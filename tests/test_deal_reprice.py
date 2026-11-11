@@ -1,5 +1,6 @@
 """«🔥 Вигідні пропозиції»: «продати» — за теперішньою статистикою ринку, з поясненням, звідки ціна."""
 import asyncio
+import time
 
 import db
 import deal_check
@@ -168,3 +169,35 @@ def test_mac_deal_priced_by_all_screens_removed():
     did = db.add_deal(wid, "v1|mac|0", "MacBook Pro A2991 M3 Pro 18GB 512GB", 899, "EUR", 1699, 47, "u", False,
                       cond_group="new", spec_group="M3 Pro", item_spec='M3 Pro · 16" · 18GB')
     assert deal_reprice.reprice_deals(1) == 1 and db.get_deal(did)["status"] == "stale"
+
+
+def test_resale_price_always_from_private_sellers():
+    import market
+    stats = {("new", "512GB"): {"sale_source": "за 6 проданими", "spec_group": "512GB", "cond_group": "new"},
+             ("used", "512GB"): {"sale_source": "за 9 проданими", "spec_group": "512GB", "cond_group": "used"}}
+    shop_item = {"cond_group": "new", "spec_group": "512GB"}
+    assert market._stat_for_item(stats, shop_item)["cond_group"] == "used"      # купуємо в магазину, продаємо як 👤
+    del stats[("used", "512GB")]
+    assert market._stat_for_item(stats, shop_item) is None                       # приватних даних немає — не вгадуємо
+
+
+def test_price_drop_updates_same_deal():
+    wid = db.add_watch(1, "Iphone 16 pro", "Iphone 16 pro", "", "", 15)
+    first = db.add_deal(wid, "v1|168821654009|0", "iPhone 16 Pro 512GB", 633, "EUR", 990, 36, "u", False)
+    with db.get_conn() as conn:
+        conn.execute("UPDATE deals SET seen_at = 1 WHERE id = ?", (first,))
+    again = db.add_deal(wid, "v1|168821654009|0", "iPhone 16 Pro 512GB", 620, "EUR", 990, 37, "u", False)
+    assert again == first
+    deals, total = db.get_inbox_deals(1)
+    assert total == 1 and deals[0]["total_price"] == 620 and deals[0]["seen_at"] is None   # знову 🆕
+
+
+def test_old_duplicate_deals_removed_on_start():
+    wid = db.add_watch(1, "Iphone 16 pro", "Iphone 16 pro", "", "", 15)
+    with db.get_conn() as conn:
+        for price in (633, 632, 630):
+            conn.execute("""INSERT INTO deals (watch_id, item_id, title, total_price, currency, median_price,
+                            discount_pct, url, status, created_at) VALUES (?, 'x', 't', ?, 'EUR', 990, 30, 'u', 'new', ?)""",
+                         (wid, price, int(time.time())))
+    db.init_db()
+    assert db.get_inbox_deals(1)[1] == 1

@@ -472,15 +472,21 @@ def laptop_unknown(it):
     return bool(it.get("laptop")) and laptop_needs_aspects(it.get("spec_group") or "unspecified")
 
 
+# Ціна «Продати» — завжди за 👤 приватними продажами: ти перепродаєш як приватна особа, тож ціни
+# магазинів (з гарантією й поверненням — дорожчі) завищували б очікуваний прибуток. Купувати можна в будь-кого.
+RESALE_GROUP = "used"
+
+
 def _stat_for_item(stats, it, sold_only=False, any_group=False):
-    """Спершу статистика точної конфігурації; якщо окремої немає (замало
+    """Статистика для ціни «Продати» — завжди групи 👤 приватних (RESALE_GROUP), хоч би хто продавав
+    саме це оголошення. Спершу статистика точної конфігурації; якщо окремої немає (замало
     оголошень) — найближчий ширший клас, і лише тоді загальна група стану.
     Ноутбук — не ширше за «чип · екран» / «відеокарта · процесор» і без загальної групи
     (laptops.price_fallbacks): немає такої статистики — ціну не порівнюємо.
     any_group — будь-яка ширша група аж до «*» (лише для приблизного порядку, напр. у «🛠 Нерозпізнані»).
     sold_only — лише групи з ціною «Продати» за реальними продажами: якщо в точній групі
     продажів замало, береться найближча ширша, де їх достатньо; немає такої — None."""
-    cond, spec = it["cond_group"], it.get("spec_group") or "unspecified"
+    cond, spec = RESALE_GROUP, it.get("spec_group") or "unspecified"
     keys = [spec] + spec_parents(spec) + ["*"] if any_group else price_fallbacks(spec)
     for key in keys:
         stat = stats.get((cond, key))

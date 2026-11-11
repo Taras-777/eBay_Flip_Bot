@@ -50,8 +50,8 @@ from db import (
     watch_category_ids,
 )
 from ebay_api import _watch_search_kwargs, browse_budget_left, fetch_item_by_legacy_id, search_in_categories
-from market import _annotate_items, _apply_item_filters, _stat_for_item, estimate_resale_profit, laptop_unknown, \
-    max_buy_price
+from market import RESALE_GROUP, _annotate_items, _apply_item_filters, _stat_for_item, estimate_resale_profit, \
+    laptop_unknown, max_buy_price
 from sales import is_slow_seller
 from textparse import CURRENCY_TO_EUR, PICKUP_NOTE
 
@@ -136,7 +136,7 @@ def scan_watch_auctions(w, now=None):
         buy_limit = max_buy_price(sale, min_profit)
         if it["total_price"] > buy_limit:
             continue
-        if is_slow_seller(sold, it["cond_group"], it["spec_group"]):
+        if is_slow_seller(sold, RESALE_GROUP, it["spec_group"]):
             continue   # дешево, але така конфігурація не продається
         text = first_text(w, it, sale, buy_limit, now)
         ship = it.get("shipping_cost") or 0

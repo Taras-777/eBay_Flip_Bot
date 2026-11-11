@@ -364,6 +364,10 @@ def init_db():
     with get_conn() as conn:
         conn.execute("PRAGMA journal_mode=WAL")  # зберігається у файлі бази
         conn.execute("DROP TABLE IF EXISTS notices")   # колишні «🔔 Повідомлення» — прибрано
+        # Те саме оголошення кілька разів у «🔥» (після кожного зниження ціни) — лишаємо найновіший запис
+        if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='deals'").fetchone():
+            conn.execute("""DELETE FROM deals WHERE status = 'new' AND id NOT IN
+                            (SELECT MAX(id) FROM deals WHERE status = 'new' GROUP BY watch_id, item_id)""")
         # Міграції: якщо таблиця вже існує зі старою структурою (без
         # нових колонок), перестворюємо її — це лише кеш статистики й
         # трекінгу, дані відновлюються самі на наступній перевірці.
@@ -1491,9 +1495,21 @@ def save_category_aspects(category_id, aspects):
 def add_deal(watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,
              has_best_offer=False, cond_group=None, spec_group=None, listed_at=None,
              item_spec=None, sale_source=None, sale_sample=None, auction=None):
-    """auction — {'current_bid', 'bid_count', 'end_at'} для «аукціон + купити зараз»."""
+    """auction — {'current_bid', 'bid_count', 'end_at'} для «аукціон + купити зараз».
+    Якщо це оголошення вже є у «🔥» без рішення (продавець знизив ціну) — оновлюється той самий запис
+    (знову 🆕), а не додається ще один: інакше одне оголошення висіло б у списку п'ять разів."""
     now = int(time.time())
     with get_conn() as conn:
+        old = conn.execute("SELECT id FROM deals WHERE watch_id = ? AND item_id = ? AND status = 'new' "
+                           "ORDER BY id DESC LIMIT 1", (watch_id, item_id)).fetchone()
+        if old:
+            conn.execute(
+                """UPDATE deals SET title = ?, total_price = ?, median_price = ?, discount_pct = ?, url = ?,
+                   suspicious = ?, has_best_offer = ?, created_at = ?, seen_at = NULL, cond_group = ?,
+                   spec_group = ?, checked_at = ?, item_spec = ?, sale_source = ?, sale_sample = ? WHERE id = ?""",
+                (title, total_price, median_price, discount_pct, url, int(suspicious), int(has_best_offer), now,
+                 cond_group, spec_group, now, item_spec, sale_source, sale_sample, old["id"]))
+            return old["id"]
         cur = conn.execute(
             """INSERT INTO deals
                (watch_id, item_id, title, total_price, currency, median_price, discount_pct, url, suspicious,

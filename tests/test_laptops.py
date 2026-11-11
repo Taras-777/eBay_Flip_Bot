@@ -534,11 +534,11 @@ def test_old_description_version_reread(monkeypatch):
 
 
 def test_mac_price_never_from_all_screens():
-    stats = {("new", "M3 Pro"): {"sale_source": "за 8 проданими", "spec_group": "M3 Pro"},
-             ("new", "*"): {"sale_source": "за 20 проданими", "spec_group": "*"}}
+    stats = {("used", "M3 Pro"): {"sale_source": "за 8 проданими", "spec_group": "M3 Pro"},
+             ("used", "*"): {"sale_source": "за 20 проданими", "spec_group": "*"}}
     it = {"cond_group": "new", "spec_group": 'M3 Pro · 16" · 18GB'}
     assert market._stat_for_item(stats, it) is None                    # «M3 Pro · усі екрани» — ні
-    stats[("new", 'M3 Pro · 16"')] = {"sale_source": "за 5 проданими", "spec_group": 'M3 Pro · 16"'}
+    stats[("used", 'M3 Pro · 16"')] = {"sale_source": "за 5 проданими", "spec_group": 'M3 Pro · 16"'}
     assert market._stat_for_item(stats, it)["spec_group"] == 'M3 Pro · 16"'   # «чип · екран» — так
     assert market._stat_for_item(stats, it, any_group=True)["spec_group"] == 'M3 Pro · 16"'
     assert laptops.price_fallbacks('M3 Pro · 16" · 18GB') == ['M3 Pro · 16" · 18GB', 'M3 Pro · 16"']
