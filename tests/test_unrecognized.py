@@ -213,3 +213,13 @@ def test_export_all_to_file(monkeypatch):
     kwargs = ctx.bot.send_document.await_args.kwargs
     assert kwargs["document"].filename.startswith("nerozpiznani_") and "Нерозпізнані оголошення: 1" in kwargs["caption"]
     assert ctx.user_data["panel_force_new"] is True
+
+
+def test_product_without_configurations_not_listed():
+    wid = db.add_watch(1, "DJI Mini 4 Pro", "DJI Mini 4 Pro", "", "", 15)
+    obs = [{"item_id": f"d{i}", "title": f"DJI Mini 4 Pro Fly More Nr{i}", "total_price": 500, "cond_group": "used",
+            "spec_group": "unspecified"} for i in range(10)]
+    db.update_listing_observations(wid, obs)
+    for i in range(10):
+        db.save_cached_spec(f"d{i}", "unspecified", {"marke": "DJI"})
+    assert unrecognized.unrecognized_items(db.get_watch(wid, 1)) == []   # у дрона конфігурацій немає

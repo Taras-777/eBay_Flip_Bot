@@ -545,3 +545,48 @@ def test_mac_price_never_from_all_screens():
     assert laptops.price_fallbacks("RTX 4060 · i7 13 gen · 16GB") == [
         "RTX 4060 · i7 13 gen · 16GB", "RTX 4060 · i7 13 gen", "RTX 4060"]       # Windows — до відеокарти, без «*»
     assert laptops.price_fallbacks("256GB") == ["256GB", "*"]                  # не ноутбук — як раніше
+
+
+# ---------- з вивантаження «🛠 Нерозпізнані» (11.11) ----------
+
+def test_cpu_taken_from_most_precise_source():
+    asp = {"prozessor": "Ryzen 9", "prozessor (aus beschreibung)": "Ryzen 9 8940HX", "_beschreibung_geprueft": "2",
+           "arbeitsspeicher (aus beschreibung)": "32 GB"}
+    title = "ASUS ROG Strix G16 (G614PW-TS092W) 16\" Gaming Notebook RTX 5080 AMD Ryzen 9 SSD"
+    assert laptops.laptop_spec(title, asp) == "RTX 5080 · Ryzen 9 8000 · 32GB+"
+    assert "процесор: Ryzen 9 8000 (опис)" in laptops.sources_line(laptops.class_sources(title, asp))
+    # «290HX Plus» у характеристиках не розпізнається — береться опис
+    asp = {"prozessor": "290HX Plus", "prozessor (aus beschreibung)": "Core Ultra 9 275HX",
+           "grafikprozessor": "GeForce RTX 5080", "arbeitsspeicher (aus beschreibung)": "32 GB"}
+    assert laptops.laptop_spec("ASUS ROG Strix G18 G815LW 18 Zoll Intel Core", asp) == \
+        "RTX 5080 · Core Ultra 9 (S2) · 32GB+"
+
+
+def test_trademarks_series_and_units():
+    assert laptops.laptop_spec("ROG Strix G16 RTX 5060 32 GB RAM", {"prozessor": "AMD Ryzen™ 9 8940HX Prozesssor"}) == \
+        "RTX 5060 · Ryzen 9 8000 · 32GB+"                              # «Ryzen™ 9» з характеристик
+    assert laptops.laptop_spec("ASUS ROG Strix G16, AMD Ryzen? 9 8940HX, RTX 5070 32GB") == \
+        "RTX 5070 · Ryzen 9 8000 · 32GB+"                              # зламаний знак ™
+    assert laptops.specs_from_description("Prozessor: AMD Ryzen 9000 Serie, RTX 5000 Serie").keys() == set()
+    assert laptops.detect_gpu("NVIDIA RTX 5000 Ada") == "RTX 5000"     # професійна — лишається
+    assert laptops.laptop_spec("ROG Strix G16 RTX 5060 Ryzen 9 8940HX", {"arbeitsspeichergröße": "32768MB RAM"}) == \
+        "RTX 5060 · Ryzen 9 8000 · 32GB+"
+
+
+def test_macbook_ram_slash_and_french_units():
+    assert laptops.laptop_spec('Apple MacBook Pro 16" M4 Pro/24/512 GB Space Schwarz') == 'M4 Pro · 16" · 24GB'
+    assert laptops.laptop_spec("MacBook Pro 14'' M4 Pro 12 CPU 16 GPU 24Go 512Go SSD") == 'M4 Pro · 14" · 24GB'
+
+
+def test_ram_kit_in_laptop_watch_by_majority():
+    wid = db.add_watch(1, "Gigabyte g5", "Gigabyte g5", "", "", 15,
+                       categories=[{"id": "58058", "name": "Computer, Tablets & Netzwerk"}])
+    w = db.get_watch(wid, 1)
+    assert not market.watch_is_laptop(w)
+    obs = [{"item_id": f"n{i}", "title": f"Gigabyte G5 KF RTX 4060 i5-12500H 16GB Nr{i}", "total_price": 800,
+            "cond_group": "used", "spec_group": "RTX 4060 · i5 12 gen · 16GB"} for i in range(10)]
+    db.update_listing_observations(wid, obs)
+    assert market.watch_is_laptop(w)
+    kit = {"item_id": "kit", "title": "32GB RAM von Phs-Memory kompatibel mit Gigabyte G5 GE 51DE263SH DDR4",
+           "total_price": 545, "cond_group": "new", "spec_group": "32GB"}
+    assert market._apply_item_filters(w, [kit]) == []

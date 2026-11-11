@@ -652,7 +652,8 @@ def extract_cpu_token(title: str):
         return f"I{m.group(1)}-{m.group(2).upper()}"
 
     # AMD Ryzen з номером моделі: Ryzen 7 5800H
-    m = re.search(r"\bRyzen\s?([3579])\s?(\d{3,4}[A-Z]{0,2})\b", title, re.IGNORECASE)
+    # Між рівнем і номером — пробіл чи дефіс: «Ryzen 9000» — це серія, а не «Ryzen 9» з номером «000»
+    m = re.search(r"\bRyzen\s?([3579])[\s-]+(\d{3,4}[A-Z]{0,2})\b", title, re.IGNORECASE)
     if m:
         return f"RYZEN{m.group(1)}-{m.group(2).upper()}"
 

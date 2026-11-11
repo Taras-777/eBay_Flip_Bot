@@ -41,6 +41,9 @@ from market import _stat_for_item, dedupe_offers
 
 MAX_UNRECOGNIZED = 50
 MAX_OPTIONS = 10
+# Товар без конфігурацій (дрон, навушники): якщо конфігурацію мають менше ніж стільки оголошень,
+# «конфігурація невідома» — звичайний стан, а не помилка розпізнавання
+CONFIG_SHARE_MIN = 0.3
 
 
 def _is_laptop_watch(watch):
@@ -58,6 +61,10 @@ def unrecognized_items(watch):
     all_rows = get_current_listings(watch["id"])
     # Ноутбук — якщо так позначено товар або більшість його оголошень мають клас ноутбука
     laptop = item_kind(watch, {}, [r["spec_group"] for r in all_rows]) is not None
+    if not laptop and all_rows:
+        with_spec = sum(1 for r in all_rows if (r["spec_group"] or "unspecified") != "unspecified")
+        if with_spec < len(all_rows) * CONFIG_SHARE_MIN:
+            return []   # у товару немає конфігурацій — нерозпізнаних немає
     reviewed = get_reviewed_ids(watch["id"])
     rows = [r for r in all_rows if r["item_id"] not in reviewed and _incomplete(r["spec_group"], laptop)]
     if not rows:

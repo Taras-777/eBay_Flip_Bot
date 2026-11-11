@@ -29,7 +29,8 @@ from settings import (
     TRADING_DAILY_BUDGET,
     log,
 )
-from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, price_fallbacks, spec_matches, spec_parents
+from laptops import SEP as LAPTOP_SEP, UNKNOWN_GPU, is_laptop, looks_like_laptop_part, laptop_spec, price_fallbacks, spec_kind, \
+    spec_matches, spec_parents
 from laptops import DESC_CHECKED, DESC_VERSION
 from laptops import needs_aspects as laptop_needs_aspects
 from laptops import wants_aspects as laptop_wants_aspects
@@ -345,11 +346,25 @@ def _annotate_items_auto(items, max_lookups=0, watch=None):
     return items
 
 
+LAPTOP_MAJORITY_MIN = 10   # з якої кількості оголошень вирішувати «ноутбук за більшістю»
+
+
+def watch_is_laptop(w):
+    """Товар — ноутбук: за назвою/категорією («MacBook», «Notebooks») або, якщо там не видно
+    («Gigabyte G5» у «Computer, Tablets & Netzwerk»), за більшістю його оголошень із класом ноутбука."""
+    if is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)]):
+        return True
+    if not w.get("id"):
+        return False
+    specs = [r["spec_group"] for r in get_current_listings(w["id"])]
+    return len(specs) >= LAPTOP_MAJORITY_MIN and sum(1 for sp in specs if spec_kind(sp)) * 2 >= len(specs)
+
+
 def watch_requires_spec(w):
     value = w.get("require_spec")
     if value is None:
         # Ноутбук: клас визначається й без пам'яті в назві (з характеристик) — не відкидаємо
-        if is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)]):
+        if watch_is_laptop(w):
             return False
         # PS4/PS5: пам'ять, якої в моделі не буває («64 GB» у характеристиках), — помилка продавця;
         # оголошення лишається в «конфігурація невідома», а не відкидається
@@ -420,7 +435,7 @@ def _apply_item_filters(w, items):
     # входять і аксесуари. Оголошення, яке сам продавець поклав у категорію
     # чохлів/запчастин, — не товар (хіба що користувач сам обрав таку категорію).
     wants_accessories = any(is_accessory_category(c["name"]) for c in get_watch_categories(w))
-    laptop_watch = is_laptop(query=w.get("query") or "", category_names=[c["name"] for c in get_watch_categories(w)])
+    laptop_watch = watch_is_laptop(w)   # «RAM kompatibel mit Gigabyte G5» — запчастина, хоч товар і не «Notebook»
     bin_prices = _buy_it_now_prices([it for it in items if it.get("bid_is_price") and it.get("item_id") not in rejected])
     kept = []
     for it in items:
@@ -566,7 +581,7 @@ def prune_laptop_parts():
     (до появи фільтра) — інакше вони занижують ціни. Повертає кількість прибраних."""
     removed = 0
     for w in list_watches(active_only=True):
-        if not is_laptop(query=w["query"], category_names=[c["name"] for c in get_watch_categories(w)]):
+        if not watch_is_laptop(w):
             continue
         ids = [r["item_id"] for r in get_all_listing_rows(w["id"]) if looks_like_laptop_part(r.get("title") or "")]
         if ids:

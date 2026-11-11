@@ -50,7 +50,8 @@ LAYOUT_ASPECTS = {"tastaturlayout", "tastatursprache", "keyboard language", "key
 
 _GPU_PATTERNS = [
     (re.compile(r"\brtx\s*-?\s*a\s?(\d{3,4})\b", re.I), lambda m: f"RTX A{m.group(1)}"),
-    (re.compile(r"\b(?:geforce\s*)?rtx\s*-?\s*(\d{4})\s*(ti)?\b", re.I),
+    # «RTX 5000» / «RTX 4000-Serie» — серія, а не відеокарта (крім професійних «RTX 5000 Ada»)
+    (re.compile(r"\b(?:geforce\s*)?rtx\s*-?\s*(?![2-5]000\b(?!\s*ada))(\d{4})\s*(ti)?\b", re.I),
      lambda m: f"RTX {m.group(1)}" + (" Ti" if m.group(2) else "")),
     (re.compile(r"\b(?:geforce\s*)?gtx\s*-?\s*(\d{3,4})\s*(ti)?\b", re.I),
      lambda m: f"GTX {m.group(1)}" + (" Ti" if m.group(2) else "")),
@@ -85,9 +86,24 @@ def is_laptop(title="", category_names=(), query=""):
 _TRADEMARKS = re.compile(r"[™®©℠]")
 
 
+_BROKEN_MARK = re.compile(r"(?<=[A-Za-z])[?\ufffd](?=\s)")   # «Ryzen? 9» — знак ™, що зламався при копіюванні
+_FRENCH_UNITS = re.compile(r"\b(\d+)\s?(Go|To)\b")          # «24Go 512Go» — французькі ГБ/ТБ
+_SPACES = re.compile(r"[ \t]{2,}")
+_MEGABYTES = re.compile(r"\b(\d{1,3}[.,]\d{3}|\d{4,6})\s?MB\b", re.I)   # «32768MB», «16.384 MB» — RAM у мегабайтах
+
+
+def _mb_to_gb(m):
+    mb = int(re.sub(r"[.,]", "", m.group(1)))
+    return f"{mb // 1024}GB" if mb >= 4096 and mb % 1024 == 0 else m.group(0)
+
+
 def _plain(text):
-    """«GeForce RTX™ 5050», «Intel® Core™ i5» → без знаків торгових марок (інакше шаблони не збігаються)."""
-    return _TRADEMARKS.sub(" ", text or "")
+    """«GeForce RTX™ 5050», «Intel® Core™ i5», «Ryzen? 9» → без знаків торгових марок; «24Go» → «24GB»;
+    зайві пробіли — один (інакше шаблони не збігаються)."""
+    text = _BROKEN_MARK.sub(" ", _TRADEMARKS.sub(" ", text or ""))
+    text = _FRENCH_UNITS.sub(lambda m: m.group(1) + ("GB" if m.group(2) == "Go" else "TB"), text)
+    text = _MEGABYTES.sub(_mb_to_gb, text)
+    return _SPACES.sub(" ", text)
 
 
 def _aspect(aspects, names):
@@ -128,7 +144,7 @@ _DESC_CPU_PATTERNS = [
     re.compile(r"\bApple\s+M\d{1,2}(?:\s?(?:Pro|Max|Ultra))?\b|\bM\d{1,2}(?:\s?(?:Pro|Max|Ultra))?(?=[\s-]*Chip)", re.I),
     re.compile(r"\bCore\s+Ultra\s+[3579]\s+\d{3}[A-Za-z]{0,2}\b", re.I),
     re.compile(r"\bi[3579][-\s]?\d{3,5}[A-Za-z]{0,2}\d{0,2}\b", re.I),
-    re.compile(r"\bRyzen\s?[3579]\s?\d{3,4}[A-Za-z]{0,2}\b", re.I),
+    re.compile(r"\bRyzen\s?[3579][\s-]+\d{3,4}[A-Za-z]{0,2}\b", re.I),   # не «Ryzen 9000» (серія)
     re.compile(r"\bRyzen\s+AI\s+(?:Max\+?\s+)?[3579]\s+(?:HX\s+|PRO\s+)?\d{3}\b", re.I),
     re.compile(r"\bCore\s+[3579]\s+\d{3}[A-Za-z]{0,2}\b", re.I),
 ]
@@ -291,6 +307,31 @@ def _best_cpu_token(*tokens):
     return best
 
 
+# «M4 Pro/24/512 GB», «M3 / 18 / 512» — чип, RAM і SSD через скісну риску
+_MAC_SLASH = re.compile(r"\bM\d{1,2}(?:\s?(?:Pro|Max|Ultra))?\s*/\s*(\d{1,3})\s*(?:GB)?\s*/\s*\d{3,4}\b", re.I)
+
+
+def _mac_slash_ram(title):
+    m = _MAC_SLASH.search(title or "")
+    return int(m.group(1)) if m and 8 <= int(m.group(1)) <= 128 else None
+
+
+def _cpu_choice(title, aspects):
+    """(клас процесора, звідки) — з назви, характеристик чи опису; якщо десь вказано точніше
+    (з поколінням: «Ryzen 9 8000» замість «Ryzen 9»), береться точніше."""
+    aspect_cpu = _aspect(aspects, CPU_ASPECTS)
+    desc_cpu = _aspect(aspects, {DESC_CPU_ASPECT})
+    found = []
+    if extract_cpu_token(title):
+        found.append((_cpu_class(title, aspect_cpu or desc_cpu), "назва"))
+    found += [(_cpu_class("", aspect_cpu), "характеристики"), (_cpu_class("", desc_cpu), "опис")]
+    found = [f for f in found if f[0]]
+    if not found:
+        return None, None
+    full = [f for f in found if _FULL_CPU.search(f[0])]
+    return (full or found)[0]
+
+
 # SSD у Mac буває лише таких об'ємів; «500 GB» / «1000 GB» у назві — це 512GB / 1TB
 APPLE_SSD_SIZES = (128, 256, 512, 1024, 2048, 4096, 8192)
 
@@ -305,10 +346,11 @@ def laptop_spec(title, aspects=None, query=""):
     Порядок джерел: назва → характеристики → опис оголошення."""
     aspects = aspects or {}
     title = _plain(title)
-    cpu_text = _aspect(aspects, CPU_ASPECTS) or _aspect(aspects, {DESC_CPU_ASPECT})
     token = _best_cpu_token(extract_cpu_token(title), extract_cpu_token(_aspect(aspects, CPU_ASPECTS)),
                             extract_cpu_token(_aspect(aspects, {DESC_CPU_ASPECT})))
     ram = _sizes(title)[0]
+    if ram is None:
+        ram = _mac_slash_ram(title)
     if ram is None:
         ram = _sizes(_aspect(aspects, RAM_ASPECTS) + " RAM")[0]
     if ram is None:
@@ -338,7 +380,7 @@ def laptop_spec(title, aspects=None, query=""):
     if gpu is None:
         lines = _search_tokens(query) | _search_tokens(title)
         gpu = "iGPU" if lines & IGPU_LINE_TERMS else UNKNOWN_GPU
-    cpu = _cpu_class(title, cpu_text)
+    cpu = _cpu_choice(title, aspects)[0]
     if gpu == UNKNOWN_GPU and not cpu and not ram:
         return "unspecified"
     parts = [gpu, cpu, _ram_bucket(ram) if ram else None]
@@ -359,7 +401,8 @@ def class_sources(title, aspects=None, query=""):
     t = _plain(title)
     spec = laptop_spec(title, aspects, query)
     parts = spec.split(SEP) if spec != "unspecified" else []
-    ram = _first((_sizes(t)[0], "назва"), (_sizes(_aspect(aspects, RAM_ASPECTS) + " RAM")[0], "характеристики"),
+    ram = _first((_sizes(t)[0] or _mac_slash_ram(t), "назва"),
+                 (_sizes(_aspect(aspects, RAM_ASPECTS) + " RAM")[0], "характеристики"),
                  (_sizes(_aspect(aspects, {DESC_RAM_ASPECT}) + " RAM")[0], "опис"))
     ram = (_size_label(ram[0]) if ram[0] else None, ram[1])
     if parts and _MAC_CHIP.fullmatch(parts[0]):
@@ -374,8 +417,7 @@ def class_sources(title, aspects=None, query=""):
         return [("чип", parts[0], chip_src), ("екран", *screen), ("RAM", *ram)]
     gpu = _first((detect_gpu(t), "назва"), (detect_gpu(_aspect(aspects, GPU_ASPECTS)), "характеристики"),
                  (detect_gpu(_aspect(aspects, {DESC_GPU_ASPECT})), "опис"))
-    cpu = _first((_cpu_class(t), "назва"), (_cpu_class("", _aspect(aspects, CPU_ASPECTS)), "характеристики"),
-                 (_cpu_class("", _aspect(aspects, {DESC_CPU_ASPECT})), "опис"))
+    cpu = _cpu_choice(t, aspects)
     return [("відеокарта", *gpu), ("процесор", *cpu), ("RAM", *ram)]
 
 
