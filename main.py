@@ -230,7 +230,7 @@ def main():
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(auctions_callback, pattern="^auctions$"))
-    app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear)?$"))
+    app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear|:file)?$"))
     app.add_handler(CallbackQueryHandler(usage_callback, pattern="^apistat:\\d+$"))
     app.add_handler(CallbackQueryHandler(unknown_callback, pattern="^unk[a-z]*:"))
     app.add_handler(CallbackQueryHandler(backup_send_callback, pattern="^backup:send$"))

@@ -9,16 +9,26 @@
 
 import asyncio
 import html
+import io
 import re
 import time
 from datetime import datetime
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, ContextTypes
 
 from settings import LOCAL_TZ, log
-from db import action_log_summary, clear_action_log, get_action_log, record_action
+from db import (
+    action_log_summary,
+    api_usage_by_day,
+    clear_action_log,
+    count_unseen_deals,
+    get_action_log,
+    get_meta,
+    list_watches,
+    record_action,
+)
 from panel import _ack_callback, show_panel
 
 SLOW_ACTION_SECONDS = 1.5
@@ -35,7 +45,9 @@ ACTION_LABELS = {
     "sales": "🛒 Продажі", "schk": "🛒 Перевірити продажі", "recalc_median": "🔄 Оновити ціни товару",
     "dadd": "💡 Додати товар", "dhide": "💡 Приховати", "drefresh": "💡 Оновити аналіз",
     "chcat": "🗂️ Категорії", "reqasp": "🧾 Характеристики", "editw": "✏️ Редагувати товар",
-    "undo": "↩️ Скасувати", "auctions": "🔨 Аукціони вкл/викл", "slowlog": "🐢 Журнал", "apistat": "📡 Статистика запитів",
+    "undo": "↩️ Скасувати", "auctions": "🔨 Аукціони вкл/викл", "slowlog": "🐢 Журнал", "backup:send": "💾 Резервна копія", "eacc:connect": "🔐 Вхід в eBay",
+    "eacc:disconnect": "🔌 Відключити eBay", "mdpct": "📉 Поріг знижки", "soldonly": "💰 Ціна для знахідок",
+    "mkdclr": "📉 Очистити знижки", "apistat": "📡 Статистика запитів",
     "unk": "🛠 Нерозпізнані", "unkall": "🛠 Нерозпізнані (усі)", "unkexp": "📤 Вивантажити нерозпізнані", "unkm": "🛠 Вказати клас", "unks": "🛠 Зберегти клас", "unkb": "🧩 Зібрати клас", "unkbp": "🧩 Зібрати клас",
 }
 
@@ -107,16 +119,63 @@ def journal_text():
     return "\n".join(lines)
 
 
+REPORT_DAYS = 30
+
+
+def _when_full(ts):
+    return datetime.fromtimestamp(ts, LOCAL_TZ).strftime("%d.%m %H:%M:%S")
+
+
+def report_text(days=REPORT_DAYS):
+    """Звіт для розробника (файлом): повільні дії й помилки за `days` днів і запити до eBay по днях.
+    Без токенів, текстів повідомлень і даних продавців — лише назви кнопок, час і помилки."""
+    from version import get_version   # тут, щоб не тягнути при імпорті модуля
+    since = time.time() - days * 86400
+    rows = [r for r in get_action_log(5000) if r["at"] >= since]
+    watches = list_watches()
+    owner_chats = {w["chat_id"] for w in watches}
+    lines = [f"Звіт бота для розробника — {datetime.now(LOCAL_TZ):%Y-%m-%d %H:%M}",
+             f"Версія: {get_version()} | товарів: {len(watches)} | нових пропозицій 🔥: "
+             f"{sum(count_unseen_deals(c) for c in owner_chats)} | інтервал пошуку: "
+             f"{get_meta('check_interval') or '?'} хв | поріг повільної дії: {SLOW_ACTION_SECONDS:g} с",
+             "", f"=== Найповільніші дії за {days} днів ==="]
+    summary = action_log_summary(days=days, limit=50)
+    for r in summary:
+        lines.append(f"{r['action']}: {r['count']} раз, середнє {r['avg']:.1f} с, макс {r['max']:.1f} с, "
+                     f"помилок {r['errors'] or 0}")
+    if not summary:
+        lines.append("порожньо")
+    errors = [r for r in rows if r["error"]]
+    lines += ["", f"=== Помилки ({len(errors)}) ==="]
+    lines += [f"{_when_full(r['at'])} | {r['action']} | {r['error']}" for r in errors] or ["немає"]
+    lines += ["", f"=== Усі записи ({len(rows)}, найновіші першими) ==="]
+    lines += [f"{_when_full(r['at'])} | {r['action']} | {r['seconds'] or 0:.1f} с"
+              + (f" | ⚠️ {r['error']}" if r["error"] else "") for r in rows] or ["немає"]
+    lines += ["", "=== Запити до eBay по днях (UTC) ==="]
+    for day, counts in sorted(api_usage_by_day(14).items()):
+        lines.append(f"{day}: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    return "\n".join(lines), len(rows)
+
+
 async def slowlog_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """slowlog — показати журнал; slowlog:clear — очистити."""
+    """slowlog — показати журнал; slowlog:clear — очистити; slowlog:file — звіт для розробника файлом."""
     from access import is_owner
     await _ack_callback(update)
     if not is_owner(update.effective_user.id):
         return
     if update.callback_query.data == "slowlog:clear":
         await asyncio.to_thread(clear_action_log)
+    if update.callback_query.data == "slowlog:file":
+        text, count = await asyncio.to_thread(report_text)
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=InputFile(io.BytesIO(text.encode("utf-8")), filename=f"zvit_bota_{time.strftime('%Y-%m-%d')}.txt"),
+            caption=f"📤 Звіт для розробника: {count} записів за {REPORT_DAYS} днів — повільні дії, помилки й запити "
+                    "до eBay. Надішли цей файл розробнику. Токенів і даних продавців тут немає.")
+        context.user_data["panel_force_new"] = True   # екран — нижче за файл
     text = await asyncio.to_thread(journal_text)
     rows = [[InlineKeyboardButton("🔄 Оновити", callback_data="slowlog"),
              InlineKeyboardButton("🗑 Очистити", callback_data="slowlog:clear")],
+            [InlineKeyboardButton("📤 Звіт для розробника (файл)", callback_data="slowlog:file")],
             [InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")]]
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)

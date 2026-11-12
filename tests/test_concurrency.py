@@ -76,3 +76,34 @@ def test_progress_shown_only_for_slow_actions(monkeypatch):
     assert not ctx.bot.edit_message_text.called                 # швидко — без «⏳»
     assert asyncio.run(panel.run_with_progress(upd, ctx, "⏳ …", lambda: time.sleep(0.2) or 7)) == 7
     assert ctx.bot.edit_message_text.call_args.kwargs["text"] == "⏳ …"
+
+
+def test_developer_report_file(monkeypatch):
+    from unittest.mock import AsyncMock
+    import access
+    assert action_log.action_name(_update("backup:send")) == "💾 Резервна копія"
+    db.record_action(1, "💡 Оновити аналіз", 80.1)
+    db.record_action(1, "🔥 Вигідні пропозиції", 0, "BadRequest: Message is too long")
+    with db.get_conn() as conn:
+        conn.execute("INSERT INTO api_usage (day, api, count) VALUES ('2099-01-01', 'browse', 4300)")
+    text, count = action_log.report_text()
+    assert count == 2 and "Версія:" in text
+    assert "💡 Оновити аналіз: 1 раз, середнє 80.1 с" in text
+    assert "=== Помилки (1) ===" in text and "BadRequest: Message is too long" in text
+
+    shown = []
+
+    async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
+        shown.append([b.text for r in reply_markup.inline_keyboard for b in r])
+    monkeypatch.setattr(action_log, "show_panel", fake_show)
+    monkeypatch.setattr(access, "is_owner", lambda uid: True)
+    upd = MagicMock()
+    upd.effective_chat.id = upd.effective_user.id = 1
+    upd.callback_query.data = "slowlog:file"
+    upd.callback_query.answer = AsyncMock()
+    ctx = MagicMock()
+    ctx.user_data = {}
+    ctx.bot.send_document = AsyncMock()
+    asyncio.run(action_log.slowlog_callback(upd, ctx))
+    doc = ctx.bot.send_document.await_args.kwargs["document"]
+    assert doc.filename.startswith("zvit_bota_") and "📤 Звіт для розробника (файл)" in shown[-1]
