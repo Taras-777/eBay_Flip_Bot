@@ -2,9 +2,9 @@
 import asyncio
 from unittest.mock import MagicMock
 
-import action_log
-import db
-from concurrency import DialogSafeUpdateProcessor
+from ui import action_log
+from core import db
+from core.concurrency import DialogSafeUpdateProcessor
 
 
 def test_buttons_run_in_parallel_but_dialog_steps_in_order():
@@ -67,7 +67,7 @@ def test_slow_update_is_recorded(monkeypatch):
 def test_progress_shown_only_for_slow_actions(monkeypatch):
     import time
     from unittest.mock import AsyncMock
-    import panel
+    from ui import panel
     monkeypatch.setattr(panel, "PROGRESS_AFTER_SECONDS", 0.05)
     upd, ctx = MagicMock(), MagicMock()
     upd.effective_chat.id = 1
@@ -80,7 +80,7 @@ def test_progress_shown_only_for_slow_actions(monkeypatch):
 
 def test_developer_report_file(monkeypatch):
     from unittest.mock import AsyncMock
-    import access
+    from ui import access
     assert action_log.action_name(_update("backup:send")) == "💾 Резервна копія"
     db.record_action(1, "💡 Оновити аналіз", 80.1)
     db.record_action(1, "🔥 Вигідні пропозиції", 0, "BadRequest: Message is too long")

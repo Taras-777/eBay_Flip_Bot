@@ -131,15 +131,15 @@ python main.py
    увімкни **OAuth**, збережи. Назву (**RuName**) впиши в `.env` як `EBAY_RUNAME`.
 2. Увійди в eBay — у боті (**⚙️ Налаштування** в меню власника) або з терміналу:
    ```bash
-   docker exec -it ebay-bot python ebay_login.py          # вхід
-   docker exec -it ebay-bot python ebay_login.py status   # чи працює
+   docker exec -it ebay-bot python -m ebay.ebay_login          # вхід
+   docker exec -it ebay-bot python -m ebay.ebay_login status   # чи працює
    ```
    Бот не бачить пароля — лише одноразовий код; токен зберігається в `data/`.
    Для входу краще окремий eBay-акаунт, а не той, де ти купуєш і продаєш.
 
-Перевірити одне оголошення вручну: `python check_sold.py <посилання або номер>`.
+Перевірити одне оголошення вручну: `python -m ebay.check_sold <посилання або номер>`.
 
-### Основні параметри — у [`settings.py`](settings.py)
+### Основні параметри — у [`core/settings.py`](core/settings.py)
 
 | Параметр | За замовчуванням | |
 |---|---|---|
@@ -153,7 +153,7 @@ python main.py
 | `PRICE_DROP_ALERT_PCT` | 8 | падіння типової ціни за тиждень, після якого приходить попередження |
 | `SLOW_SELLER_MIN_WATCH_SALES` | 10 | від скількох продажів товару бот не пропонує конфігурації, що не продаються |
 
-Список товарів для «💡 Що перепродавати» — `CANDIDATES` у [`discovery.py`](discovery.py).
+Список товарів для «💡 Що перепродавати» — `CANDIDATES` у [`analysis/discovery.py`](analysis/discovery.py).
 
 ## 🧪 Тести
 
@@ -175,7 +175,7 @@ python -m pytest -q
 | `syntax` | синтаксис усіх `.py` (`compileall`) |
 | `lint` | Ruff: невизначені імена, невикористані імпорти й змінні ([`ruff.toml`](ruff.toml)) |
 | `type-check` | mypy у м'якому режимі ([`mypy.ini`](mypy.ini)) |
-| `import-check` | кожен модуль імпортується без помилок |
+| `import-check` | `main.py` і кожен модуль пакетів імпортуються без помилок |
 | `tests` | `pytest` |
 | `docker-build` | образ збирається і бот у ньому імпортується |
 | `security` | pip-audit (вразливості залежностей) і bandit (небезпечні місця в коді) |
@@ -190,46 +190,57 @@ pip-audit -r requirements.txt ; bandit -q -r . -x ./tests,./.venv,./venv -ll --s
 
 ## 📁 Структура
 
+Код розкладено на пакети; імпорти — повні: `from core.db import get_conn`,
+`from analysis.market import max_buy_price`. Запуск — з кореня проєкту
+(`python main.py`, скрипти — `python -m ebay.check_sold …`).
+
 ```
-main.py            точка входу, реєстрація обробників
-handlers.py        збирає екрани докупи (для main.py і тестів)
-screen_watch.py    /start, «📦 Мої товари», картка товару, редагування, оновлення цін
-screen_addwatch.py діалог додавання товару
-screen_deals.py    «🔥 Вигідні пропозиції», «⚙️ Мін. прибуток»
-screen_sales.py    «📈 Продажі» товару
-screen_listings.py «🔎 Переглянути оголошення», «❌ Інший товар» / «🙈 Сховати»
-screen_discover.py «💡 Що перепродавати»
-screen_check.py    «🔍 Перевірити оголошення»
-screen_common.py   спільні клавіатури й формат часу
-panel.py           головне меню, панель без дублів
-account.py         «⚙️ Налаштування»: акаунт eBay, резервні копії
-access.py          доступ і видалення користувачів
-scheduler.py       фонова перевірка товарів, сповіщення, резервні копії
-market.py          аналіз ринку, ціни, фільтри
-shared_market.py   спільний ринок для однакових товарів різних користувачів
-sales.py           швидкість продажу, «не продається», падіння цін
-discovery.py       «💡 Що перепродавати» (аналіз)
-checker.py         «🔍 Перевірити оголошення» (перевірки)
-learning.py        вивчення слів з «❌ Інший товар»
-notifications.py   тексти сповіщень
-ebay_api.py        клієнт eBay Browse API (пошук, характеристики, категорії, ліміти)
-trading_api.py     eBay Trading API — перевірка «продано?»
-ebay_user.py       OAuth-вхід в акаунт eBay
-backup.py          щоденні резервні копії бази (data/backups, останні 7)
-deal_check.py      чи вигідні пропозиції ще продаються (продані/зняті прибираються)
-laptops.py         класи ноутбуків і попередження (розкладка, блок живлення, BIOS…)
-markdowns.py       «📉 Знизили ціну»: перша й поточна ціна оголошень, сканування найдешевших
-screen_markdowns.py екран «📉 Знизили ціну» і вибір порогу знижки
-undo.py            «↩️ Скасувати»: що змінила дія і як її повернути
-screen_undo.py     кнопка «↩️ Скасувати» — повернення на екран, де була дія
-netstatus.py       стан з'єднання з eBay і Telegram
-textparse.py       розбір назв оголошень, конфігурації, категорії
-version.py         номер версії в меню
-db.py              база SQLite (з індексами)
-settings.py        налаштування
-ebay_login.py      вхід в eBay з терміналу
-check_sold.py      ручна перевірка «продано?» одного оголошення
-tests/             автоматичні тести
+main.py                точка входу: створення бота, реєстрація обробників
+config.py              секрети для запуску на ПК (у git не потрапляє; на сервері — .env)
+
+core/                  основа
+  settings.py          усі налаштування
+  db.py                база SQLite (з індексами)
+  scheduler.py         фонова перевірка товарів, сповіщення, резервні копії
+  backup.py            щоденні резервні копії бази (data/backups, останні 7)
+  version.py           номер версії в меню
+  netstatus.py         стан з'єднання з eBay і Telegram
+  concurrency.py       кнопки паралельно, кроки діалогу — по черзі
+
+ebay/                  робота з eBay
+  ebay_api.py          Browse API: пошук, характеристики, категорії, ліміти
+  trading_api.py       Trading API: перевірка «продано?», деталі продажу
+  ebay_user.py         OAuth-вхід в акаунт eBay
+  deal_check.py        чи вигідні пропозиції ще продаються
+  ebay_login.py        вхід в eBay з терміналу (python -m ebay.ebay_login)
+  check_sold.py        ручна перевірка «продано?» (python -m ebay.check_sold)
+  restore_sales.py     відновлення історії продажів (python -m ebay.restore_sales)
+
+analysis/              аналіз ринку
+  textparse.py         розбір назв оголошень, конфігурації, тип продавця
+  laptops.py           класи ноутбуків і попередження (розкладка, блок живлення, BIOS…)
+  market.py            ринок, ціни «Продати» / «Купувати до», фільтри
+  shared_market.py     спільний ринок для однакових товарів різних користувачів
+  sales.py             швидкість продажу, «не продається», падіння цін
+  discovery.py         «💡 Що перепродавати»
+  markdowns.py         «📉 Знизили ціну»
+  auctions.py          «🔨 Аукціони»
+  deal_reprice.py      переоцінка пропозицій за свіжою статистикою
+  unrecognized.py      «🛠 Нерозпізнані» і вивантаження для аналізу
+  checker.py           «🔍 Перевірити оголошення»
+  learning.py          вивчення слів з «❌ Інший товар»
+
+ui/                    Telegram-інтерфейс
+  panel.py             головне меню, панель без дублів
+  handlers.py          збирає екрани докупи (для main.py і тестів)
+  screen_*.py          екрани: товари, пропозиції, продажі, оголошення, знижки, статистика…
+  account.py           «⚙️ Налаштування»
+  access.py            доступ і видалення користувачів
+  action_log.py        «🐢 Журнал повільних дій» і звіт для розробника
+  notifications.py     тексти сповіщень
+  undo.py              «↩️ Скасувати»
+
+tests/                 автоматичні тести
 ```
 
 ## ⚠️ Обмеження

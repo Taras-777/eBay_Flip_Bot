@@ -2,12 +2,12 @@
 import asyncio
 import time
 
-import db
-import deal_check
-import handlers
-import screen_common
-import settings
-import scheduler
+from core import db
+from ebay import deal_check
+from ui import handlers
+from ui import screen_common
+from core import settings
+from core import scheduler
 from test_sales import _screen
 from test_scheduler import consoles, make_app
 from test_ui import Screen, make_context, make_update, _state
@@ -53,7 +53,7 @@ def test_listings_show_listed_date(monkeypatch):
 
 def test_listings_screen_keeps_listing_date(monkeypatch):
     """Дата має дожити від відповіді eBay до екрана «🔎 Оголошення»."""
-    import screen_listings
+    from ui import screen_listings
     listed = int(time.time() - 3 * DAY)
     found = [{"item_id": "a", "title": "Sony PlayStation 5", "total_price": 300, "currency": "EUR",
               "condition": "Gebraucht", "url": "u", "created_at": listed}]
@@ -135,8 +135,8 @@ def test_listing_available_uses_trading_then_browse(monkeypatch):
 # ---------- розбивка запитів Trading API ----------
 
 def test_trading_breakdown(monkeypatch):
-    import account
-    import trading_api
+    from ui import account
+    from ebay import trading_api
     for _ in range(3):
         db.record_api_call("trading")
     db.record_api_call("trading:watch")
@@ -158,7 +158,7 @@ def test_trading_breakdown(monkeypatch):
 # ---------- 👁 скільки людей стежать ----------
 
 def test_watchers_shown_in_deal_card(monkeypatch):
-    import trading_api
+    from ebay import trading_api
     xml = ('<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>'
            '<WatchCount>23</WatchCount><SellingStatus><QuantitySold>0</QuantitySold>'
            '<ListingStatus>Active</ListingStatus></SellingStatus></Item></GetItemResponse>')
@@ -178,7 +178,7 @@ def test_watchers_shown_in_deal_card(monkeypatch):
 
 
 def test_shop_listing_sold_quantity_saved(fake_ebay, monkeypatch):
-    import ebay_api
+    from ebay import ebay_api
     from conftest import FakeResponse
     monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(
         {"localizedAspects": [{"name": "Speicherkapazität", "value": "256 GB"}],
@@ -193,7 +193,7 @@ def test_shop_listing_sold_quantity_saved(fake_ebay, monkeypatch):
 # ---------- 🔨 «аукціон + купити зараз» ----------
 
 def test_auction_with_buy_now_marked(fake_ebay, monkeypatch):
-    import ebay_api
+    from ebay import ebay_api
     from conftest import listing
     fake_ebay.listings = [
         listing("v1|bin|0", "iPhone 16 Pro 128GB", 810, buyingOptions=["AUCTION", "FIXED_PRICE"],
@@ -206,7 +206,7 @@ def test_auction_with_buy_now_marked(fake_ebay, monkeypatch):
     assert not items["v1|bin|0"]["bid_is_price"] and items["v1|bid|0"]["bid_is_price"]
     assert items["v1|plain|0"]["auction"] is False
 
-    import market
+    from analysis import market
     w = {"id": db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 15), "query": "iPhone 16 Pro"}
     kept = [it["item_id"] for it in market._apply_item_filters(w, list(items.values()))]
     assert "v1|bid|0" not in kept and "v1|bin|0" in kept          # ціна-ставка ще зросте — не порівнюємо
@@ -222,10 +222,10 @@ def test_auction_with_buy_now_marked(fake_ebay, monkeypatch):
 
 
 def test_buy_it_now_price_used_for_buying(fake_ebay, monkeypatch):
-    import ebay_api
-    import ebay_user
-    import market
-    import trading_api
+    from ebay import ebay_api
+    from ebay import ebay_user
+    from analysis import market
+    from ebay import trading_api
     from conftest import listing
     fake_ebay.listings = [listing("v1|bid|0", "iPhone 16 Pro 128GB", 300, buyingOptions=["AUCTION", "FIXED_PRICE"],
                                   currentBidPrice={"value": "300.00", "currency": "EUR"}, bidCount=2)]
@@ -244,7 +244,7 @@ def test_buy_it_now_price_used_for_buying(fake_ebay, monkeypatch):
 
 
 def test_auctions_listed_but_not_in_stats(fake_ebay):
-    import market
+    from analysis import market
     from conftest import listing
     from test_scheduler import consoles
     wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
@@ -261,7 +261,7 @@ def test_auctions_listed_but_not_in_stats(fake_ebay):
     assert (row["current_bid"], row["bid_count"], "AUCTION" in row["buying_options"]) == (120.0, 3, True)
 
     # аукціон зник — це не продаж і не черга перевірки «продано?»
-    import settings
+    from core import settings
     for _ in range(settings.GONE_MISS_THRESHOLD):
         db.update_listing_observations(wid, items[:-1], window, {it["item_id"] for it in items[:-1]})
     with db.get_conn() as conn:
@@ -271,7 +271,7 @@ def test_auctions_listed_but_not_in_stats(fake_ebay):
 
 
 def test_listings_newest_first_toggle(monkeypatch):
-    import screen_listings
+    from ui import screen_listings
     sorts = []
     found = [{"item_id": i, "title": f"PS5 #{i}", "total_price": p, "currency": "EUR", "condition": "Gebraucht",
               "url": "u", "created_at": int(time.time() - ago * DAY)} for i, p, ago in
@@ -305,7 +305,7 @@ def test_listings_newest_first_toggle(monkeypatch):
 
 
 def test_hide_old_listings_toggle(monkeypatch):
-    import screen_listings
+    from ui import screen_listings
     found = [{"item_id": i, "title": f"PS5 #{i}", "total_price": p, "currency": "EUR", "condition": "Gebraucht",
               "url": "u", "created_at": int(time.time() - ago * DAY)} for i, p, ago in
              [("ancient", 150, 244), ("fresh", 300, 5), ("month", 250, 40)]]

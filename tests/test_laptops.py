@@ -4,9 +4,9 @@ import time
 
 import pytest
 
-import db
-import laptops
-import market
+from core import db
+from analysis import laptops
+from analysis import market
 
 
 @pytest.mark.parametrize("title, spec", [
@@ -102,7 +102,7 @@ def test_annotate_uses_classes_only_for_laptops(monkeypatch):
 
 
 def test_laptop_sales_window_is_longer():
-    import sales
+    from analysis import sales
     day = 86400
     row = {"price": 900, "cond_group": "used", "spec_group": "RTX 4060 · i7 13 gen · 16GB",
            "gone_at": time.time() - 20 * day, "created_at": time.time() - 25 * day}
@@ -115,7 +115,7 @@ def test_laptop_sales_window_is_longer():
 
 def test_unknown_gpu_not_grouped_and_not_a_deal(fake_ebay, monkeypatch):
     import asyncio
-    import scheduler
+    from core import scheduler
     from conftest import listing
     from test_scheduler import make_app
     items = _items("GPU ? · i7 14 gen · 16GB", 900, 10) + _items("RTX 4060 · i7 13 gen · 16GB", 900, 8)
@@ -152,7 +152,7 @@ NOTEBOOKS = {"id": "175672", "name": "Notebooks & Netbooks"}
 
 
 def test_collapse_keeps_only_parent(no_category_tree):
-    import ebay_api
+    from ebay import ebay_api
     no_category_tree["58058"] = {"175672", "177"}
     assert ebay_api.collapse_categories([COMPUTER, NOTEBOOKS]) == [COMPUTER]
     assert ebay_api.collapse_categories([NOTEBOOKS, {"id": "9355", "name": "Handys"}]) == \
@@ -160,7 +160,7 @@ def test_collapse_keeps_only_parent(no_category_tree):
 
 
 def test_search_skips_nested_category(no_category_tree, monkeypatch):
-    import ebay_api
+    from ebay import ebay_api
     no_category_tree["58058"] = {"175672"}
     searched = []
     monkeypatch.setattr(ebay_api, "search_active_items",
@@ -183,8 +183,8 @@ def test_existing_watch_categories_collapsed_without_losing_history(no_category_
 def test_removing_nested_category_in_editor_keeps_history(no_category_tree, monkeypatch):
     import asyncio
     from unittest.mock import AsyncMock, MagicMock
-    import access
-    import handlers
+    from ui import access
+    from ui import handlers
     from conftest import patch_ui
     from test_sold_check import add_sale, make_update
     no_category_tree["58058"] = {"175672"}
@@ -199,7 +199,7 @@ def test_removing_nested_category_in_editor_keeps_history(no_category_tree, monk
 
 
 def test_category_descendants_parses_subtree(no_category_tree, monkeypatch):
-    import ebay_api
+    from ebay import ebay_api
     from conftest import FakeResponse
     payload = {"categorySubtreeNode": {"category": {"categoryId": "58058"}, "childCategoryTreeNodes": [
         {"category": {"categoryId": "175672"}, "childCategoryTreeNodes": [{"category": {"categoryId": "177"}}]},
@@ -213,8 +213,8 @@ def test_category_descendants_parses_subtree(no_category_tree, monkeypatch):
 
 
 def test_category_picker_shows_parent_and_nested(no_category_tree):
-    import ebay_api
-    import screen_common
+    from ebay import ebay_api
+    from ui import screen_common
     no_category_tree["58058"] = {"175672", "175673", "171485"}
     no_category_tree["175673"] = {"171485"}
     options = [{"id": "175673", "name": "Computer-Komponenten & -Teile", "count": 6943},
@@ -279,7 +279,7 @@ def test_laptop_category_protects_short_titles():
 
 
 def test_laptop_search_excludes_ram_spam_and_needs_no_spec():
-    import ebay_api
+    from ebay import ebay_api
     lap = db.get_watch(db.add_watch(1, "MSI Katana", "MSI Katana", "broken", "", 15), 1)
     phone = db.get_watch(db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "broken", "", 15), 1)
     assert ebay_api._watch_search_kwargs(lap)["exclude_terms"] == "broken passend sodimm arbeitsspeicher speicherriegel"
@@ -289,7 +289,7 @@ def test_laptop_search_excludes_ram_spam_and_needs_no_spec():
 
 
 def test_trademark_symbols_in_aspects():
-    from laptops import laptop_spec
+    from analysis.laptops import laptop_spec
     aspects = {"grafikprozessor": "GeForce RTX™ 5050", "prozessor": "Intel® Core™ i5-13420H",
                "arbeitsspeichergröße": "16 GB"}
     assert laptop_spec("HP Victus Gaming 15-fa2357ng Gaming Notebook", aspects, query="HP Victus") \
@@ -297,8 +297,8 @@ def test_trademark_symbols_in_aspects():
 
 
 def test_old_laptop_history_reclassified():
-    import db
-    import market
+    from core import db
+    from analysis import market
     wid = db.add_watch(1, "HP Victus", "HP Victus", "", "", 15, categories=[{"id": "175672", "name": "Notebooks"}])
     db.update_listing_observations(wid, [
         {"item_id": "a", "title": "HP Victus 15 Ryzen 5 RTX 4060 16GB", "spec_group": "16GB+RYZEN5",
@@ -315,7 +315,7 @@ def test_old_laptop_history_reclassified():
 
 
 def test_cpu_generation_from_aspects_when_title_vague():
-    from laptops import laptop_spec
+    from analysis.laptops import laptop_spec
     aspects = {"grafikprozessor": "NVIDIA® GeForce RTX™ 3050", "prozessor": "Intel® Core™ i5-12450H",
                "arbeitsspeichergröße": "16 GB"}
     assert laptop_spec("MSI Katana 17 Gaming-Notebook (RTX-30-SERIE) i5", aspects, query="MSI Katana") \
@@ -325,7 +325,7 @@ def test_cpu_generation_from_aspects_when_title_vague():
 
 
 def test_aspects_read_when_class_incomplete():
-    from laptops import wants_aspects, needs_aspects
+    from analysis.laptops import wants_aspects, needs_aspects
     assert wants_aspects("RTX 3060")                              # ні процесора, ні пам'яті
     assert wants_aspects("RTX 4060 · i5 · 16GB")                  # процесор без покоління
     assert wants_aspects("RTX 4050 · 32GB+")
@@ -337,8 +337,8 @@ def test_aspects_read_when_class_incomplete():
 
 
 def test_incomplete_laptop_class_reads_aspects(fake_ebay):
-    import db
-    import market
+    from core import db
+    from analysis import market
     w = {"id": db.add_watch(1, "Gigabyte G5", "Gigabyte G5", "", "", 15,
                             categories=[{"id": "175672", "name": "Notebooks"}]), "query": "Gigabyte G5"}
     fake_ebay.aspects = {"g5": {"Prozessor": "Intel® Core™ i5-12500H", "Arbeitsspeichergröße": "16 GB"}}
@@ -354,14 +354,14 @@ DESC = ('<style>.x{color:red}</style><div><h1>ASUS ROG Strix G18</h1><ul><li>Int
 
 
 def test_gpu_from_description():
-    from laptops import gpu_from_description
+    from analysis.laptops import gpu_from_description
     assert gpu_from_description(DESC) == "RTX 5070 Ti"
     assert gpu_from_description("Erhältlich mit RTX 5060 oder RTX 5070") is None   # дві різні — невідомо яка
     assert gpu_from_description("") is None
 
 
 def test_description_gpu_used_when_specifics_lack_it(monkeypatch, fake_ebay):
-    import ebay_api
+    from ebay import ebay_api
     from conftest import FakeResponse
     monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(
         {"localizedAspects": [{"name": "Marke", "value": "ASUS"}], "description": DESC}))
@@ -389,7 +389,7 @@ def test_old_cached_aspects_reread_for_description(monkeypatch):
 
 
 def test_specs_from_description_cpu_ram_ssd_screen():
-    from laptops import specs_from_description
+    from analysis.laptops import specs_from_description
     found = specs_from_description(
         DESC + '<p>18" Display</p><p>32 GB DDR5-5600 Arbeitsspeicher, 2 × 16 GB SODIMM</p><p>1 TB PCIe 4.0 NVMe M.2 SSD</p>')
     assert found["grafikkarte (aus beschreibung)"] == "RTX 5070 Ti"
@@ -457,7 +457,7 @@ def test_new_cpu_generations():
 
 
 def test_same_offer_counted_once_in_stats():
-    import market
+    from analysis import market
     same = [{"item_id": f"d{i}", "title": "HP Victus 15-fb3357ng Ryzen 5", "total_price": 874,
              "cond_group": "new", "spec_group": "RTX 5050"} for i in range(3)]
     other = [{"item_id": f"o{i}", "title": f"HP Victus 15 Nr{i}", "total_price": 900 + i,
@@ -484,7 +484,7 @@ def test_group_listings_collapse_identical_offers(monkeypatch):
 
 
 def test_wider_laptop_groups_are_labelled():
-    from textparse import _group_label
+    from analysis.textparse import _group_label
     assert _group_label("new", "RTX 5050") == "🏪 магазин, RTX 5050 · усі процесори"
     assert _group_label("new", "RTX 3050 · i5 14 gen") == "🏪 магазин, RTX 3050 · i5 14 gen · уся RAM"
     assert _group_label("new", "RTX 3050 · i5 14 gen · 16GB") == "🏪 магазин, RTX 3050 · i5 14 gen · 16GB"
@@ -511,7 +511,7 @@ def test_pickup_only_marked(monkeypatch):
 
 
 def test_description_ram_with_label_and_comma():
-    from laptops import specs_from_description
+    from analysis.laptops import specs_from_description
     desc = ("Prozessor:<br>Intel Core i5-12500H 12 x 1.8 - 4.5 GHz<br>Grafikkarte:<br>NVIDIA GeForce RTX 4060 "
             "Laptop GPU -<br>8 GB VRAM, GDDR6<br>RAM: 16 GB , DDR4-3200, Dual-Channel-Mode, two memory slots")
     found = specs_from_description(desc)

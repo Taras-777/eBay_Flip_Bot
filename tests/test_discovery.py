@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import access
-import db
-import discovery
-import handlers
+from ui import access
+from core import db
+from analysis import discovery
+from ui import handlers
 from conftest import listing, patch_ui
 
 
@@ -160,7 +160,7 @@ def test_unsold_listing_not_counted(fake_ebay, one_candidate):
 
 
 def test_discovery_listings_are_verified(fake_ebay, one_candidate, monkeypatch):
-    import trading_api
+    from ebay import trading_api
     fake_ebay.listings = SWITCH
     discovery.run_discovery(force=True)
     fake_ebay.listings = [it for it in SWITCH if it["itemId"] not in ("x10", "x11")]
@@ -243,7 +243,7 @@ def test_variant_terms_split_models():
 
 
 def test_discover_pages(monkeypatch):
-    import screen_discover
+    from ui import screen_discover
     recs = [{"emoji": "🎮", "name": f"Товар {i}", "query": f"q{i}", "floor": 10, "spec": None, "median": 100,
              "buy_limit": 70, "deals_per_week": 2, "deal_profit": 20, "deals_now": 1, "sold_per_day": 1,
              "sold_week": 0, "sale_source": "sold", "updated_at": 1_790_000_000} for i in range(12)]

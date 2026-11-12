@@ -1,7 +1,7 @@
 """iPhone ділиться лише за об'ємом пам'яті."""
-import db
-import market
-from textparse import extract_spec_key, normalize_spec, spec_key_from_aspects
+from core import db
+from analysis import market
+from analysis.textparse import extract_spec_key, normalize_spec, spec_key_from_aspects
 
 
 def test_iphone_only_storage():
@@ -43,7 +43,7 @@ def test_console_storage_only():
 
 
 def test_other_console_model_dropped():
-    from textparse import console_foreign
+    from analysis.textparse import console_foreign
     assert console_foreign("Sony PlayStation 5 825GB Disc", "PlayStation 4")
     assert console_foreign("PS3 Slim 320GB", "PlayStation 4")
     assert not console_foreign("PS4 Slim 500GB", "PlayStation 4")
@@ -63,7 +63,7 @@ def test_other_console_model_dropped():
 
 
 def test_console_unknown_storage_kept():
-    from textparse import spec_key_from_aspects
+    from analysis.textparse import spec_key_from_aspects
     assert spec_key_from_aspects("Sony PlayStation 4 Heimkonsole Schwarz", {"speicherkapazität": "64 GB"}) == "unspecified"
     w = {"id": db.add_watch(1, "PlayStation 4", "PlayStation 4", "", "", 15), "query": "PlayStation 4"}
     assert market.watch_requires_spec(w) is False
@@ -77,7 +77,7 @@ def test_console_unknown_storage_kept():
 
 
 def test_bundle_marker():
-    from textparse import is_bundle
+    from analysis.textparse import is_bundle
     assert is_bundle("PS4 Slim 500GB + 2 Controller") and is_bundle("PS4 mit 3 Spielen") and is_bundle("PS4 + Spiel")
     assert not is_bundle("PS4 Konsole mit Controller")                 # один геймпад — стандартний комплект
     assert not is_bundle("iPhone 15 Pro 256GB inkl. Hülle") and not is_bundle("PS4 Spielekonsole")

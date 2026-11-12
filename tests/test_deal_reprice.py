@@ -2,10 +2,10 @@
 import asyncio
 import time
 
-import db
-import deal_check
-import deal_reprice
-import scheduler
+from core import db
+from ebay import deal_check
+from analysis import deal_reprice
+from core import scheduler
 from test_deal_check import DAY
 from test_sales import _screen
 from test_scheduler import consoles, make_app
@@ -99,7 +99,7 @@ def test_new_deal_stores_price_basis(fake_ebay):
 
 
 def test_sold_only_uses_wider_sold_group():
-    import market
+    from analysis import market
     stats = {("used", "RTX 4060 · i7 13 gen · 16GB"): {"sale_source": "за поточними оголошеннями", "spec_group": "x"},
              ("used", "RTX 4060"): {"sale_source": "за 12 проданими", "spec_group": "RTX 4060"},
              ("used", "*"): {"sale_source": "за поточними оголошеннями", "spec_group": "*"}}
@@ -111,7 +111,7 @@ def test_sold_only_uses_wider_sold_group():
 
 
 def test_sold_only_hides_listing_priced_deals(monkeypatch):
-    import account
+    from ui import account
     wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
     sold = db.add_deal(wid, "a", "PS5 A", 300, "EUR", 620, 40, "u", False, sale_source="за 9 проданими")
     db.add_deal(wid, "b", "PS5 B", 300, "EUR", 620, 40, "u", False, sale_source="за поточними оголошеннями")
@@ -172,7 +172,7 @@ def test_mac_deal_priced_by_all_screens_removed():
 
 
 def test_resale_price_always_from_private_sellers():
-    import market
+    from analysis import market
     stats = {("new", "512GB"): {"sale_source": "за 6 проданими", "spec_group": "512GB", "cond_group": "new"},
              ("used", "512GB"): {"sale_source": "за 9 проданими", "spec_group": "512GB", "cond_group": "used"}}
     shop_item = {"cond_group": "new", "spec_group": "512GB"}

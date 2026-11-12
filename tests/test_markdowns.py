@@ -2,9 +2,9 @@
 import asyncio
 import time
 
-import db
-import markdowns
-import panel
+from core import db
+from analysis import markdowns
+from ui import panel
 from conftest import listing
 from test_sales import _screen
 
@@ -127,7 +127,7 @@ def test_screen_menu_counter_hide_and_undo(monkeypatch):
 
 
 def test_screen_rechecks_and_drops_sold(monkeypatch):
-    import deal_check
+    from ebay import deal_check
     wid = _setup()
     db.track_prices(wid, [_item("a", 700), _item("b", 650)])
     db.track_prices(wid, [_item("a", 520), _item("b", 430)])
@@ -146,13 +146,13 @@ def test_drop_pct_setting(monkeypatch):
     upd, ctx = press("mdpct:30")
     asyncio.run(handlers.drop_pct_callback(upd, ctx))
     assert db.get_drop_pct(1) == 30 and "✅ 30%" in shown[-1][1] and "◀️ До налаштувань" in shown[-1][1]
-    import account
+    from ui import account
     labels = [b.text for r in account._settings_keyboard(1).inline_keyboard for b in r]
     assert "📉 Поріг знижки: 30%" in labels
 
 
 def test_deal_card_mentions_earlier_price_cut():
-    import screen_deals
+    from ui import screen_deals
     wid = _setup()
     db.track_prices(wid, [_item("a", 700)])
     db.track_prices(wid, [_item("a", 450)])
@@ -162,7 +162,7 @@ def test_deal_card_mentions_earlier_price_cut():
 
 
 def test_card_shows_where_sale_price_comes_from():
-    import screen_markdowns
+    from ui import screen_markdowns
     wid = _setup(sale=600)
     db.upsert_market_stats(wid, "used", "*", 650, 40, sale_price=620, sale_source="за 12 проданими")
     db.track_prices(wid, [_item("a", 700), _item("b", 700, spec_group="512GB")])

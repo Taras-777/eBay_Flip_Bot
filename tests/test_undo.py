@@ -3,12 +3,12 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
-import access
-import db
-import handlers
-import panel
-import screen_undo
-import undo
+from ui import access
+from core import db
+from ui import handlers
+from ui import panel
+from ui import screen_undo
+from ui import undo
 from conftest import patch_ui
 from test_learning import GOOD, _watch_with_listings
 from test_sold_check import add_sale, sales_watch

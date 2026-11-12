@@ -4,12 +4,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import access
-import checker
-import db
-import ebay_api
-import handlers
-import learning
+from ui import access
+from analysis import checker
+from core import db
+from ebay import ebay_api
+from ui import handlers
+from analysis import learning
 from conftest import FakeResponse, patch_ui
 
 

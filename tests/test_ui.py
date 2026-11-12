@@ -11,10 +11,10 @@ import pytest
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
 
-import access
-import db
-import handlers
-import panel
+from ui import access
+from core import db
+from ui import handlers
+from ui import panel
 
 
 # ---------- допоміжне ----------
@@ -394,7 +394,7 @@ def test_learned_words_button_and_removal(screen):
 
 
 def test_aspect_names_translated_for_display():
-    from textparse import aspect_label, aspects_label
+    from analysis.textparse import aspect_label, aspects_label
     assert aspect_label("Speicherkapazität") == "Обсяг пам'яті"
     assert aspect_label("arbeitsspeichergröße") == "Оперативна пам'ять (RAM)"     # регістр не важливий
     assert aspect_label("Plattform", with_original=True) == "Платформа (Plattform)"

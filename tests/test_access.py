@@ -2,9 +2,9 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import access
-import db
-import panel
+from ui import access
+from core import db
+from ui import panel
 
 
 def owner_update(data):

@@ -13,12 +13,12 @@ warnings.filterwarnings("ignore", message=r".*per_message=False", category=PTBUs
 
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ConversationHandler, MessageHandler, PersistenceInput, PicklePersistence, filters
 
-import settings
-from settings import log
-from version import get_version
-from db import init_db
-from panel import menu_home_callback, refresh_usage_callback
-from account import (
+from core import settings
+from core.settings import log
+from core.version import get_version
+from core.db import init_db
+from ui.panel import menu_home_callback, refresh_usage_callback
+from ui.account import (
     EBAY_CODE,
     ebay_account_cancel,
     ebay_account_code,
@@ -29,12 +29,12 @@ from account import (
     ebay_account_start,
     backup_send_callback,
 )
-from action_log import TimedApplication, slowlog_callback
-from screen_usage import usage_callback
-from concurrency import DialogSafeUpdateProcessor
-from screen_unknown import unknown_callback
-from access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
-from handlers import (
+from ui.action_log import TimedApplication, slowlog_callback
+from ui.screen_usage import usage_callback
+from core.concurrency import DialogSafeUpdateProcessor
+from ui.screen_unknown import unknown_callback
+from ui.access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
+from ui.handlers import (
     ASK_ASPECT,
     ASK_CATEGORY,
     ASK_CUSTOM_MIN_PRICE,
@@ -100,9 +100,9 @@ from handlers import (
     watch_details_callback,
     learned_words_callback,
 )
-from screen_undo import undo_callback
-from screen_markdowns import drop_pct_callback, markdown_action_callback, markdowns_callback, markdowns_clear_callback
-from scheduler import error_handler, post_init, post_shutdown
+from ui.screen_undo import undo_callback
+from ui.screen_markdowns import drop_pct_callback, markdown_action_callback, markdowns_callback, markdowns_clear_callback
+from core.scheduler import error_handler, post_init, post_shutdown
 
 
 # ============================================================
@@ -300,20 +300,6 @@ def main():
 
     log.info("Бот запущено, версія %s", get_version())
     app.run_polling()
-
-
-# Сумісність: старі скрипти й тести звертаються до main.<назва> — шукаємо
-# назву в модулях бота (присвоєння main.<назва> = ... на модулі не впливає).
-import access, db, ebay_api, handlers, market, notifications, panel, scheduler, textparse  # noqa: E402
-
-_MODULES = (settings, textparse, db, ebay_api, market, panel, access, notifications, handlers, scheduler)
-
-
-def __getattr__(name):
-    for module in _MODULES:
-        if hasattr(module, name):
-            return getattr(module, name)
-    raise AttributeError(f"module 'main' has no attribute {name!r}")
 
 
 if __name__ == "__main__":

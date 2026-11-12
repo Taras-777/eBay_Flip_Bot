@@ -5,8 +5,8 @@
 import asyncio
 import types
 
-import db
-import scheduler
+from core import db
+from core import scheduler
 from conftest import listing
 
 

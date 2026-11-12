@@ -2,10 +2,10 @@
 import asyncio
 import time
 
-import db
-import learning
-import market
-import scheduler
+from core import db
+from analysis import learning
+from analysis import market
+from core import scheduler
 from conftest import listing
 from test_scheduler import make_app
 
@@ -87,7 +87,7 @@ def test_hidden_item_is_filtered_but_words_not_learned():
 
 def test_old_rejected_items_table_gets_reason_column(tmp_path, monkeypatch):
     import sqlite3
-    import settings
+    from core import settings
     path = str(tmp_path / "old.sqlite3")
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE rejected_items (watch_id INTEGER NOT NULL, item_id TEXT NOT NULL, "

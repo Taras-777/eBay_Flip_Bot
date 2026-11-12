@@ -2,8 +2,8 @@
 import asyncio
 from datetime import date, timedelta
 
-import db
-import screen_usage
+from core import db
+from ui import screen_usage
 
 
 def _seed(day, **counts):
@@ -47,7 +47,7 @@ def test_usage_pages_and_empty():
 
 
 def test_settings_button_and_callback(monkeypatch):
-    import account
+    from ui import account
     from test_deal_reprice import _record
     from test_sales import _screen
     _, shown, press = _screen(monkeypatch)
@@ -65,7 +65,7 @@ def test_settings_button_and_callback(monkeypatch):
 
 
 def test_settings_explain_buttons():
-    import account
+    from ui import account
     text = account._settings_text()
     for button in ("Поріг знижки", "Ціна для знахідок", "Аукціони", "Статистика запитів", "Журнал повільних дій",
                    "Надіслати резервну копію бази"):

@@ -5,11 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-import db
-import ebay_api
-import panel
-import scheduler
-import settings
+from core import db
+from ebay import ebay_api
+from ui import panel
+from core import scheduler
+from core import settings
 
 
 def _ebay_data(limit=5000, remaining=1000, reset_in=6 * 3600):
@@ -114,7 +114,7 @@ def test_429_pauses_browse_without_error(monkeypatch):
 def test_sold_count_matches_check_counter_window():
     import time as _time
     from datetime import datetime
-    from settings import LOCAL_TZ
+    from core.settings import LOCAL_TZ
     now = datetime(2026, 10, 3, 9, 58, tzinfo=LOCAL_TZ)
     assert datetime.fromtimestamp(panel.last_limit_reset(now), LOCAL_TZ).hour == 9
     early = datetime(2026, 10, 3, 3, 0, tzinfo=LOCAL_TZ)

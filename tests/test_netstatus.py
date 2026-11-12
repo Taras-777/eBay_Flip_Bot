@@ -7,9 +7,9 @@ import pytest
 import requests
 from telegram.error import NetworkError
 
-import ebay_api
-import netstatus
-import scheduler
+from ebay import ebay_api
+from core import netstatus
+from core import scheduler
 from test_retries import FakeResponse, setup
 
 

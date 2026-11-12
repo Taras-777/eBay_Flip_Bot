@@ -3,9 +3,9 @@ import asyncio
 
 import pytest
 
-import db
-import market
-import unrecognized
+from core import db
+from analysis import market
+from analysis import unrecognized
 from test_sales import _screen
 
 FULL = "RTX 4060 · i7 13 gen · 16GB"
@@ -14,7 +14,7 @@ FULL = "RTX 4060 · i7 13 gen · 16GB"
 @pytest.fixture(autouse=True)
 def available(monkeypatch):
     """Без мережі: усі оголошення «ще продаються», якщо тест не каже інакше."""
-    import deal_check
+    from ebay import deal_check
     state = {"gone": set()}
     monkeypatch.setattr(deal_check, "listing_available", lambda item_id: item_id not in state["gone"])
     unrecognized._checked.clear()
@@ -104,7 +104,7 @@ def test_screen_manual_class(monkeypatch):
 
 
 def test_main_menu_button_and_products_list(monkeypatch):
-    import panel
+    from ui import panel
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
     assert not any(x.startswith("🛠") for x in labels)                     # немає — немає кнопки
     wid, watch = _setup()

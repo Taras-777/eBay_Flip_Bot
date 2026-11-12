@@ -3,9 +3,9 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 
-import db
-import screen_stats
-from settings import LOCAL_TZ
+from core import db
+from ui import screen_stats
+from core.settings import LOCAL_TZ
 from test_sales import _screen
 
 DAY = 86400
@@ -65,7 +65,7 @@ def test_stats_discovery_section_and_pages(monkeypatch):
 
 
 def test_tracked_product_not_duplicated_in_discovery():
-    import discovery
+    from analysis import discovery
     now = int(time.time())
     with db.get_conn() as conn:
         for i, name in enumerate(("iPhone 15 Pro", "iPhone 15 Pro Max", "PlayStation 5 Slim")):

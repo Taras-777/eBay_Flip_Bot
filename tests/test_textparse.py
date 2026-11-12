@@ -1,7 +1,7 @@
 """Розбір назв оголошень: конфігурації, варіанти моделей, аксесуари, переклад категорій."""
 import pytest
 
-from textparse import _title_matches_search, category_label, extract_spec_key, spec_key_from_aspects
+from analysis.textparse import _title_matches_search, category_label, extract_spec_key, spec_key_from_aspects
 
 EXCLUDE = "broken defekt teile parts kaputt"
 
@@ -63,5 +63,5 @@ def test_category_translation(name, expected):
     (12, "12 оголошень"), (21, "21 оголошення"), (24, "24 оголошення"), (111, "111 оголошень"),
 ])
 def test_plural(n, expected):
-    from textparse import plural
+    from analysis.textparse import plural
     assert plural(n, "оголошення", "оголошення", "оголошень") == expected

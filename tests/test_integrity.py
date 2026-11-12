@@ -11,9 +11,14 @@ import os
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODULES = ["settings", "netstatus", "version", "textparse", "db", "learning", "checker", "discovery", "ebay_api", "ebay_user", "trading_api", "market", "shared_market", "sales", "laptops", "backup", "deal_check", "panel", "account", "access",
-           "notifications", "screen_common", "screen_addwatch", "screen_watch", "screen_sales",
-           "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_undo", "undo", "screen_markdowns", "markdowns", "handlers", "scheduler", "main"]
+PACKAGES = ("core", "ebay", "analysis", "ui")
+# Усі модулі бота — знаходяться самі: новий файл у пакеті перевіряється без правок тесту
+MODULES = sorted(f"{pkg}.{name[:-3]}" for pkg in PACKAGES for name in os.listdir(os.path.join(ROOT, pkg))
+                 if name.endswith(".py") and name != "__init__.py") + ["main"]
+
+
+def _path(module):
+    return os.path.join(ROOT, *module.split(".")) + ".py"
 
 
 def undefined_names(path):
@@ -37,7 +42,7 @@ def undefined_names(path):
 
 @pytest.mark.parametrize("module", MODULES)
 def test_no_undefined_names(module):
-    assert undefined_names(os.path.join(ROOT, f"{module}.py")) == []
+    assert undefined_names(_path(module)) == []
 
 
 @pytest.mark.parametrize("module", MODULES)
@@ -48,7 +53,7 @@ def test_module_imports(module):
 def test_imported_names_exist():
     """`from X import Y` — Y справді є в модулі X."""
     for module in MODULES:
-        tree = ast.parse(open(os.path.join(ROOT, f"{module}.py"), encoding="utf-8-sig").read())
+        tree = ast.parse(open(_path(module), encoding="utf-8-sig").read())
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module in MODULES:
                 source = importlib.import_module(node.module)

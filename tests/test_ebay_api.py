@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-import ebay_api
+from ebay import ebay_api
 from conftest import FakeResponse, listing
 
 

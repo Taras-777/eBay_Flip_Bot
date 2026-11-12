@@ -1,8 +1,8 @@
 """Аналіз ринку: формули купівлі/продажу, фільтри лотів, групи статистики."""
 import pytest
 
-import market
-import settings
+from analysis import market
+from core import settings
 
 
 def test_percentile():
@@ -115,8 +115,8 @@ def test_failed_lookup_does_not_break_others(monkeypatch):
 
 
 def test_rejected_item_filtered_only_for_its_watch():
-    import db
-    import learning
+    from core import db
+    from analysis import learning
     w1 = db.get_watch(db.add_watch(1, "PS5", "PS5", "", "", 25), 1)
     w2 = db.get_watch(db.add_watch(1, "PS5 Digital", "PS5 Digital", "", "", 25), 1)
     learning.hide_item(w1, "x", "Sony PlayStation 5")
@@ -126,8 +126,8 @@ def test_rejected_item_filtered_only_for_its_watch():
 
 
 def test_auto_min_price_from_market_stats():
-    import db
-    import ebay_api
+    from core import db
+    from ebay import ebay_api
     wid = db.add_watch(1, "PS5", "PS5", "", "", 25)
     w = db.get_watch(wid, 1)
     assert ebay_api.effective_min_price(w) is None          # ціни ще не пораховані
@@ -140,7 +140,7 @@ def test_auto_min_price_from_market_stats():
 
 
 def test_items_from_accessory_categories_are_dropped():
-    import db
+    from core import db
     wid = db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 25,
                        categories=[{"id": "15032", "name": "Handys & Kommunikation"}])
     w = db.get_watch(wid, 1)
@@ -154,7 +154,7 @@ def test_items_from_accessory_categories_are_dropped():
 
 
 def test_accessory_categories_kept_when_user_chose_them():
-    import db
+    from core import db
     wid = db.add_watch(1, "AirPods Case", "AirPods Case", "", "", 25,
                        categories=[{"id": "1", "name": "Handyhüllen & -taschen"}])
     item = [{"item_id": "case", "title": "AirPods Case", "spec_group": "unspecified", "aspects": {},
@@ -165,8 +165,8 @@ def test_accessory_categories_kept_when_user_chose_them():
 
 def test_auto_min_price_before_stats_uses_seen_listings():
     import time
-    import db
-    import ebay_api
+    from core import db
+    from ebay import ebay_api
     wid = db.add_watch(1, "iPhone 16 Pro", "iPhone 16 Pro", "", "", 25)
     now = int(time.time())
     with db.get_conn() as conn:

@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import account
-import db
-import ebay_user
-import settings
-import trading_api
+from ui import account
+from core import db
+from ebay import ebay_user
+from core import settings
+from ebay import trading_api
 from conftest import FakeResponse, patch_ui
 
 
@@ -334,7 +334,7 @@ def test_sales_screen_groups_by_configuration():
     add_sale(w["id"], "a", 600, "256GB", confirmed=True)
     add_sale(w["id"], "b", 640, "256GB", days_ago=3)
     add_sale(w["id"], "c", 520, "128GB", days_ago=10)
-    import handlers
+    from ui import handlers
     text = handlers._sales_text(w, db.get_sold_listings(w["id"]))
     assert "Продано: <b>3</b>" in text and "підтверджено eBay: 1" in text
     assert "За останні 7 днів: <b>2</b>" in text
@@ -347,7 +347,7 @@ def test_sales_screen_groups_by_configuration():
 
 def test_sales_screen_empty_and_hint():
     w = sales_watch()
-    import handlers
+    from ui import handlers
     text = handlers._sales_text(w, [], show_account_hint=True)
     assert "Продажів ще не помічено" in text and "Акаунт eBay" in text
 
@@ -361,7 +361,7 @@ def test_unsold_listing_not_in_sales():
 
 
 def test_sales_button_in_watch_card(monkeypatch):
-    import handlers
+    from ui import handlers
     shown = []
 
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
@@ -374,7 +374,7 @@ def test_sales_button_in_watch_card(monkeypatch):
 
     add_sale(w["id"], "a", 600, "256GB")
     upd = make_update(f"sales:{w['id']}")
-    import access
+    from ui import access
     monkeypatch.setattr(access, "is_owner", lambda uid: True)
     patch_ui(monkeypatch, "is_connected", lambda: True)
     asyncio.run(handlers.sales_callback(upd, MagicMock()))
@@ -382,8 +382,8 @@ def test_sales_button_in_watch_card(monkeypatch):
 
 
 def test_main_menu_shows_sold_checks(monkeypatch):
-    import ebay_api
-    import panel
+    from ebay import ebay_api
+    from ui import panel
     monkeypatch.setattr(panel, "is_owner", lambda uid: True)
     ebay_api._rate_limit_cache.update(
         data={"limit": 5000, "remaining": 3480, "count": 1520, "reset": time.time() + 3600},
@@ -399,7 +399,7 @@ def test_main_menu_shows_sold_checks(monkeypatch):
 
 
 def test_login_script(monkeypatch, capsys):
-    import ebay_login
+    from ebay import ebay_login
     monkeypatch.setattr(ebay_login, "is_configured", lambda: True)
     monkeypatch.setattr(ebay_user, "EBAY_RUNAME", "RU")
     got = []
@@ -413,7 +413,7 @@ def test_login_script(monkeypatch, capsys):
 
 
 def test_trading_count_from_ebay(monkeypatch):
-    import ebay_api
+    from ebay import ebay_api
     payload = {"rateLimits": [{"apiContext": "tradingapi", "resources": [
         {"name": "TradingAPI", "rates": [{"timeWindow": 86400, "limit": 5000, "remaining": 4700, "count": 300}]},
         {"name": "GetItem", "rates": [{"timeWindow": 86400, "limit": 5000, "remaining": 4850, "count": 150}]},
@@ -435,7 +435,7 @@ def test_old_gone_listings_are_queued_on_start():
 
 
 def test_sales_screen_marks_pending():
-    import handlers
+    from ui import handlers
     wid = db.add_watch(1, "PS4", "PS4", "", "", 15)
     now = int(time.time())
     with db.get_conn() as conn:
@@ -450,8 +450,8 @@ def test_sales_screen_marks_pending():
 # ---------- прибрати чужий товар зі статистики продажів ----------
 
 def test_remove_wrong_item_from_sales(monkeypatch):
-    import access
-    import handlers
+    from ui import access
+    from ui import handlers
     w = sales_watch()
     for i, price in enumerate([600, 610, 620, 630, 640]):
         add_sale(w["id"], f"ok{i}", price, "256GB")
@@ -480,7 +480,7 @@ def test_remove_wrong_item_from_sales(monkeypatch):
 
 
 def test_sales_filter_by_config():
-    import handlers
+    from ui import handlers
     w = sales_watch()
     for i in range(24):
         add_sale(w["id"], f"a{i}", 450 + i, "128GB")
@@ -504,7 +504,7 @@ def test_sales_filter_by_config():
 
 
 def test_watch_card_shows_tracking_summary(monkeypatch):
-    import handlers
+    from ui import handlers
     w = sales_watch()
     add_sale(w["id"], "s1", 600, "256GB", confirmed=True)
     add_sale(w["id"], "s2", 610, "256GB")
@@ -521,7 +521,7 @@ def test_watch_card_shows_tracking_summary(monkeypatch):
 
 
 def test_menu_counts_sold_today():
-    import panel
+    from ui import panel
     make_gone(1, "x1", 500)
     make_gone(1, "x2", 510)
     db.apply_sold_check(1, "x1", "sold")
@@ -546,9 +546,9 @@ def test_pending_not_counted_when_verification_on():
 
 
 def test_check_now_button(monkeypatch):
-    import access
-    import handlers
-    import trading_api
+    from ui import access
+    from ui import handlers
+    from ebay import trading_api
     w = sales_watch()
     db.set_meta("ebay_user_refresh_token", "R")
     make_gone(w["id"], "v1|1|0", 536)
@@ -577,7 +577,7 @@ def test_check_now_button(monkeypatch):
 
 
 def test_sales_screen_shows_tracked_listings():
-    import handlers
+    from ui import handlers
     w = sales_watch()
     db.update_listing_observations(w["id"], [
         {"item_id": f"a{i}", "cond_group": "used", "spec_group": "256GB" if i < 3 else "128GB",
@@ -593,8 +593,8 @@ def test_sales_screen_shows_tracked_listings():
 
 
 def test_adding_category_keeps_history(monkeypatch):
-    import access
-    import handlers
+    from ui import access
+    from ui import handlers
     wid = db.add_watch(1, "PS4", "PS4", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
     add_sale(wid, "s1", 90, "500GB", confirmed=True)
     db.upsert_market_stats(wid, "used", "*", 100, 20, sale_price=90, sale_source="x")
@@ -620,7 +620,7 @@ def test_adding_category_keeps_history(monkeypatch):
 
 
 def test_listing_category_saved():
-    import ebay_api
+    from ebay import ebay_api
     it = {"leafCategoryIds": ["9355"], "categories": [{"categoryId": "9355", "categoryName": "Handys & Smartphones"},
                                                       {"categoryId": "15032", "categoryName": "Handys & Kommunikation"}]}
     assert ebay_api._item_category(it) == {"category_id": "9355", "category_name": "Handys & Smartphones"}
@@ -636,7 +636,7 @@ def test_listing_category_saved():
 
 
 def test_listing_extra_fields_saved(fake_ebay):
-    import ebay_api
+    from ebay import ebay_api
     from conftest import listing
     fake_ebay.listings = [listing("v1|7|0", "iPhone 15 Pro 256GB", 600, condition_id="2010",
                                   buyingOptions=["FIXED_PRICE", "BEST_OFFER"],
@@ -654,9 +654,9 @@ def test_listing_extra_fields_saved(fake_ebay):
 
 
 def test_restore_sales_from_backup(monkeypatch, tmp_path, capsys):
-    import backup
-    import restore_sales
-    import settings
+    from core import backup
+    from ebay import restore_sales
+    from core import settings
     monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
     wid = db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15)
     add_sale(wid, "s1", 600, "256GB", confirmed=True)
@@ -673,7 +673,7 @@ def test_restore_sales_from_backup(monkeypatch, tmp_path, capsys):
 
 
 def test_recent_sales_weigh_more():
-    import market
+    from analysis import market
     now = 1_000_000_000
     rows = [{"price": p, "gone_at": now - d * 86400} for p, d in
             [(100, 50), (100, 45), (100, 40), (120, 1), (120, 0)]]
@@ -683,14 +683,14 @@ def test_recent_sales_weigh_more():
 
 
 def test_sales_range_text():
-    import screen_sales
+    from ui import screen_sales
     assert screen_sales._range_text([61, 75, 80, 85, 88, 90, 95, 105, 110, 177]).startswith(", зазвичай ")
     assert screen_sales._range_text([100, 120]) == ", 100–120€"
 
 
 def test_laptop_specs_from_sold_check_and_backfill(monkeypatch):
-    import ebay_user
-    import market
+    from ebay import ebay_user
+    from analysis import market
     xml = ('<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>'
            '<ItemSpecifics><NameValueList><Name>Prozessor</Name><Value>Intel® Core™ i5-12500H</Value></NameValueList>'
            '<NameValueList><Name>Arbeitsspeichergröße</Name><Value>8 GB</Value></NameValueList></ItemSpecifics>'
@@ -722,7 +722,7 @@ def test_laptop_specs_from_sold_check_and_backfill(monkeypatch):
 
 
 def test_aspects_from_trading_reused_without_requests(fake_ebay):
-    import market
+    from analysis import market
     db.save_item_aspects("v1|p|0", {"speicherkapazität": "256 GB"})          # прийшло з перевірки продажу
     items = [{"item_id": "v1|p|0", "title": "Apple iPhone 15 Pro Titan", "category_names": []}]
     w = db.get_watch(db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15), 1)

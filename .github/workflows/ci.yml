@@ -68,8 +68,12 @@ jobs:
           python - <<'PY'
           import glob, importlib, sys
           sys.path.insert(0, ".")
-          for f in sorted(glob.glob("*.py")):
-              importlib.import_module(f[:-3])
+          # main.py у корені + усі модулі пакетів core / ebay / analysis / ui
+          files = ["main.py"] + sorted(glob.glob("*/*.py"))
+          for f in files:
+              if f.startswith(("tests/", ".")) or f.endswith("__init__.py"):
+                  continue
+              importlib.import_module(f[:-3].replace("/", "."))
               print("✓", f)
           PY
 

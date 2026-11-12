@@ -3,8 +3,8 @@ import re
 
 import pytest
 
-import panel
-import version
+from ui import panel
+from core import version
 
 
 @pytest.fixture(autouse=True)
@@ -34,6 +34,11 @@ def test_build_number_grows_only_when_code_changes(tmp_path, monkeypatch):
     assert restart() == f"v{version.MAJOR}.2"
     (tmp_path / "b.py").write_text("y = 1\n")      # додали файл
     assert restart() == f"v{version.MAJOR}.3"
+    (tmp_path / "ui").mkdir()
+    (tmp_path / "ui" / "screen_x.py").write_text("z = 1\n")   # файл у пакеті теж рахується
+    assert restart() == f"v{version.MAJOR}.4"
+    (tmp_path / "config.py").write_text("SECRET = 1\n")       # config.py (секрети) — ні
+    assert restart() == f"v{version.MAJOR}.4"
 
 
 def test_main_menu_shows_version(monkeypatch):

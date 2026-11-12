@@ -2,9 +2,9 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import db
-import notifications
-import panel
+from core import db
+from ui import notifications
+from ui import panel
 
 
 def _labels(chat_id=1):

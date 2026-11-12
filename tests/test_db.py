@@ -1,7 +1,7 @@
 """База даних: пакетна робота з "вже бачили", очищення, збереження налаштувань."""
 import time
 
-import db
+from core import db
 
 
 def test_bulk_seen_items_keeps_notified_price():

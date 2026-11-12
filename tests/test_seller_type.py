@@ -1,8 +1,8 @@
 """🏪 магазин / 👤 приватний замість «нові / вживані»."""
-import db
-import market
-import trading_api
-from textparse import _group_label, market_group
+from core import db
+from analysis import market
+from ebay import trading_api
+from analysis.textparse import _group_label, market_group
 from test_sold_check import SOLD_XML, make_gone
 
 

@@ -4,10 +4,10 @@ import time
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
-import auctions
-import db
-import ebay_api
-import market
+from analysis import auctions
+from core import db
+from ebay import ebay_api
+from analysis import market
 from conftest import listing
 
 HOUR = 3600
@@ -107,7 +107,7 @@ def _app():
 
 
 def test_final_reminder_sent_once(monkeypatch):
-    import panel
+    from ui import panel
     monkeypatch.setattr(panel, "repost_panel", AsyncMock())
     db.set_auctions_enabled(1, True)
     db.add_auction_alert(1, "x", 7, time.time() + 30 * 60, 400, 5, 200, "🔨 перше", "https://www.ebay.de/itm/x")
@@ -161,7 +161,7 @@ def test_cleanup_old_alerts():
 
 
 def test_settings_toggle(monkeypatch):
-    import account
+    from ui import account
     from test_deal_reprice import _record
     from test_sales import _screen
     _, shown, press = _screen(monkeypatch)

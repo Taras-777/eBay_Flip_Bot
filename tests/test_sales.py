@@ -3,10 +3,10 @@ import asyncio
 import time
 from datetime import date, timedelta
 
-import db
-import sales
-import market
-import scheduler
+from core import db
+from analysis import sales
+from analysis import market
+from core import scheduler
 from conftest import listing, patch_ui
 from test_scheduler import consoles, make_app
 
@@ -119,7 +119,7 @@ def test_deal_notification_shows_sales(fake_ebay):
     app.bot.messages.clear()
     asyncio.run(scheduler.check_all_watches(app))
     assert len(deal_messages(app)) == 1
-    import handlers
+    from ui import handlers
     deals, _ = db.get_inbox_deals(1)
     card = handlers._deal_card(1, deals[0], db.get_sold_listings(wid, 14))
     assert "🛒 Такі ж: 4 продажі за 14 днів" in card and "за ~2 дні" in card
@@ -144,7 +144,7 @@ def test_market_scan_records_price_history(fake_ebay):
 
 def test_refresh_button_recalculates_all_watches(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
-    import handlers
+    from ui import handlers
 
     w1 = db.add_watch(1, "PS5", "PS5", "", "", 15)
     w2 = db.add_watch(1, "iPhone", "iPhone 16", "", "", 15)
@@ -188,7 +188,7 @@ def test_refresh_button_recalculates_all_watches(monkeypatch):
 
 def test_refresh_all_can_be_stopped(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
-    import handlers
+    from ui import handlers
 
     ids = [db.add_watch(1, f"T{i}", f"T{i}", "", "", 15) for i in range(3)]
     shown, recalculated = [], []
@@ -227,7 +227,7 @@ def test_refresh_all_can_be_stopped(monkeypatch):
 
 
 def test_main_menu_shows_when_prices_were_updated(monkeypatch):
-    import panel
+    from ui import panel
     wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
     assert "Ціни товарів оновлено" not in panel.main_menu_text(1)   # ще не рахувались
     db.upsert_market_stats(wid, "used", "*", 450, 20, sale_price=420, sale_source="x")
@@ -250,8 +250,8 @@ def _inbox_setup(n=3):
 
 def _screen(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
-    import access
-    import handlers
+    from ui import access
+    from ui import handlers
     shown = []
 
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
@@ -272,7 +272,7 @@ def _screen(monkeypatch):
 
 
 def test_menu_badge_and_inbox_marks_seen(monkeypatch):
-    import panel
+    from ui import panel
     _inbox_setup(3)
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
     assert "🔥 Вигідні пропозиції · 🆕 3" in labels
@@ -317,7 +317,7 @@ def test_inbox_pagination(monkeypatch):
 
 
 def test_menu_shows_last_scan_summary(fake_ebay):
-    import panel
+    from ui import panel
     fake_ebay.listings = consoles()
     wid = db.add_watch(1, "PS5", "PS5", "", "", 15, categories=[{"id": "139971", "name": "Konsolen"}])
     app = make_app()
@@ -406,7 +406,7 @@ def test_offer_sale_with_fantasy_price_marked():
     flagged = {r["item_id"] for r in sold if r["offer_unknown"]}
     assert flagged == {"fantasy"}
 
-    import handlers
+    from ui import handlers
     text = handlers._sales_text(db.get_watch(wid, 1), db.get_sold_listings(wid))
     shop = text.split("🏪")[1].split("👤")[0]
     assert "2 продажі" in shop and "5000" not in shop                  # у кількості є, в ціні — ні

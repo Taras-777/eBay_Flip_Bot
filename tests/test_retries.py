@@ -5,7 +5,7 @@
 """
 import requests
 
-import ebay_api
+from ebay import ebay_api
 
 
 class FakeResponse:
@@ -74,6 +74,6 @@ def test_client_error_is_not_retried(monkeypatch):
 
 def test_minimum_sample_size_is_eight_for_every_query():
     """Навмисна зміна: медіана з 3–4 оголошень давала шум, тепер мінімум 8."""
-    import market
+    from analysis import market
     assert market.minimum_sample_size_for_query("Dell Latitude 5230") == 8
     assert market.minimum_sample_size_for_query("PS5") == 8

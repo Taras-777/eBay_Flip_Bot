@@ -3,10 +3,10 @@ import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
-import db
-import ebay_api
-import scheduler
-import shared_market
+from core import db
+from ebay import ebay_api
+from core import scheduler
+from analysis import shared_market
 from conftest import patch_ui
 from test_scheduler import consoles, make_app
 
@@ -57,7 +57,7 @@ def test_shared_search_uses_softest_settings_and_own_filters():
 
 
 def test_new_user_gets_history_and_hint(monkeypatch):
-    import handlers
+    from ui import handlers
     w1 = db.add_watch(1, "iPhone", "iPhone 16 Pro", "", "", 15, categories=[{"id": "9355", "name": "Handys"}])
     now = int(time.time())
     with db.get_conn() as conn:
@@ -104,7 +104,7 @@ def test_new_user_gets_history_and_hint(monkeypatch):
 
 
 def test_sold_check_not_repeated_for_shared_item(monkeypatch):
-    import trading_api
+    from ebay import trading_api
     now = int(time.time())
     with db.get_conn() as conn:
         conn.execute("""INSERT INTO listing_obs (watch_id, item_id, cond_group, price, first_seen, last_seen,

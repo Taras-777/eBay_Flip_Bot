@@ -21,9 +21,9 @@ if "config" not in sys.modules:
 
 import pytest  # noqa: E402
 
-import db  # noqa: E402
-import ebay_api  # noqa: E402
-import settings  # noqa: E402
+from core import db  # noqa: E402
+from ebay import ebay_api  # noqa: E402
+from core import settings  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def temp_db(tmp_path, monkeypatch):
     ebay_api._rate_limit_cache.update(data=None, fetched_at=0, own_at_fetch=0)
     ebay_api._rate_pause["until"] = 0
     ebay_api._trading_limit_cache.update(count=None, fetched_at=0)
-    import shared_market
+    from analysis import shared_market
     shared_market._cache.clear()
     yield
 
@@ -91,9 +91,9 @@ def listing(item_id, title, price, condition_id="3000", created_ago_s=60, **extr
     return data
 
 
-SCREEN_MODULES = ("handlers", "screen_common", "screen_addwatch", "screen_watch", "screen_sales",
-                  "screen_listings", "screen_deals", "screen_discover", "screen_check", "screen_undo", "screen_markdowns",
-                  "screen_stats", "screen_unknown")
+SCREEN_MODULES = ("ui.handlers", "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_sales",
+                  "ui.screen_listings", "ui.screen_deals", "ui.screen_discover", "ui.screen_check", "ui.screen_undo", "ui.screen_markdowns",
+                  "ui.screen_stats", "ui.screen_unknown")
 
 
 def patch_ui(monkeypatch, name, value):
@@ -122,7 +122,7 @@ def no_category_tree(monkeypatch):
         return set(tree.get(str(cid), ()))
 
     monkeypatch.setattr(ebay_api, "category_descendants", descendants)
-    for name in ("screen_watch", "handlers"):
+    for name in ("ui.screen_watch", "ui.handlers"):
         mod = importlib.import_module(name)
         if hasattr(mod, "category_descendants"):
             monkeypatch.setattr(mod, "category_descendants", descendants)

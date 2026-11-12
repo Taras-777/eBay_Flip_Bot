@@ -6,10 +6,10 @@ import sqlite3
 import time
 from unittest.mock import AsyncMock, MagicMock
 
-import backup
-import db
-import market
-import settings
+from core import backup
+from core import db
+from analysis import market
+from core import settings
 
 
 def test_indexes_exist():
@@ -51,7 +51,7 @@ def test_daily_backup_once_a_day(monkeypatch, tmp_path):
 
 
 def test_backup_button_sends_file(monkeypatch, tmp_path):
-    import account
+    from ui import account
     monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(account, "is_owner", lambda uid: True)
     shown = []
@@ -94,8 +94,8 @@ def test_new_min_price_keeps_history():
 
 
 def test_list_screen_has_add_button(monkeypatch):
-    import access
-    import handlers
+    from ui import access
+    from ui import handlers
     shown = []
 
     async def fake_show(update, context, text, reply_markup=None, parse_mode=None):
