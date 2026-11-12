@@ -128,7 +128,7 @@ def test_unknown_gpu_not_grouped_and_not_a_deal(fake_ebay, monkeypatch):
     wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15)
     app = make_app()
     asyncio.run(scheduler.check_all_watches(app))
-    fake_ebay.listings = [listing("cheap", "MSI Katana 15 B13VFK Gaming", 300)] + fake_ebay.listings
+    fake_ebay.listings = [listing("cheap", "MSI Katana 15 Gaming Gaming", 300)] + fake_ebay.listings
     asyncio.run(scheduler.check_all_watches(app))
     assert db.get_inbox_deals(1)[1] == 0                         # клас невідомий — не пропонуємо
     assert db.get_seen_items(wid, ["cheap"]) == {}               # і не забуваємо: оцінимо пізніше
@@ -140,7 +140,7 @@ def test_unknown_gpu_items_read_first(monkeypatch):
     monkeypatch.setattr(market, "browse_budget_left", lambda: 5000)
     wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15)
     items = [{"item_id": "known", "title": "MSI Katana i7-13620H RTX 4060 16GB"},
-             {"item_id": "unknown", "title": "MSI Katana 15 B13VFK"}]
+             {"item_id": "unknown", "title": "MSI Katana 15 Gaming"}]
     market._annotate_items(items, max_lookups=1, watch=db.get_watch(wid, 1))
     assert fetched == ["unknown"]
 
@@ -366,7 +366,7 @@ def test_description_gpu_used_when_specifics_lack_it(monkeypatch, fake_ebay):
     monkeypatch.setattr(ebay_api, "_request_with_retries", lambda *a, **k: FakeResponse(
         {"localizedAspects": [{"name": "Marke", "value": "ASUS"}], "description": DESC}))
     aspects = ebay_api.fetch_item_aspects("v1|g18|0")
-    title = "ASUS ROG Strix G18 G815LR Ultra 9 290HX 32GB 1TB"
+    title = "ASUS ROG Strix G18 Ultra 9 290HX 32GB 1TB"
     assert laptops.laptop_spec(title, aspects).startswith("RTX 5070 Ti")
     assert laptops.laptop_spec(title, {"marke": "ASUS"}).startswith("GPU ?")
 
@@ -590,3 +590,27 @@ def test_ram_kit_in_laptop_watch_by_majority():
     kit = {"item_id": "kit", "title": "32GB RAM von Phs-Memory kompatibel mit Gigabyte G5 GE 51DE263SH DDR4",
            "total_price": 545, "cond_group": "new", "spec_group": "32GB"}
     assert market._apply_item_filters(w, [kit]) == []
+
+
+
+# ---------- з вивантаження «🛠 Нерозпізнані» (12.11) ----------
+
+def test_gpu_and_cpu_from_model_number():
+    # «Integrierte Grafik» у характеристиках — помилка магазину; номер моделі важить більше
+    asp = {"grafikprozessortyp": "Integrierte / On-Board-Grafik", "prozessor": "Ryzen 9", "ram": "32 GB"}
+    title = "ASUS ROG Strix G16 G614FR-TS229W AMD Ryzen 9 Notebook 40,6 cm (16\")"
+    assert laptops.laptop_spec(title, asp) == "RTX 5070 Ti · Ryzen 9 9000 · 32GB+"
+    assert "відеокарта: RTX 5070 Ti (модель)" in laptops.sources_line(laptops.class_sources(title, asp))
+    assert laptops.model_code_specs("x", {"modell": "ROG Strix G16 (G614PR-RV164W)"}) == ("RTX 5070 Ti", "Ryzen 9 8000")
+    assert laptops.model_code_specs("ROG Strix G18 G815LW-SA269W") == ("RTX 5080", "Core Ultra 9 (S2)")
+    assert laptops.model_code_specs("ROG Strix G16 G614JV i7") == ("RTX 4060", None)
+    assert laptops.model_code_specs("MSI Katana 15 B13VGK i7-13620H") == ("RTX 4070", None)
+    assert laptops.model_code_specs("MSI Katana 17 B12V") == (None, None)            # неповний номер — ні
+    assert laptops.laptop_spec("ASUS ROG G614PW RTX 4060 16GB")[:8] == "RTX 4060"    # назва — найперше
+
+
+def test_impossible_ram_ignored():
+    asp = {"arbeitsspeichergröße": "512 GB", "festplattenkapazität": "512 GB", "prozessor": "Apple M3 Pro"}
+    title = 'Apple MacBook Pro 16" M3 Pro 512GB SSD (2023)'
+    assert laptops.laptop_spec(title, asp) == 'M3 Pro · 16"'
+    assert "RAM: ❓" in laptops.sources_line(laptops.class_sources(title, asp))

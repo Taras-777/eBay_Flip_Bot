@@ -26,7 +26,7 @@ def _setup():
     wid = db.add_watch(1, "MSI Katana", "MSI Katana", "", "", 15)
     obs = [{"item_id": f"f{i}", "title": f"MSI Katana i7-13620H RTX 4060 16GB Nr{i}", "total_price": 900 + i,
             "cond_group": "used", "spec_group": FULL, "url": f"https://www.ebay.de/itm/f{i}"} for i in range(3)]
-    obs += [{"item_id": "u1", "title": "MSI Katana 15 B13VFK i7-13620H 16GB", "total_price": 600,
+    obs += [{"item_id": "u1", "title": "MSI Katana 15 Gaming i7-13620H 16GB", "total_price": 600,
              "cond_group": "used", "spec_group": "GPU ? · i7 13 gen · 16GB", "url": "https://www.ebay.de/itm/u1"},
             {"item_id": "u2", "title": "MSI Katana 15 i7-13620H 16GB", "total_price": 650,
              "cond_group": "used", "spec_group": "GPU ? · i7 13 gen · 16GB", "url": "https://www.ebay.de/itm/u2"}]
@@ -49,7 +49,7 @@ def test_list_options_and_manual_class():
     assert unrecognized.unrecognized_items(watch) == []
     assert {r["item_id"]: r["spec_group"] for r in db.get_current_listings(wid)}["u1"] == FULL
     # Наступні сканування й щоденна переоцінка вибір користувача не перезаписують
-    found = [{"item_id": "u1", "title": "MSI Katana 15 B13VFK i7-13620H 16GB", "total_price": 600}]
+    found = [{"item_id": "u1", "title": "MSI Katana 15 Gaming i7-13620H 16GB", "total_price": 600}]
     market._annotate_items(found, watch=watch)
     assert found[0]["spec_group"] == FULL
     market.normalize_saved_specs()
@@ -72,7 +72,7 @@ def test_screen_keep_flag_and_report(monkeypatch):
     assert "Усе розпізнано" in text and "📋 Для розробника (1)" in buttons
     upd.callback_query.data = f"unkrep:{wid}"
     asyncio.run(handlers.unknown_callback(upd, ctx))
-    assert "MSI Katana 15 B13VFK" in shown[-1][0] and "відеокарта: ❓" in shown[-1][0]
+    assert "MSI Katana 15 Gaming" in shown[-1][0] and "відеокарта: ❓" in shown[-1][0]
     upd.callback_query.data = f"unkrepc:{wid}"
     asyncio.run(handlers.unknown_callback(upd, ctx))
     assert db.get_flagged(wid) == []
@@ -198,7 +198,7 @@ def test_export_all_to_file(monkeypatch):
     text, total = unrecognized.export_report(1)
     assert total == 1
     assert "ТОВАР: MSI Katana | запит: MSI Katana | тип: win" in text
-    assert "#1 MSI Katana 15 B13VFK i7-13620H 16GB" in text and "клас зараз: GPU ? · i7 13 gen · 16GB" in text
+    assert "#1 MSI Katana 15 Gaming i7-13620H 16GB" in text and "клас зараз: GPU ? · i7 13 gen · 16GB" in text
     assert "https://www.ebay.de/itm/u1" in text and "- prozessor: Intel Core i7-13620H" in text
     assert "_beschreibung" not in text and "x" * 151 not in text and "…" in text     # службове й довге — ні
 
