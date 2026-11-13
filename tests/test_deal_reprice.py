@@ -26,7 +26,7 @@ def _old_deal(wid, title, price, sale=1477):
                        cond_group="used", spec_group="*")
 
 
-def test_old_laptop_deal_repriced_by_its_class():
+def test_old_laptop_deal_repriced_by_its_class(fees15):
     wid = _laptop_watch()
     bad = _old_deal(wid, "MSI Katana GF76 i7-11800H RTX 3050 Ti 16GB", 750)
     good = _old_deal(wid, "MSI Katana GF66 i5-11400H RTX 3050 Ti 8GB", 600)
@@ -74,7 +74,7 @@ def test_card_explains_price(monkeypatch):
     assert "даних замало" not in text and "перераховано" not in text   # нічого не прибрано
 
 
-def test_reprice_note_on_screen(monkeypatch):
+def test_reprice_note_on_screen(monkeypatch, fees15):
     wid = _laptop_watch()
     _old_deal(wid, "MSI Katana GF76 i7-11800H RTX 3050 Ti 16GB", 750)
     monkeypatch.setattr(deal_check, "listing_state", lambda item: (1 / 0, None))   # невигідні не перевіряємо

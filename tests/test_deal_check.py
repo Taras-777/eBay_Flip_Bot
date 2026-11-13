@@ -95,7 +95,7 @@ def test_background_recheck_removes_gone(monkeypatch):
     assert asked == ["v1|2|0"]    # «не вдалося дізнатися» — перепитаємо наступного разу
 
 
-def test_below_min_profit_not_checked(monkeypatch):
+def test_below_min_profit_not_checked(monkeypatch, fees15):
     wid = db.add_watch(1, "iPhone", "iPhone", "", "", 15)
     db.add_deal(wid, "v1|x|0", "iPhone", 480, "EUR", 580, 20, "u", False)   # прибуток 6€ — не видно
     _age_checks(DAY)

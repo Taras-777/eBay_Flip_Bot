@@ -8,12 +8,12 @@ import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from core import settings
 from core.settings import (
     ASPECT_LOOKUP_ALL,
     ASPECT_LOOKUP_ENABLED,
     ASPECT_LOOKUP_WORKERS,
     DEFAULT_CONDITION_IDS,
-    EBAY_SELLING_FEES_PCT,
     MARKET_SCAN_PAGES,
     MAX_SPEC_LOOKUPS_PER_DAY,
     MAX_SPEC_LOOKUPS_PER_MARKET_SCAN,
@@ -149,7 +149,7 @@ def max_buy_price(sale_price, min_profit=None):
     min_profit (за замовчуванням MIN_PROFIT_EUR) чистого прибутку:
     ціна продажу − комісія eBay − доставка покупцю − мінімальний прибуток.
     """
-    net_sale = sale_price * (1 - EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
+    net_sale = sale_price * (1 - settings.EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
     return net_sale - (MIN_PROFIT_EUR if min_profit is None else min_profit)
 
 
@@ -160,7 +160,7 @@ def estimate_resale_profit(sale_price, purchase_price):
     активних пропозицій), а не підтверджена ціна продажу: eBay Browse API
     не показує завершені продажі. Повертає (sale_price, profit).
     """
-    net_sale = sale_price * (1 - EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
+    net_sale = sale_price * (1 - settings.EBAY_SELLING_FEES_PCT / 100) - RESALE_SHIPPING_EUR
     return sale_price, net_sale - purchase_price
 
 

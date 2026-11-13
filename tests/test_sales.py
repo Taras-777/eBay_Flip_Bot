@@ -336,7 +336,7 @@ def test_menu_shows_last_scan_summary(fake_ebay):
 
 # ---------- ⚙️ мінімальний прибуток ----------
 
-def test_min_profit_setting_filters_inbox(monkeypatch):
+def test_min_profit_setting_filters_inbox(monkeypatch, fees15):
     wid = db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15)
     # продати ~580€ → чистими 580*0.85-7 = 486€
     for price in (480, 426, 400, 300):                 # прибуток: 6, 60, 86, 186

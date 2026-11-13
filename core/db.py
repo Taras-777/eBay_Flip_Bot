@@ -486,6 +486,15 @@ def init_db():
 
         conn.executescript(INDEXES)
 
+        # Змінилась комісія eBay (напр. 15% → 0%) — оголошення, які бот уже бачив і визнав невигідними,
+        # оцінюються заново: за новим розрахунком частина з них може бути вигідною
+        fee = str(float(settings.EBAY_SELLING_FEES_PCT))
+        row = conn.execute("SELECT value FROM meta WHERE key = 'fees_pct'").fetchone()
+        if row is None or row["value"] != fee:
+            conn.execute("DELETE FROM seen_items WHERE last_notified_price IS NULL")
+            conn.execute("INSERT INTO meta (key, value) VALUES ('fees_pct', ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (fee,))
+
 
 # ---------- users / доступ ----------
 

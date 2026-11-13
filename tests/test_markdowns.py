@@ -99,7 +99,7 @@ def test_menu_button_only_when_list_not_empty():
     assert labels[1] == "📉 Знизили ціну · 🆕 1"          # одразу під «🔥»
 
 
-def test_screen_menu_counter_hide_and_undo(monkeypatch):
+def test_screen_menu_counter_hide_and_undo(monkeypatch, fees15):
     wid = _setup()
     db.track_prices(wid, [_item("a", 700, has_best_offer=True), _item("b", 650)])
     db.track_prices(wid, [_item("a", 520, has_best_offer=True), _item("b", 430)])

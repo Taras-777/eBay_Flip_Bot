@@ -46,10 +46,15 @@ def test_group_stats_only_for_large_groups():
     assert ("used", "1TB") not in stats  # 3 оголошення — замало для окремої групи
 
 
-def test_estimate_resale_profit():
-    # 500€ продаж − 15% комісії − 7€ доставки = 418€; купівля 300€ → 118€
+def test_estimate_resale_profit(monkeypatch):
+    # Приватний продавець: комісії eBay немає — 500€ − 7€ доставки = 493€; купівля 300€ → 193€
     _, profit = market.estimate_resale_profit(500, 300)
-    assert profit == pytest.approx(118)
+    assert profit == pytest.approx(193)
+    assert market.max_buy_price(500, 100) == pytest.approx(393)
+    # Продавець-підприємець з комісією 15%: 500€ − 15% − 7€ = 418€ → 118€
+    from core import settings
+    monkeypatch.setattr(settings, "EBAY_SELLING_FEES_PCT", 15)
+    assert market.estimate_resale_profit(500, 300)[1] == pytest.approx(118)
 
 
 def _no_budget_limits(monkeypatch):
@@ -176,3 +181,14 @@ def test_auto_min_price_before_stats_uses_seen_listings():
                          (wid, f"p{i}", price, now, now))
     # статистики ще немає, але 3 справжні оголошення вже є → 40% від медіани 550
     assert ebay_api.effective_min_price(db.get_watch(wid, 1)) == 220
+
+
+def test_fee_change_reevaluates_seen_items(monkeypatch):
+    from core import db, settings
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    db.bulk_upsert_seen_items(wid, [("cheap", 400, None), ("notified", 300, 300)])
+    db.init_db()                                                   # та сама комісія — нічого не чіпаємо
+    assert set(db.get_seen_items(wid, ["cheap", "notified"])) == {"cheap", "notified"}
+    monkeypatch.setattr(settings, "EBAY_SELLING_FEES_PCT", 15)
+    db.init_db()                                                   # комісія змінилась
+    assert set(db.get_seen_items(wid, ["cheap", "notified"])) == {"notified"}   # невигідне — оцінити заново

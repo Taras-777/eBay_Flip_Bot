@@ -127,3 +127,10 @@ def no_category_tree(monkeypatch):
         if hasattr(mod, "category_descendants"):
             monkeypatch.setattr(mod, "category_descendants", descendants)
     return tree
+
+
+@pytest.fixture
+def fees15(monkeypatch):
+    """Сценарії, числа яких розраховані на комісію eBay 15% (продавець-підприємець).
+    За замовчуванням комісія 0 — приватні продавці на eBay.de її не платять."""
+    monkeypatch.setattr(settings, "EBAY_SELLING_FEES_PCT", 15)
