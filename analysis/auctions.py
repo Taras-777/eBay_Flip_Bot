@@ -22,6 +22,7 @@ from core.settings import (
     AUCTION_FINAL_LOOP_SECONDS,
     AUCTION_FINAL_MINUTES,
     AUCTION_MAX_LOOKUPS,
+    AUCTION_MAX_ALERTS,
     AUCTION_MIN_BUDGET,
     AUCTION_SCAN_HOURS,
     AUCTION_WINDOW_HOURS,
@@ -85,6 +86,7 @@ def first_text(w, it, sale, buy_limit, now=None):
              f"Ставка зараз: <b>{bid:.0f}€</b>" + (f" + доставка {ship:.0f}€ = {it['total_price']:.0f}€" if ship else "")
              + (f" · ставок: {bids}" if bids is not None else ""),
              f"Купувати до: {buy_limit:.0f}€ → <b>ставити не більше {buy_limit - ship:.0f}€</b>",
+             f"💡 Запас ~{buy_limit - it['total_price']:.0f}€ — настільки ставка ще може вирости, і аукціон лишиться вигідним",
              f"Продати ~{sale:.0f}€ → прибуток за поточної ставки ~{profit:.0f}€",
              f"⏰ Закінчиться {_when(it['end_at'])} (через {_left(it['end_at'], now)})"]
     if it.get("suspicious"):
@@ -107,9 +109,13 @@ def scan_watch_auctions(w, now=None):
     now = now or time.time()
     start, end = (now + h * 3600 for h in AUCTION_WINDOW_HOURS)
     found, seen = [], set()
+    # Без мінімальної ціни: в аукціоні «ціна» — поточна ставка, за 6–12 год до кінця вона ще низька
+    # (1€, 50€…), і мінімальна ціна товару відсікла б саме такі аукціони. Чохли й запчастини
+    # відсіюються далі — виключеними словами, категоріями й фільтром аксесуарів.
+    search = dict(_watch_search_kwargs(w), min_price=None)
     for cid in (watch_category_ids(w) or [None]):
         batch = search_in_categories([cid] if cid else [], limit=PAGE_SIZE, fresh=True, sort="endingSoonest",
-                                     auctions=True, end_between=(start, end), **_watch_search_kwargs(w))
+                                     auctions=True, end_between=(start, end), **search)
         found += [it for it in batch if it["item_id"] not in seen]
         seen.update(it["item_id"] for it in batch)
     found = [it for it in found if it.get("end_at") and start - 600 <= it["end_at"] <= end + 600]
@@ -126,7 +132,10 @@ def scan_watch_auctions(w, now=None):
     sold_only = get_sold_only(w["chat_id"])
     sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))
     result = []
+    found.sort(key=lambda it: it["end_at"])   # найближчі до кінця — їхня ставка ближча до підсумкової
     for it in found:
+        if len(result) >= AUCTION_MAX_ALERTS:
+            break   # решта — наступного сканування (якщо ще будуть вигідні)
         if laptop_unknown(it):
             continue   # клас ноутбука ще невідомий — наступного сканування
         stat = _stat_for_item(stats, it, sold_only=sold_only)

@@ -173,3 +173,17 @@ def test_settings_toggle(monkeypatch):
     assert "🔨 Аукціони: увімкнено ✅" in shown[-1][1]
     asyncio.run(account.auctions_callback(upd, ctx))
     assert db.get_auctions_enabled(1) is False and "🔨 Аукціони: вимкнено" in shown[-1][1]
+
+
+def test_auction_search_ignores_min_price_and_caps_alerts(fake_ebay, monkeypatch):
+    params = _search_params(fake_ebay, monkeypatch)
+    wid = db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15, min_price=400)
+    db.upsert_market_stats(wid, "used", "256GB", 630, 30, sale_price=600, sale_source="за проданими")
+    w = db.get_watch(wid, 1)
+    fake_ebay.listings = [_auction(f"a{i}", 50 + i, hours=11 - i) for i in range(5)]
+    alerts = auctions.scan_watch_auctions(w)
+    assert "price:[" not in params[-1]["filter"]                         # мінімальна ціна — не для аукціонів
+    assert [a["item_id"] for a, _ in alerts] == ["a4", "a3", "a2"]       # до 3, найближчі до кінця першими
+    limit = market.max_buy_price(600, db.get_min_profit(1))
+    assert f"💡 Запас ~{limit - 59:.0f}€" in alerts[0][1]                # ставка 54€ + доставка 5€
+    assert len(auctions.scan_watch_auctions(w)) == 2                    # решта — наступного сканування
