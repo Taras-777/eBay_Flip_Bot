@@ -335,7 +335,7 @@ async def watch_min_profit_callback(update: Update, context: ContextTypes.DEFAUL
             "лишається щонайменше стільки. Від цього залежить і «купувати до».\n\n"
             "<i>Для дешевих товарів (консолі, навушники) варто менше, ніж для ноутбуків: 100€ на PS4 за 110€ "
             "недосяжні. Інші товари лишаються з загальним порогом "
-            f"({general:.0f}€ — змінюється в «🔥 Вигідні пропозиції» → «⚙️ Мін. прибуток»).</i>")
+            f"({general:.0f}€ — змінюється в «⚙️ Налаштування» → «💰 Мін. прибуток»).</i>")
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 

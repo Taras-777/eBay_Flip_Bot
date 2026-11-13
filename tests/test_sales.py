@@ -375,10 +375,10 @@ def test_inbox_sorted_by_profit_and_has_min_profit_button(monkeypatch):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
-    assert "⚙️ Мін. прибуток: 50€" in shown[-1][1] and "найвигідніші вгорі" in shown[-1][0]
-    upd, ctx = press("mprof:show")
+    assert not any("Мін. прибуток" in b for b in shown[-1][1]) and "найвигідніші вгорі" in shown[-1][0]
+    upd, ctx = press("mprof:show")                     # кнопка тепер у «⚙️ Налаштування»
     asyncio.run(handlers.min_profit_callback(upd, ctx))
-    assert "◀️ До пропозицій" in shown[-1][1]
+    assert "◀️ До налаштувань" in shown[-1][1]
 
 
 # ---------- 🤝 продаж за прийнятою пропозицією ----------

@@ -1,5 +1,5 @@
 """
-«🔥 Вигідні пропозиції» і «⚙️ Мін. прибуток».
+«🔥 Вигідні пропозиції» і «💰 Мін. прибуток» (кнопка — у «⚙️ Налаштування»).
 """
 
 import asyncio
@@ -53,10 +53,10 @@ async def min_profit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}€", callback_data=f"mprof:{v}")
                for v in MIN_PROFIT_CHOICES]
     rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
-    rows.append([InlineKeyboardButton("◀️ До пропозицій", callback_data="deals:0")])
+    rows.append([InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")])
     await show_panel(
         update, context,
-        f"{note}⚙️ <b>Мінімальний прибуток</b>: зараз <b>{current:.0f}€</b>\n\n"
+        f"{note}💰 <b>Мінімальний прибуток</b>: зараз <b>{current:.0f}€</b>\n\n"
         "Бот пропонує лише оголошення, на яких після перепродажу (мінус доставка покупцю) "
         "лишається щонайменше стільки. Від цього залежить і «купувати до» в картках товарів.\n"
         "Це загальний поріг; для окремого товару можна задати свій — у картці товару «💰 Мін. прибуток».\n\n"
@@ -154,7 +154,6 @@ async def _render_deals(update, context, page=0, note=""):
         nav.append(InlineKeyboardButton("Далі ▶️", callback_data=f"deals:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton(f"⚙️ Мін. прибуток: {get_min_profit(chat_id):.0f}€", callback_data="mprof:show")])
     if total:
         rows.append([InlineKeyboardButton("🧹 Очистити список", callback_data="dclear")])
     rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])

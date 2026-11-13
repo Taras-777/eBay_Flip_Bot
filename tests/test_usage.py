@@ -67,7 +67,15 @@ def test_settings_button_and_callback(monkeypatch):
 def test_settings_explain_buttons():
     from ui import account
     text = account._settings_text()
-    for button in ("Поріг знижки", "Ціна для знахідок", "Аукціони", "Статистика запитів", "Журнал повільних дій",
+    for button in ("Мін. прибуток", "Поріг знижки", "Ціна для знахідок", "Аукціони", "Статистика запитів", "Журнал повільних дій",
                    "Надіслати резервну копію бази"):
         assert f"<b>{button}</b>" in text
     assert len(text) < 4096
+
+
+def test_settings_has_min_profit_button():
+    from ui import account
+    db.set_min_profit(1, 100)
+    labels = [b.text for r in account._settings_keyboard(1).inline_keyboard for b in r]
+    assert "💰 Мін. прибуток: 100€" in labels
+    assert "купувати до 493€" in account._settings_text()

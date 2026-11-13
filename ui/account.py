@@ -13,7 +13,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from core.settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from core.db import get_auctions_enabled, get_drop_pct, get_sold_only, set_auctions_enabled, set_sold_only, sold_check_stats
+from core.db import get_auctions_enabled, get_drop_pct, get_min_profit, get_sold_only, set_auctions_enabled, set_sold_only, sold_check_stats
 from ebay.ebay_api import trading_calls_today
 from ebay.deal_check import trading_breakdown_lines
 from ebay.ebay_user import (
@@ -99,6 +99,10 @@ BUTTONS_HELP = "\n".join([
     "Акаунт потрібен, щоб бот перевіряв, чи зникле оголошення справді продали, і бачив фінальну ціну.",
     "🔌 <b>Відключити</b> — вийти з акаунта eBay. Бот і далі шукатиме знахідки, але зниклі оголошення "
     "вважатиме проданими без перевірки.",
+    "💰 <b>Мін. прибуток</b> — скільки щонайменше ти хочеш заробити на одній речі: ціна продажу мінус "
+    "доставка покупцю мінус ціна купівлі. Оголошення з меншим прибутком бот не пропонує у «🔥», а «купувати до» "
+    "в картках = ціна продажу − доставка − цей прибуток. Напр., продати за 600€, мін. прибуток 100€ → "
+    "купувати до 493€. Це загальне значення; для окремого товару можна задати своє в його картці.",
     "📉 <b>Поріг знижки</b> — на скільки % продавець має знизити ціну, щоб оголошення потрапило в "
     "«📉 Знизили ціну».",
     "💰 <b>Ціна для знахідок</b> — звідки ціна «Продати» у «🔥»: <i>лише за продажами</i> (надійніше, "
@@ -136,6 +140,7 @@ def _settings_keyboard(chat_id=None):
         else:
             rows.append([InlineKeyboardButton("🔐 Підключити акаунт eBay", callback_data="eacc:connect")])
     if chat_id is not None:
+        rows.append([InlineKeyboardButton(f"💰 Мін. прибуток: {get_min_profit(chat_id):.0f}€", callback_data="mprof:show")])
         rows.append([InlineKeyboardButton(f"📉 Поріг знижки: {get_drop_pct(chat_id):.0f}%",
                                           callback_data="mdpct:show")])
         rows.append([InlineKeyboardButton(
