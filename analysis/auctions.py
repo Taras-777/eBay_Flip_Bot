@@ -41,7 +41,7 @@ from core.db import (
     get_auctions_enabled,
     get_market_stats,
     get_meta,
-    get_min_profit,
+    watch_min_profit,
     get_sold_listings,
     get_sold_only,
     list_watches,
@@ -128,7 +128,7 @@ def scan_watch_auctions(w, now=None):
         return []   # ринок товару ще не проаналізовано — не з чим порівнювати
     _annotate_items(found, max_lookups=AUCTION_MAX_LOOKUPS, watch=w)
     found = _apply_item_filters(w, found)
-    min_profit = get_min_profit(w["chat_id"])
+    min_profit = watch_min_profit(w)
     sold_only = get_sold_only(w["chat_id"])
     sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))
     result = []

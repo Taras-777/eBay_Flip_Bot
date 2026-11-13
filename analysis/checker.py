@@ -23,7 +23,7 @@ from analysis.textparse import (
     extract_spec_key,
     spec_key_from_aspects,
 )
-from core.db import get_market_stats, get_min_profit, get_rejected_ids, get_required_aspects, watch_category_ids
+from core.db import get_market_stats, get_rejected_ids, get_required_aspects, watch_category_ids, watch_min_profit
 from ebay.ebay_api import fetch_item_by_legacy_id, resolve_item_id
 from analysis.laptops import is_laptop, laptop_spec, laptop_warnings, looks_like_laptop_part
 from analysis.market import _stat_for_item, estimate_resale_profit, max_buy_price, watch_requires_spec
@@ -196,7 +196,7 @@ def check_listing(watch, text):
     deal = False
     if stat:
         sale = stat["sale_price"] or stat["median_price"]
-        limit = max_buy_price(sale, get_min_profit(watch["chat_id"]))
+        limit = max_buy_price(sale, watch_min_profit(watch))
         effective = total  # вигідність — за ціною оголошення, торг лише бонус
         _, profit = estimate_resale_profit(sale, total)
         group = _group_label(stat["cond_group"], stat["spec_group"])

@@ -98,6 +98,7 @@ from ui.handlers import (
     view_listings_callback,
     listing_old_callback,
     watch_details_callback,
+    watch_min_profit_callback,
     learned_words_callback,
 )
 from ui.screen_undo import undo_callback
@@ -270,6 +271,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cmd_list, pattern="^menu:list$"))
     app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^(menu:stats|stats:d\\d+)$"))
     app.add_handler(CallbackQueryHandler(watch_details_callback, pattern="^watch_details:"))
+    app.add_handler(CallbackQueryHandler(watch_min_profit_callback, pattern="^wmp:"))
     app.add_handler(CallbackQueryHandler(learned_words_callback, pattern="^(lwords|lwdel):"))
     app.add_handler(CallbackQueryHandler(cmd_pending, pattern="^menu:pending$"))
     app.add_handler(CallbackQueryHandler(cmd_users, pattern="^menu:users$"))

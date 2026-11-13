@@ -480,6 +480,7 @@ def init_db():
             ("required_aspect", "TEXT"),
             ("categories_json", "TEXT"),
             ("deleted_at", "INTEGER"),
+            ("min_profit", "REAL"),   # свій мін. прибуток товару (NULL — загальний користувача)
         ]:
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")
@@ -1605,7 +1606,45 @@ def get_min_profit(chat_id):
 
 
 def set_min_profit(chat_id, value):
+    old = get_min_profit(chat_id)
     set_meta(f"min_profit:{chat_id}", value)
+    if float(value) < old:   # поріг знизився — уже відкинуті оголошення оцінюються заново
+        reset_unnotified_seen([w["id"] for w in list_watches(chat_id=chat_id) if w.get("min_profit") is None])
+
+
+def watch_min_profit(watch):
+    """Мінімальний прибуток товару: свій (задано в картці товару) або загальний користувача."""
+    own = watch.get("min_profit")
+    return float(own) if own is not None else get_min_profit(watch["chat_id"])
+
+
+def set_watch_min_profit(watch, value):
+    """value=None — як загальний. Якщо поріг знизився — відкинуті раніше оголошення оцінюються заново."""
+    old = watch_min_profit(watch)
+    with get_conn() as conn:
+        conn.execute("UPDATE watches SET min_profit = ? WHERE id = ?", (value, watch["id"]))
+    new = float(value) if value is not None else get_min_profit(watch["chat_id"])
+    if new < old:
+        reset_unnotified_seen([watch["id"]])
+
+
+def reset_unnotified_seen(watch_ids):
+    """Оголошення, які бот бачив і не пропонував (невигідні), — оцінити заново наступним скануванням."""
+    ids = list(watch_ids)
+    if not ids:
+        return
+    with get_conn() as conn:
+        conn.execute(f"DELETE FROM seen_items WHERE last_notified_price IS NULL AND watch_id IN "
+                     f"({','.join('?' * len(ids))})", ids)
+
+
+# Мінімальний прибуток у SQL: свій у товару, інакше загальний користувача, інакше за замовчуванням
+MIN_PROFIT_SQL = ("COALESCE(w.min_profit, (SELECT CAST(m.value AS REAL) FROM meta m "
+                  "WHERE m.key = 'min_profit:' || w.chat_id), {default})")
+
+
+def _min_profit_sql():
+    return MIN_PROFIT_SQL.format(default=float(settings.MIN_PROFIT_EUR))
 
 
 def _profit_sql():
@@ -1619,8 +1658,8 @@ def get_inbox_deals(chat_id, limit=5, offset=0):
     його мінімального), від найбільшого прибутку. Повертає (сторінка, загальна кількість)."""
     since = int(time.time()) - DEALS_INBOX_DAYS * 86400
     where = ("w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ? AND "
-             + _profit_sql() + " >= ? AND " + SOLD_ONLY_SQL)
-    params = (chat_id, since, get_min_profit(chat_id))
+             + _profit_sql() + " >= " + _min_profit_sql() + " AND " + SOLD_ONLY_SQL)
+    params = (chat_id, since)
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT d.*, w.label AS watch_label FROM deals d JOIN watches w ON w.id = d.watch_id WHERE "
@@ -1639,8 +1678,8 @@ def count_unseen_deals(chat_id):
         return conn.execute(
             """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
                WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.seen_at IS NULL
-               AND d.created_at >= ? AND """ + _profit_sql() + " >= ? AND " + SOLD_ONLY_SQL,
-            (chat_id, since, get_min_profit(chat_id)),
+               AND d.created_at >= ? AND """ + _profit_sql() + " >= " + _min_profit_sql() + " AND " + SOLD_ONLY_SQL,
+            (chat_id, since),
         ).fetchone()["c"]
 
 
@@ -1649,8 +1688,7 @@ def get_deals_to_recheck(limit, stale_seconds, deal_ids=None):
     (лише ті, що проходять мін. прибуток свого користувача). Найдавніше перевірені — першими.
     deal_ids — обмежитись цими (сторінка, яку користувач зараз відкриває)."""
     now = int(time.time())
-    min_profit = ("COALESCE((SELECT CAST(m.value AS REAL) FROM meta m "
-                  "WHERE m.key = 'min_profit:' || w.chat_id), " + str(float(settings.MIN_PROFIT_EUR)) + ")")
+    min_profit = _min_profit_sql()
     sql = ("SELECT d.id, d.item_id FROM deals d JOIN watches w ON w.id = d.watch_id "
            "WHERE w.active = 1 AND d.status = 'new' AND d.created_at >= ? "
            "AND COALESCE(d.checked_at, d.created_at) < ? AND " + _profit_sql() + " >= " + min_profit

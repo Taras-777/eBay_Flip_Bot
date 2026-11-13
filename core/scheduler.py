@@ -36,7 +36,7 @@ from core.db import (
     track_prices,
     cleanup_old_seen_items,
     get_market_stats,
-    get_min_profit,
+    watch_min_profit,
     get_sold_only,
     get_seen_items,
     get_sold_listings,
@@ -142,7 +142,7 @@ async def check_one_watch(app: Application, w: dict):
         """Оцінка оголошень — лише база, без мережі; у потоці, щоб не гальмувати кнопки."""
         new_deals = []
         sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))  # як продаються конфігурації
-        min_profit = get_min_profit(w["chat_id"])
+        min_profit = watch_min_profit(w)   # свій у товару або загальний
         sold_only = get_sold_only(w["chat_id"])   # «лише за реальними продажами»
         seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
         seen_updates = []  # записуються одним пакетом наприкінці

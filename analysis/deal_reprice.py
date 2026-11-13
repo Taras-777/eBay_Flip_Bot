@@ -15,7 +15,7 @@ from core.db import (
     get_cached_specs,
     get_listing_groups,
     get_market_stats,
-    get_min_profit,
+    watch_min_profit,
     get_open_deals,
     get_sold_only,
     get_watch_categories,
@@ -96,7 +96,7 @@ def reprice_deals(chat_id=None):
         stats = stats_by_watch[wid]
         if not stats:
             continue   # ринок ще не пораховано (напр. одразу після запуску) — нічого не чіпаємо
-        min_profit = min_profit_by_chat.setdefault(d["chat_id"], get_min_profit(d["chat_id"]))
+        min_profit = min_profit_by_chat.setdefault(wid, watch_min_profit(watch))
         was_shown = estimate_resale_profit(d["median_price"], d["total_price"])[1] >= min_profit
 
         known = groups_by_watch[wid].get(d["item_id"])

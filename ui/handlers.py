@@ -38,6 +38,7 @@ from ui.screen_addwatch import (  # noqa: F401
     addwatch_menu_interrupt,
 )
 from ui.screen_watch import (  # noqa: F401
+    watch_min_profit_callback,
     cmd_start,
     cmd_menu,
     cmd_list,

@@ -201,3 +201,32 @@ def test_old_duplicate_deals_removed_on_start():
                          (wid, price, int(time.time())))
     db.init_db()
     assert db.get_inbox_deals(1)[1] == 1
+
+
+def test_min_profit_per_watch(monkeypatch):
+    from core import db as cdb
+    ps4 = db.add_watch(1, "PlayStation 4", "PlayStation 4", "", "", 15)
+    mac = db.add_watch(1, "MacBook", "MacBook", "", "", 15)
+    db.set_min_profit(1, 100)
+    db.add_deal(ps4, "p", "PS4 1TB", 60, "EUR", 110, 45, "u", False)         # прибуток 110−7−60 = 43€
+    db.add_deal(mac, "m", "MacBook", 1500, "EUR", 1700, 12, "u", False)      # прибуток 193€
+    assert db.get_inbox_deals(1)[1] == 1                                     # загальні 100€ — лише MacBook
+    db.bulk_upsert_seen_items(ps4, [("old", 70, None)])
+    cdb.set_watch_min_profit(db.get_watch(ps4, 1), 25)
+    assert cdb.watch_min_profit(db.get_watch(ps4, 1)) == 25 and cdb.watch_min_profit(db.get_watch(mac, 1)) == 100
+    assert db.get_inbox_deals(1)[1] == 2 and db.count_unseen_deals(1) == 2   # PS4 з порогом 25€ — тепер так
+    assert db.get_seen_items(ps4, ["old"]) == {}                              # поріг знизився — оцінити заново
+    cdb.set_watch_min_profit(db.get_watch(ps4, 1), None)                      # «як загальний»
+    assert db.get_inbox_deals(1)[1] == 1
+
+
+def test_watch_min_profit_screen(monkeypatch):
+    from ui import screen_watch
+    wid = db.add_watch(1, "PlayStation 4", "PlayStation 4", "", "", 15)
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press(f"wmp:{wid}")
+    asyncio.run(screen_watch.watch_min_profit_callback(upd, ctx))
+    assert "Мін. прибуток — PlayStation 4" in shown[-1][0] and "25€" in shown[-1][1]
+    upd, ctx = press(f"wmp:{wid}:25")
+    asyncio.run(screen_watch.watch_min_profit_callback(upd, ctx))
+    assert "💰 Мін. прибуток: 25€" in shown[-1][1] and "свій для цього товару" in shown[-1][0]
