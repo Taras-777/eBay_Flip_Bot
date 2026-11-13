@@ -215,3 +215,31 @@ def test_old_accessory_alert_gets_no_final(monkeypatch):
     app = _app()
     asyncio.run(auctions.check_finals(app))
     assert app.bot.send_message.await_count == 0 and db.due_auction_finals(45) == []
+
+
+def test_auctions_menu_button_and_screen(monkeypatch):
+    from ui import panel, screen_auctions
+    from test_sales import _screen
+    wid = db.add_watch(1, "DJI Mini 4 Pro", "DJI Mini 4 Pro", "", "", 15)
+    labels = lambda: [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]   # noqa: E731
+    assert not any(x.startswith("🔨") for x in labels())                      # немає — немає кнопки
+    db.add_auction_alert(1, "a", wid, time.time() + 7 * HOUR, 449, 10, 30, "t", "https://www.ebay.de/itm/a",
+                         title="DJI Mini 4 Pro Fly More", bid_count=0)
+    db.add_auction_alert(1, "b", wid, time.time() + 2 * HOUR, 449, 10, 200, "t", None, title="DJI Mini 4 Pro RC 2")
+    db.add_auction_alert(1, "old", wid, time.time() - HOUR, 449, 10, 30, "t", None, title="вже завершився")
+    assert "🔨 Аукціони (2)" in labels()
+
+    handlers, shown, press = _screen(monkeypatch)
+    monkeypatch.setattr(screen_auctions, "current_bid",
+                        lambda item_id: {"a": ("active", 120.0, 3), "b": ("gone", None, None)}[item_id])
+    with db.get_conn() as conn:
+        conn.execute("UPDATE auction_alerts SET checked_at = 0")                # давно не перевіряли
+    upd, ctx = press("auc:0")
+    asyncio.run(screen_auctions.auctions_list_callback(upd, ctx))
+    text = shown[-1][0]
+    assert "🔨 <b>Аукціони</b> (1)" in text and "Прибрано завершених чи знятих: 1" in text
+    assert "Ставка: <b>120€</b> + доставка 10€ · ставок: 3" in text and "Ставити не більше <b>439€</b> · запас ~319€" in text
+    upd, ctx = press("auc:h:0:0")                                               # 🙈
+    asyncio.run(screen_auctions.auctions_list_callback(upd, ctx))
+    assert "(0)" in shown[-1][0] and db.count_auctions(1) == 0
+    assert not any(x.startswith("🔨") for x in labels())

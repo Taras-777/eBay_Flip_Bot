@@ -346,6 +346,10 @@ CREATE TABLE IF NOT EXISTS auction_alerts (
     message_id INTEGER,
     final_at INTEGER,
     at INTEGER NOT NULL,
+    title TEXT,
+    hidden INTEGER DEFAULT 0,
+    checked_at INTEGER,
+    bid_count INTEGER,
     PRIMARY KEY (chat_id, item_id)
 );
 CREATE INDEX IF NOT EXISTS idx_auction_end ON auction_alerts (end_at);
@@ -493,6 +497,13 @@ def init_db():
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")
 
         conn.executescript(INDEXES)
+
+        # «🔨 Аукціони» в меню: назва, приховані, коли востаннє перевіряли ставку
+        auc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(auction_alerts)").fetchall()}
+        for col, ddl in [("title", "TEXT"), ("hidden", "INTEGER DEFAULT 0"), ("checked_at", "INTEGER"),
+                         ("bid_count", "INTEGER")]:
+            if auc_cols and col not in auc_cols:
+                conn.execute(f"ALTER TABLE auction_alerts ADD COLUMN {col} {ddl}")
 
         # Змінилась комісія eBay (напр. 15% → 0%) — оголошення, які бот уже бачив і визнав невигідними,
         # оцінюються заново: за новим розрахунком частина з них може бути вигідною
@@ -2367,15 +2378,50 @@ def get_alerted_auctions(chat_id, item_ids):
     return found
 
 
-def add_auction_alert(chat_id, item_id, watch_id, end_at, buy_limit, shipping, bid, text, url):
+def add_auction_alert(chat_id, item_id, watch_id, end_at, buy_limit, shipping, bid, text, url, title=None,
+                      bid_count=None):
     """Запам'ятати вигідний аукціон. False — про нього в цьому чаті вже сповіщали."""
+    now = int(time.time())
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT OR IGNORE INTO auction_alerts
-               (chat_id, item_id, watch_id, end_at, buy_limit, shipping, bid, text, url, at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (chat_id, item_id, watch_id, int(end_at), buy_limit, shipping or 0, bid, text, url, int(time.time())))
+               (chat_id, item_id, watch_id, end_at, buy_limit, shipping, bid, text, url, at, title, checked_at,
+                bid_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (chat_id, item_id, watch_id, int(end_at), buy_limit, shipping or 0, bid, text, url, now, title, now,
+             bid_count))
         return cur.rowcount > 0
+
+
+def list_auctions(chat_id, now=None):
+    """«🔨 Аукціони»: знайдені вигідні аукціони, що ще тривають (без прихованих), — найближчі до кінця першими."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT a.*, w.label AS watch_label FROM auction_alerts a JOIN watches w ON w.id = a.watch_id
+               WHERE a.chat_id = ? AND a.end_at > ? AND COALESCE(a.hidden, 0) = 0 AND w.active = 1
+               ORDER BY a.end_at""", (chat_id, int(now or time.time()))).fetchall()]
+
+
+def count_auctions(chat_id):
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT COUNT(*) AS c FROM auction_alerts a JOIN watches w ON w.id = a.watch_id
+               WHERE a.chat_id = ? AND a.end_at > ? AND COALESCE(a.hidden, 0) = 0 AND w.active = 1""",
+            (chat_id, int(time.time()))).fetchone()["c"]
+
+
+def hide_auction(chat_id, item_id):
+    """🙈 — прибрати з «🔨 Аукціони» і більше не нагадувати."""
+    with get_conn() as conn:
+        conn.execute("UPDATE auction_alerts SET hidden = 1, final_at = COALESCE(final_at, ?) "
+                     "WHERE chat_id = ? AND item_id = ?", (int(time.time()), chat_id, item_id))
+
+
+def update_auction_bid(chat_id, item_id, bid, bid_count):
+    with get_conn() as conn:
+        conn.execute("UPDATE auction_alerts SET bid = COALESCE(?, bid), bid_count = COALESCE(?, bid_count), "
+                     "checked_at = ? WHERE chat_id = ? AND item_id = ?",
+                     (bid, bid_count, int(time.time()), chat_id, item_id))
 
 
 def set_auction_message(chat_id, item_id, message_id):

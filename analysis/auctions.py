@@ -33,6 +33,7 @@ from core.settings import (
     log,
 )
 from core.db import (
+    record_api_call,
     add_auction_alert,
     auction_chats,
     cleanup_auction_alerts,
@@ -150,7 +151,8 @@ def scan_watch_auctions(w, now=None):
         text = first_text(w, it, sale, buy_limit, now)
         ship = it.get("shipping_cost") or 0
         if add_auction_alert(w["chat_id"], it["item_id"], w["id"], it["end_at"], buy_limit, ship,
-                             it["total_price"] - ship, text, it.get("url")):
+                             it["total_price"] - ship, text, it.get("url"), title=it.get("title"),
+                             bid_count=it.get("bid_count")):
             result.append(({"chat_id": w["chat_id"], "item_id": it["item_id"], "url": it.get("url")}, text))
     return result
 
@@ -207,7 +209,20 @@ async def _repost(app, chats):
 # ---------- друге сповіщення: перед кінцем ----------
 
 def current_bid(item_id):
-    """(стан, ставка в EUR, ставок): стан 'active' / 'gone' (завершено чи знято) / 'unknown'."""
+    """(стан, ставка в EUR, ставок): стан 'active' / 'gone' (завершено чи знято) / 'unknown'.
+    З підключеним акаунтом eBay — через Trading (окрема квота), інакше — Browse."""
+    from ebay.trading_api import get_item_status, trading_room   # тут, щоб не було циклу імпортів
+    if trading_room() > 0:
+        try:
+            record_api_call("trading:auctions")
+            info = get_item_status(item_id)
+            details = info.get("details") or {}
+            if info["result"] == "active":
+                return "active", details.get("sold_price"), details.get("bid_count")
+            if info["result"] in ("sold", "unsold", "not_found"):
+                return "gone", details.get("sold_price"), details.get("bid_count")
+        except Exception as e:   # вхід злетів чи збій — беремо Browse
+            log.debug("Trading не віддав ставку %s: %s", item_id, e)
     if browse_budget_left() <= SEARCH_RESERVE:
         return "unknown", None, None
     from ebay.trading_api import legacy_item_id   # тут, щоб не було циклу імпортів

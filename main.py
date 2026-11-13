@@ -33,6 +33,7 @@ from ui.action_log import TimedApplication, slowlog_callback
 from ui.screen_usage import usage_callback
 from core.concurrency import DialogSafeUpdateProcessor
 from ui.screen_unknown import unknown_callback
+from ui.screen_auctions import auctions_list_callback
 from ui.screen_folders import FOLDER_NAME, folder_callback, folder_interrupt, folder_new_start, folder_new_text
 from ui.access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from ui.handlers import (
@@ -250,6 +251,7 @@ def main():
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(auctions_callback, pattern="^auctions$"))
+    app.add_handler(CallbackQueryHandler(auctions_list_callback, pattern="^auc:"))
     app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear|:file)?$"))
     app.add_handler(CallbackQueryHandler(usage_callback, pattern="^apistat:\\d+$"))
     app.add_handler(CallbackQueryHandler(unknown_callback, pattern="^unk[a-z]*:"))

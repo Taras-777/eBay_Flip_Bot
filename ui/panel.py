@@ -16,7 +16,7 @@ from telegram.ext import ContextTypes
 from analysis.markdowns import markdown_counts
 from ui.undo import attach_offer, menu_offer, undo_button
 from core.settings import CHECK_INTERVAL_MINUTES, LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from core.db import (count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, set_meta,
+from core.db import (count_auctions, count_unseen_deals, get_last_prices_update, get_meta, get_scan_summary, list_users, set_meta,
                 sold_confirmed_today)
 from ebay.ebay_user import is_connected
 from ebay.ebay_api import api_usage_line, fetch_browse_rate_limit, seconds_until_reset, trading_calls_today
@@ -45,6 +45,7 @@ NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 MENU_LABELS = {
     "deals": "🔥 Вигідні пропозиції",
+    "auctions": "🔨 Аукціони",
     "markdowns": "📉 Знизили ціну",
     "addwatch": "➕ Додати товар",
     "discover": "💡 Що перепродавати",
@@ -164,6 +165,13 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(f"{MENU_LABELS['unknown']} ({unknown})", callback_data="unkall:0")])
     if total_md:   # «📉 Знизили ціну» — лише коли там щось є
         rows.insert(1, [InlineKeyboardButton(md_label, callback_data="mkd:0")])
+    try:
+        auctions = count_auctions(user_id)
+    except Exception as e:   # лічильник не має ламати меню
+        log.debug("Не вдалося порахувати аукціони: %s", e)
+        auctions = 0
+    if auctions:   # «🔨 Аукціони» — лише коли є знайдені аукціони, що ще тривають
+        rows.insert(1, [InlineKeyboardButton(f"{MENU_LABELS['auctions']} ({auctions})", callback_data="auc:0")])
     offer = menu_offer(user_id)
     if offer:   # щойно щось видалив і пішов у меню — повернути ще можна
         rows.insert(0, [undo_button(offer["id"], offer["label"])])
