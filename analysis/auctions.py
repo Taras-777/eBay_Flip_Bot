@@ -183,8 +183,17 @@ def run_auction_scan(now=None):
     return alerts
 
 
+def hide_accessory_alerts():
+    """Аукціони-аксесуари, знайдені до фільтра «аксесуар для товару», — прибрати з «🔨 Аукціони»."""
+    from core.db import hide_auction, list_auctions_all   # тут, щоб не тягнути при імпорті
+    for a in list_auctions_all():
+        if _is_accessory(a):
+            hide_auction(a["chat_id"], a["item_id"])
+
+
 async def run_auction_cycle(app):
     """Фонова задача циклу планувальника: пошук → сповіщення."""
+    await asyncio.to_thread(hide_accessory_alerts)
     alerts = await asyncio.to_thread(run_auction_scan)
     chats = set()
     for a, text in alerts:

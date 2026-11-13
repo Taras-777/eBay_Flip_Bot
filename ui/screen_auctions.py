@@ -15,7 +15,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from core.db import hide_auction, list_auctions, update_auction_bid
-from analysis.auctions import _left, _when, current_bid
+from analysis.auctions import _is_accessory, _left, _when, current_bid
 from ui.panel import _ack_callback, run_with_progress, show_panel
 from ui.access import require_access
 
@@ -29,6 +29,17 @@ def _title(a):
         return a["title"]
     lines = (a.get("text") or "").split("\n")
     return html.unescape(lines[1]) if len(lines) > 1 else "аукціон"
+
+
+def drop_accessories(rows):
+    """Аукціони-аксесуари («Filter compatibles con DJI Mini 4 Pro»), знайдені до появи фільтра, — сховати.
+    Викликати з потоку. Повертає кількість прихованих."""
+    removed = 0
+    for a in rows:
+        if _is_accessory(a):
+            hide_auction(a["chat_id"], a["item_id"])
+            removed += 1
+    return removed
 
 
 def refresh_bids(rows):
@@ -71,6 +82,8 @@ def _card(n, a):
 async def _render(update, context, page=0, note=""):
     chat_id = update.effective_chat.id
     rows = await asyncio.to_thread(list_auctions, chat_id)
+    if await asyncio.to_thread(drop_accessories, rows):
+        rows = await asyncio.to_thread(list_auctions, chat_id)
     pages = max(1, (len(rows) + PER_PAGE - 1) // PER_PAGE)
     page = min(max(page, 0), pages - 1)
     shown = rows[page * PER_PAGE:(page + 1) * PER_PAGE]

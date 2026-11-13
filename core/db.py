@@ -2402,6 +2402,14 @@ def list_auctions(chat_id, now=None):
                ORDER BY a.end_at""", (chat_id, int(now or time.time()))).fetchall()]
 
 
+def list_auctions_all(now=None):
+    """Аукціони всіх користувачів, що ще тривають і не сховані."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM auction_alerts WHERE end_at > ? AND COALESCE(hidden, 0) = 0",
+            (int(now or time.time()),)).fetchall()]
+
+
 def count_auctions(chat_id):
     with get_conn() as conn:
         return conn.execute(
