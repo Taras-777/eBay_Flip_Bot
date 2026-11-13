@@ -1921,6 +1921,19 @@ def mark_track_gone(watch_id, item_id):
         conn.execute("UPDATE price_track SET last_seen = 0 WHERE watch_id = ? AND item_id = ?", (watch_id, item_id))
 
 
+def get_tracks_to_refresh(limit, stale_seconds, min_age_days):
+    """«📉»: відстежувані оголошення, які висять щонайменше min_age_days (лише такі можуть потрапити
+    в «Знизили ціну») і давно не перевірялись, — найдавніше перевірені першими."""
+    now = int(time.time())
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT t.* FROM price_track t JOIN watches w ON w.id = t.watch_id
+               WHERE w.active = 1 AND t.last_seen > 0 AND t.last_seen < ?
+                 AND COALESCE(t.listed_at, t.first_seen) <= ?
+               ORDER BY t.last_seen LIMIT ?""",
+            (now - stale_seconds, now - min_age_days * 86400, limit)).fetchall()]
+
+
 def touch_track(watch_id, item_id):
     with get_conn() as conn:
         conn.execute("UPDATE price_track SET last_seen = ? WHERE watch_id = ? AND item_id = ?",

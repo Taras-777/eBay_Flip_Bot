@@ -26,7 +26,7 @@ GONE_RESULTS = {"sold", "unsold", "not_found"}
 
 
 TRADING_PURPOSES = (("watch", "мої товари"), ("discovery", "💡 Що перепродавати"),
-                    ("deals", "🔥 вигідні пропозиції"))
+                    ("deals", "🔥 вигідні пропозиції"), ("specs", "характеристики"), ("markdowns", "📉 знижки"))
 
 
 def trading_breakdown_lines():

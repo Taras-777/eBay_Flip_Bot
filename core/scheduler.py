@@ -72,6 +72,7 @@ from analysis.deal_reprice import reprice_deals
 from analysis.markdowns import run_markdown_scan
 from core.backup import daily_backup
 from analysis.auctions import auction_final_loop, run_auction_cycle
+from ebay.trading_filler import run_filler
 
 
 RENOTIFY_DROP_EUR = 5
@@ -356,6 +357,11 @@ async def scheduler_loop(app: Application):
             task = app.bot_data.get("markdown_task")
             if task is None or task.done():
                 app.bot_data["markdown_task"] = asyncio.create_task(asyncio.to_thread(run_markdown_scan))
+
+            # «Заповнювач» Trading: вільні запити — на частішу перевірку 🔥, ціни 📉, історію продажів
+            task = app.bot_data.get("trading_filler_task")
+            if task is None or task.done():
+                app.bot_data["trading_filler_task"] = asyncio.create_task(asyncio.to_thread(run_filler))
 
             # «🔨 Аукціони» (якщо увімкнено в налаштуваннях): аукціони, що закінчуються через 6–12 год
             task = app.bot_data.get("auction_task")

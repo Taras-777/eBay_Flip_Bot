@@ -353,8 +353,21 @@ def trading_calls_today():
 
 
 def fetch_item_aspects(item_id):
-    """Характеристики лота (localizedAspects) через Browse getItem →
-    {назва в нижньому регістрі: значення}. Порожній dict, якщо лот уже зник."""
+    """Характеристики лота → {назва в нижньому регістрі: значення}. Порожній dict, якщо лот уже зник.
+    З підключеним акаунтом eBay — через Trading GetItem (окрема квота, пошук Browse не зменшує);
+    інакше або якщо Trading не відповів — Browse getItem (localizedAspects)."""
+    from ebay.trading_api import fetch_item_details, trading_room   # тут, щоб не було циклу імпортів
+    if trading_room() > 0:
+        try:
+            aspects = fetch_item_details(item_id)
+            if aspects is not None:
+                return aspects
+        except Exception as e:   # вхід злетів чи збій eBay — беремо Browse
+            log.debug("Trading не віддав характеристики %s (%s) — беру через Browse", item_id, e)
+    return _browse_item_aspects(item_id)
+
+
+def _browse_item_aspects(item_id):
     token = _get_access_token()
     resp = _request_with_retries(
         "GET", ITEM_URL + quote(item_id, safe=""),

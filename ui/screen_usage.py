@@ -21,7 +21,8 @@ DAYS_PER_PAGE = 10
 BAR_WIDTH = 10
 
 # Чим були запити Trading API (решта — «інше»)
-TRADING_PARTS = (("trading:watch", "мої товари"), ("trading:discovery", "💡"), ("trading:deals", "🔥"))
+TRADING_PARTS = (("trading:watch", "мої товари"), ("trading:discovery", "💡"), ("trading:deals", "🔥"),
+                 ("trading:specs", "характеристики"), ("trading:markdowns", "📉"))
 
 
 def _bar(used, budget):

@@ -212,6 +212,7 @@ ebay/                  робота з eBay
   trading_api.py       Trading API: перевірка «продано?», деталі продажу
   ebay_user.py         OAuth-вхід в акаунт eBay
   deal_check.py        чи вигідні пропозиції ще продаються
+  trading_filler.py    «заповнювач»: вільні запити Trading — на частішу перевірку 🔥, ціни 📉, історію продажів
   ebay_login.py        вхід в eBay з терміналу (python -m ebay.ebay_login)
   check_sold.py        ручна перевірка «продано?» (python -m ebay.check_sold)
   restore_sales.py     відновлення історії продажів (python -m ebay.restore_sales)

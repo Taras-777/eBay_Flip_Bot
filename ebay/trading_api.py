@@ -15,7 +15,7 @@ from datetime import datetime
 
 from defusedxml.ElementTree import fromstring as safe_fromstring
 
-from core.settings import SOLD_CHECK_BATCH, SPEC_BACKFILL_BATCH, TRADING_DAILY_BUDGET, log
+from core.settings import SOLD_CHECK_BATCH, SPEC_BACKFILL_BATCH, TRADING_DAILY_BUDGET, TRADING_SPEC_RESERVE, log
 from core.db import (
     apply_discovery_check,
     apply_sold_check,
@@ -114,11 +114,22 @@ def _sale_details(item):
         "quantity": _num(_text(item, "e:Quantity"), int),
         "listing_type": _text(item, "e:ListingType"),
         "watch_count": _num(_text(item, "e:WatchCount"), int),   # скільки людей стежать
+        "shipping_cost": _shipping_cost(item),                   # найдешевша доставка (None — невідомо)
         "aspects": _item_specifics(item),
         # 🏪 магазин / 👤 приватний (лише тип; ім'я продавця не зберігаємо)
         "seller_type": {"Commercial": "business", "Private": "individual"}.get(
             _text(item, "e:Seller/e:SellerInfo/e:SellerBusinessType") or "", "unknown"),
     }
+
+
+def _shipping_cost(item):
+    """Найдешевша доставка по Німеччині (EUR); 0 — безкоштовна або лише самовивіз; None — eBay не віддав."""
+    details = item.find("e:ShippingDetails", NS)
+    if details is None:
+        return None
+    costs = [_num(_text(opt, "e:ShippingServiceCost")) for opt in details.findall("e:ShippingServiceOptions", NS)]
+    costs = [c for c in costs if c is not None]
+    return min(costs) if costs else 0.0
 
 
 def _item_specifics(item):
@@ -152,8 +163,13 @@ def get_item_status(item_id):
         "<OutputSelector>Item.WatchCount</OutputSelector>"
         "<OutputSelector>Item.ItemSpecifics</OutputSelector>"
         "<OutputSelector>Item.Seller.SellerInfo.SellerBusinessType</OutputSelector>"
+        "<OutputSelector>Item.ShippingDetails.ShippingServiceOptions</OutputSelector>"
         "</GetItemRequest>"
     )
+    return _post_get_item(body)
+
+
+def _post_get_item(body, parse=None):
     resp = _request_with_retries(
         "POST", TRADING_URL,
         headers={
@@ -167,12 +183,57 @@ def get_item_status(item_id):
     )
     record_api_call("trading")
     try:
-        return parse_get_item(resp.text)
+        return (parse or parse_get_item)(resp.text)
     except UserAuthError:
         _token_cache.update(token=None, expires_at=0.0)  # наступного разу — свіжий токен
         raise
     except ET.ParseError:
         raise RuntimeError(f"Trading API: незрозуміла відповідь (HTTP {resp.status_code})")
+
+
+# ---------- характеристики активних оголошень (замість Browse getItem) ----------
+
+def trading_room(reserve=TRADING_SPEC_RESERVE):
+    """Скільки запитів Trading ще можна витратити на допоміжне (характеристики, «заповнювач»),
+    лишаючи `reserve` для перевірки продажів. 0 — акаунт eBay не підключено або ліміт майже вичерпано."""
+    if not is_connected():
+        return 0
+    return max(0, TRADING_DAILY_BUDGET - reserve - trading_calls_today()[0])
+
+
+def parse_item_details(xml_text):
+    """GetItem з описом → характеристики як у Browse ({назва: значення} + знайдене в описі) або
+    {} — оголошення вже немає; None — eBay не віддав (тоді спробувати Browse)."""
+    from analysis.laptops import DESC_CHECKED, DESC_VERSION, specs_from_description   # без циклу імпортів
+    info = parse_get_item(xml_text)
+    if info["result"] == "not_found":
+        return {}
+    if info["result"] == "unknown" or not info.get("details"):
+        return None
+    aspects = dict(info["details"].get("aspects") or {})
+    item = safe_fromstring(xml_text).find("e:Item", NS)
+    description = _text(item, "e:Description") if item is not None else None
+    aspects.update(specs_from_description(description))
+    aspects[DESC_CHECKED] = DESC_VERSION
+    return aspects
+
+
+def fetch_item_details(item_id):
+    """Характеристики й опис оголошення через Trading GetItem (окрема квота від пошуку Browse).
+    Повертає як parse_item_details. Кидає UserAuthError / RuntimeError — тоді бот візьме Browse."""
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+        f"<ItemID>{legacy_item_id(item_id)}</ItemID>"
+        "<IncludeItemSpecifics>true</IncludeItemSpecifics>"
+        "<OutputSelector>Item.ItemID</OutputSelector>"
+        "<OutputSelector>Item.SellingStatus</OutputSelector>"
+        "<OutputSelector>Item.ItemSpecifics</OutputSelector>"
+        "<OutputSelector>Item.Description</OutputSelector>"
+        "</GetItemRequest>"
+    )
+    record_api_call("trading:specs")
+    return _post_get_item(body, parse=parse_item_details)
 
 
 def fetch_buy_it_now(item_id):

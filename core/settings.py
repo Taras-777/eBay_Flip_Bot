@@ -126,7 +126,14 @@ SOLD_HALF_LIFE_DAYS = 14   # ціна продажу: продаж двотиж�
 EBAY_RUNAME = (os.getenv("EBAY_RUNAME") or getattr(config, "EBAY_RUNAME", "") or "").strip()
 TRADING_DAILY_BUDGET = 4000    # ліміт Trading API — 5000/добу, лишаємо запас
 SOLD_CHECK_BATCH = 100
-SPEC_BACKFILL_BATCH = 50       # продані ноутбуки: дочитати характеристики за цикл (з вільного ліміту Trading)         # скільки зниклих оголошень перевіряти за один цикл
+SPEC_BACKFILL_BATCH = 50       # продані ноутбуки: дочитати характеристики за цикл (з вільного ліміту Trading)
+# Trading API як «друга квота» (лише з підключеним акаунтом eBay):
+TRADING_SPEC_RESERVE = 400     # характеристики через Trading — поки до бюджету лишається більше за це
+TRADING_SPEC_LOOKUPS = 60      # скільки характеристик дочитувати за одне сканування (замість 40–50 через Browse)
+TRADING_TARGET_PCT = 90        # «заповнювач»: тягнути витрату Trading рівномірно до 90% бюджету за добу
+TRADING_FILLER_BATCH = 150     # не більше стільки запитів «заповнювача» за один цикл
+FILLER_DEAL_RECHECK_MINUTES = 10   # «🔥» перевіряти частіше — раз на 10 хв замість DEAL_RECHECK_MINUTES
+FILLER_TRACK_RECHECK_HOURS = 2     # «📉»: ціну оголошення-кандидата перевіряти не частіше
 SOLD_CHECK_MAX_AGE_DAYS = 30   # зниклі давніше не перевіряємо (eBay пам'ятає до 90 днів)
 
 # «📉 Знизили ціну»: оголошення, які довго висять і сильно подешевшали.

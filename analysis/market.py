@@ -16,6 +16,7 @@ from core.settings import (
     DEFAULT_CONDITION_IDS,
     MARKET_SCAN_PAGES,
     MAX_SPEC_LOOKUPS_PER_DAY,
+    TRADING_SPEC_LOOKUPS,
     MAX_SPEC_LOOKUPS_PER_MARKET_SCAN,
     MIN_MODEL_SAMPLE_SIZE,
     MIN_PRICE_SUGGESTION_PCT,
@@ -83,6 +84,7 @@ from core.db import (
 )
 from analysis.shared_market import MANUAL_CACHE_SECONDS, MARKET_CACHE_SECONDS, market_page, own_filter
 from ebay.ebay_api import collapse_categories, trading_calls_today
+from ebay.trading_api import trading_room
 from ebay.ebay_api import (
     browse_budget_left,
     fetch_item_aspects,
@@ -287,7 +289,11 @@ def _annotate_items_auto(items, max_lookups=0, watch=None):
     cached = get_cached_specs([it["item_id"] for it in candidates])
 
     lookups_left = 0
-    if ASPECT_LOOKUP_ENABLED and max_lookups > 0:
+    trading = trading_room() if ASPECT_LOOKUP_ENABLED and max_lookups > 0 else 0
+    if trading > 0:
+        # Акаунт eBay підключено — характеристики йдуть через Trading (окрема квота): читаємо сміливіше
+        lookups_left = min(max(max_lookups, TRADING_SPEC_LOOKUPS), trading)
+    elif ASPECT_LOOKUP_ENABLED and max_lookups > 0:
         lookups_left = min(
             max_lookups,
             MAX_SPEC_LOOKUPS_PER_DAY - get_api_calls_today("item"),
