@@ -180,7 +180,7 @@ async def _open_listings(update, context, watch_id, requested_sort=None):
 
     nav_rows = [
         [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")],
-        [InlineKeyboardButton("📦 До моїх товарів", callback_data="menu:list")],
+        [InlineKeyboardButton("🗂 До категорій", callback_data="menu:list")],
         [InlineKeyboardButton("🏠 Меню", callback_data="menu:home")],
     ]
 
@@ -206,7 +206,7 @@ async def _open_listings(update, context, watch_id, requested_sort=None):
         "page": 0,
         "fetch": fetch,
         "fetched_at": time.time(),
-        "nav": [("◀️ До товару", f"watch_details:{watch_id}"), ("📦 До моїх товарів", "menu:list"),
+        "nav": [("◀️ До товару", f"watch_details:{watch_id}"), ("🗂 До категорій", "menu:list"),
                 ("🏠 Меню", "menu:home")],
         "query": watch["query"],
     }

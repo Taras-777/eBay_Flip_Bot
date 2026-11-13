@@ -327,6 +327,12 @@ CREATE TABLE IF NOT EXISTS review_items (
     at INTEGER NOT NULL,
     PRIMARY KEY (watch_id, item_id)
 );
+CREATE TABLE IF NOT EXISTS watch_folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS auction_alerts (
     chat_id INTEGER NOT NULL,
     item_id TEXT NOT NULL,
@@ -481,6 +487,7 @@ def init_db():
             ("categories_json", "TEXT"),
             ("deleted_at", "INTEGER"),
             ("min_profit", "REAL"),   # свій мін. прибуток товару (NULL — загальний користувача)
+            ("folder", "TEXT"),       # папка в «🗂 Категорії товарів», обрана вручну (NULL — автоматично)
         ]:
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")
@@ -2380,3 +2387,40 @@ def cleanup_auction_alerts(days=3):
     with get_conn() as conn:
         return conn.execute("DELETE FROM auction_alerts WHERE end_at < ?",
                             (int(time.time() - days * 86400),)).rowcount
+
+
+# ---------- 🗂 Папки товарів ----------
+
+FOLDER_NAME_MAX = 30
+
+
+def list_folders(chat_id):
+    """Власні папки користувача: [{'id', 'name'}] у порядку створення."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT id, name FROM watch_folders WHERE chat_id = ? ORDER BY id", (chat_id,)).fetchall()]
+
+
+def add_folder(chat_id, name):
+    """Нова папка (або вже наявна з такою ж назвою). Повертає її id."""
+    name = " ".join(name.split())[:FOLDER_NAME_MAX]
+    for f in list_folders(chat_id):
+        if f["name"].lower() == name.lower():
+            return f["id"]
+    with get_conn() as conn:
+        return conn.execute("INSERT INTO watch_folders (chat_id, name, created_at) VALUES (?, ?, ?)",
+                            (chat_id, name, int(time.time()))).lastrowid
+
+
+def set_watch_folder(watch_id, folder):
+    """folder — ключ папки («laptops», «c3» — власна №3) або None — автоматично."""
+    with get_conn() as conn:
+        conn.execute("UPDATE watches SET folder = ? WHERE id = ?", (folder, watch_id))
+
+
+def drop_empty_folders(chat_id):
+    """Власні папки, в яких не лишилось жодного товару, — прибрати."""
+    with get_conn() as conn:
+        conn.execute("""DELETE FROM watch_folders WHERE chat_id = ? AND NOT EXISTS
+                        (SELECT 1 FROM watches w WHERE w.active = 1 AND w.folder = 'c' || watch_folders.id)""",
+                     (chat_id,))

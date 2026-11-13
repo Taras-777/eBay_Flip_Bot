@@ -38,6 +38,7 @@ from analysis.textparse import (
     COMPAT_ASPECTS,
     SEALED_CONDITION_IDS,
     _aspect_satisfied_by_title,
+    _search_tokens,
     extract_spec_key,
     normalize_spec,
     console_foreign,
@@ -63,6 +64,7 @@ from core.db import (
     mark_market_stale,
     prune_listing_obs,
     get_current_listings,
+    list_folders,
     delete_market_stats_except,
     get_api_calls_today,
     get_cached_specs,
@@ -358,6 +360,43 @@ def watch_is_laptop(w):
         return False
     specs = [r["spec_group"] for r in get_current_listings(w["id"])]
     return len(specs) >= LAPTOP_MAJORITY_MIN and sum(1 for sp in specs if spec_kind(sp)) * 2 >= len(specs)
+
+
+# «🗂 Категорії товарів»: у яку папку потрапляє товар (визначається сам — за назвою, категорією eBay
+# і, для ноутбуків, за більшістю оголошень)
+WATCH_GROUPS = (("phones", "📱 Телефони"), ("laptops", "💻 Ноутбуки"), ("consoles", "🎮 Консолі"),
+                ("drones", "🚁 Дрони"), ("other", "📦 Інше"))
+_PHONE_WORDS = {"iphone", "galaxy", "pixel", "xiaomi", "redmi", "oneplus", "smartphone", "handy", "huawei", "honor"}
+_CONSOLE_WORDS = {"playstation", "ps4", "ps5", "xbox", "konsole", "nintendo", "steam"}
+_DRONE_WORDS = {"dji", "drohne", "drone", "mavic", "avata"}
+
+
+def watch_group(w, custom_ids=None):
+    """Ключ папки товару: обрана вручну (вбудована чи власна «c<id>») або визначена автоматично.
+    custom_ids — id власних папок користувача (щоб не питати базу для кожного товару)."""
+    folder = w.get("folder")
+    if folder in dict(WATCH_GROUPS):
+        return folder
+    if folder and folder.startswith("c") and folder[1:].isdigit():
+        ids = custom_ids if custom_ids is not None else {f["id"] for f in list_folders(w["chat_id"])}
+        if int(folder[1:]) in ids:
+            return folder
+    return auto_watch_group(w)
+
+
+def auto_watch_group(w):
+    """Папка товару, визначена автоматично (ключ з WATCH_GROUPS)."""
+    words = _search_tokens(f"{w.get('query') or ''} {w.get('label') or ''}")
+    cats = " ".join(c["name"] for c in get_watch_categories(w)).lower()
+    if words & _PHONE_WORDS or "handy" in cats or "smartphone" in cats:
+        return "phones"
+    if words & _CONSOLE_WORDS or "konsole" in cats:
+        return "consoles"
+    if words & _DRONE_WORDS or "drohne" in cats:
+        return "drones"
+    if watch_is_laptop(w):
+        return "laptops"
+    return "other"
 
 
 def watch_requires_spec(w):

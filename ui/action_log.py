@@ -35,7 +35,7 @@ SLOW_ACTION_SECONDS = 1.5
 
 # Зрозумілі назви кнопок (за початком callback_data); решта — як є, без чисел
 ACTION_LABELS = {
-    "menu:home": "🏠 Меню", "menu:list": "📋 Мої товари", "menu:discover": "💡 Що перепродавати",
+    "menu:home": "🏠 Меню", "menu:list": "🗂 Категорії товарів", "wgrp": "🗂 Категорія", "fld": "🗂 Папка товару", "fldnew": "➕ Нова папка", "menu:discover": "💡 Що перепродавати",
     "dpage": "💡 Що перепродавати", "menu:stats": "📊 Статистика", "stats": "📊 Статистика «💡»",
     "menu:ebay_account": "⚙️ Налаштування", "menu:refresh_prices": "💰 Оновити ціни (усі)",
     "menu:refresh_usage": "🔄 Оновити запити", "menu:addwatch": "➕ Додати товар",

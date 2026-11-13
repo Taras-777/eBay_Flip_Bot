@@ -409,12 +409,10 @@ async def _finalize_watch(update, context):
         extras.append(f"🧾 Обов'язкові характеристики: {html.escape(aspects_label(aspects), quote=False)}")
     extras_txt = ("\n" + "\n".join(extras)) if extras else ""
 
-    menu_text, menu_kb = await menu_parts(update.effective_user.id)
-    text = (
-        f"✅ Товар «{html.escape(query)}» додано."
-        f"{extras_txt}\n\n{menu_text}"
-    )
-    await show_panel(update, context, text, reply_markup=menu_kb, parse_mode=ParseMode.HTML)
+    # Одразу — у яку папку «🗂 Категорій товарів» покласти (можна лишити автоматично або створити нову)
+    from ui.screen_folders import show_folder_choice   # тут, щоб не було циклу імпортів
+    await show_folder_choice(update, context, get_watch(wid, chat_id),
+                             note=f"✅ Товар «{html.escape(query)}» додано.{extras_txt}")
     return ConversationHandler.END
 
 

@@ -90,13 +90,20 @@ def test_short_listing_label_is_truncated():
 def test_list_shows_names_not_ids(screen):
     db.add_watch(1, "PlayStation 5 Pro", "PlayStation 5 Pro", "", "", 25, categories=[{"id": "1", "name": "K"}])
     db.add_watch(1, "ThinkPad X1 Carbon Gen 10 i7 32GB 1TB Windows 11 Pro", "ThinkPad X1", "", "", 25)
+    db.add_watch(1, "Iphone 16 pro", "Iphone 16 pro", "", "", 25)
+    db.add_watch(1, "DJI Mini 4 Pro", "DJI Mini 4 Pro", "", "", 25)
     run(handlers.cmd_list(make_update(), make_context()))
+    assert "Категорії товарів</b> (4)" in screen.text
+    assert screen.buttons()[:4] == ["📱 Телефони (1)", "💻 Ноутбуки (1)", "🎮 Консолі (1)", "🚁 Дрони (1)"]
+    run(handlers.watch_group_callback(make_update("wgrp:laptops"), make_context()))
+    labels = screen.buttons()
+    assert any(b.startswith("📦 ThinkPad") and b.endswith("⚠️") for b in labels)  # без категорії
+    assert "◀️ До категорій" in labels and "📦 PlayStation 5 Pro" not in labels
+    run(handlers.watch_group_callback(make_update("wgrp:consoles"), make_context()))
     labels = screen.buttons()
     assert "📦 PlayStation 5 Pro" in labels
-    assert any(b.startswith("📦 ThinkPad") and b.endswith("⚠️") for b in labels)  # без категорії
     assert all("#" not in b for b in labels)
     assert all(len(b) <= 45 for b in labels)
-    assert "Мої товари (2)" in screen.text
 
 
 def test_watch_details_text():
@@ -239,14 +246,14 @@ def test_hide_from_deal_notification(screen):
 def test_owner_menu_has_refresh_button(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: True)
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
-    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати", "📊 Статистика",
+    assert labels == ["🔥 Вигідні пропозиції", "🗂 Категорії товарів", "💡 Що перепродавати", "📊 Статистика",
                       "🔄 Оновити запити", "💰 Оновити ціни", "⚙️ Налаштування"]
 
 
 def test_regular_user_menu_has_no_owner_buttons(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: False)
     labels = [b.text for r in panel.build_main_menu(2).inline_keyboard for b in r]
-    assert labels == ["🔥 Вигідні пропозиції", "📦 Мої товари", "💡 Що перепродавати", "📊 Статистика"]
+    assert labels == ["🔥 Вигідні пропозиції", "🗂 Категорії товарів", "💡 Що перепродавати", "📊 Статистика"]
 
 
 def _panel_context(panel_id=10, edit_error=None):
@@ -443,3 +450,49 @@ def test_old_panel_removed_even_after_restart():
     after_restart = _panel_context(panel_id=None)            # пам'ять бота порожня
     run(panel.show_panel(upd, after_restart, "menu"))
     after_restart.bot.delete_message.assert_called_once_with(chat_id=1, message_id=50)
+
+
+# ---------- 🗂 папки товарів ----------
+
+def test_folders_manual_custom_and_auto(screen, monkeypatch):
+    from ui import screen_folders
+    from ui import screen_watch
+    shown = []
+
+    async def fake_details(update, context, watch, note=""):
+        shown.append((watch["id"], note))
+    monkeypatch.setattr(screen_watch, "_show_watch_details", fake_details)
+    phone = db.add_watch(1, "Iphone 16 pro", "Iphone 16 pro", "", "", 25)
+    buds = db.add_watch(1, "AirPods Pro 2", "AirPods Pro 2", "", "", 25)
+    run(handlers.cmd_list(make_update(), make_context()))
+    assert screen.buttons()[:2] == ["📱 Телефони (1)", "📦 Інше (1)"]
+
+    run(screen_folders.folder_callback(make_update(f"fld:{buds}"), make_context()))      # вибір папки
+    assert "✅ 🤖 Автоматично (📦 Інше)" in screen.buttons() and "➕ Нова папка" in screen.buttons()
+    ctx = make_context()
+    state = run(screen_folders.folder_new_start(make_update(f"fldnew:{buds}"), ctx))
+    assert state == screen_folders.FOLDER_NAME
+    upd = make_update()
+    upd.message.text = "  Навушники  "
+    assert run(screen_folders.folder_new_text(upd, ctx)) == screen_folders.ConversationHandler.END
+    assert "Створено папку <b>Навушники</b>" in shown[-1][1]
+    run(handlers.cmd_list(make_update(), make_context()))
+    assert screen.buttons()[:2] == ["📱 Телефони (1)", "📁 Навушники (1)"]
+
+    run(screen_folders.folder_callback(make_update(f"fld:{phone}:laptops"), make_context()))   # вручну — будь-яка
+    run(handlers.cmd_list(make_update(), make_context()))
+    assert screen.buttons()[:2] == ["💻 Ноутбуки (1)", "📁 Навушники (1)"]
+
+    run(screen_folders.folder_callback(make_update(f"fld:{buds}:auto"), make_context()))      # назад автоматично
+    assert db.list_folders(1) == []                                                            # порожня — прибрана
+    run(handlers.cmd_list(make_update(), make_context()))
+    assert screen.buttons()[:2] == ["💻 Ноутбуки (1)", "📦 Інше (1)"]
+
+
+def test_new_watch_offers_folder_choice(screen):
+    from ui import screen_addwatch
+    ctx = make_context()
+    ctx.user_data.update(new_watch_query="AirPods Pro 2", new_watch_categories=[])
+    run(screen_addwatch._finalize_watch(make_update(), ctx))
+    assert "✅ Товар «AirPods Pro 2» додано." in screen.text and "Папка для «AirPods Pro 2»" in screen.text
+    assert "➕ Нова папка" in screen.buttons() and "✅ 🤖 Автоматично (📦 Інше)" in screen.buttons()

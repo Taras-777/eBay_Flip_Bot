@@ -1,8 +1,9 @@
 """
-Товари: /start, меню, «📦 Мої товари», картка товару, конфігурації, редагування (категорії, характеристики, мін. ціна), оновлення цін, видалення, статистика.
+Товари: /start, меню, «🗂 Категорії товарів» (папки) і товари в них, картка товару, конфігурації, редагування (категорії, характеристики, мін. ціна), оновлення цін, видалення, статистика.
 """
 
 import asyncio
+from collections import Counter
 import html
 import statistics
 
@@ -63,6 +64,7 @@ from ebay.ebay_api import (
     get_category_options,
 )
 from analysis.market import (
+    watch_group,
     _recalculate_watch_medians,
     apply_filters_to_history,
     max_buy_price,
@@ -116,6 +118,7 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @require_access
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """menu:list, /list — «🗂 Категорії товарів»: папки (телефони, ноутбуки…) з кількістю товарів."""
     chat_id = update.effective_chat.id
     watches = list_watches(chat_id=chat_id)
     if not watches:
@@ -127,7 +130,37 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]),
         )
         return
-    lines = [f"📦 <b>Мої товари ({len(watches)})</b>\n", "Обери товар, щоб відкрити його:"]
+    from ui.screen_folders import custom_folder_ids, folder_names   # тут, щоб не було циклу імпортів
+
+    def _groups():
+        ids = custom_folder_ids(chat_id)
+        return folder_names(chat_id), Counter(watch_group(w, ids) for w in watches)
+    names, groups = await asyncio.to_thread(_groups)
+    lines = [f"🗂 <b>Категорії товарів</b> ({len(watches)})\n", "Обери категорію:"]
+    rows = [[InlineKeyboardButton(f"{name} ({groups[key]})", callback_data=f"wgrp:{key}")]
+            for key, name in names.items() if groups[key]]
+    rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
+             [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+    await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
+
+
+@require_access
+async def watch_group_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """wgrp:<папка> — товари однієї категорії."""
+    await _ack_callback(update)
+    from ui.screen_folders import custom_folder_ids, folder_names   # тут, щоб не було циклу імпортів
+    key = update.callback_query.data.split(":")[1]
+    chat_id = update.effective_chat.id
+    names = await asyncio.to_thread(folder_names, chat_id)
+    if key not in names:
+        return await cmd_list(update, context)
+    all_watches = list_watches(chat_id=chat_id)
+    ids = await asyncio.to_thread(custom_folder_ids, chat_id)
+    watches = await asyncio.to_thread(lambda: [w for w in all_watches if watch_group(w, ids) == key])
+    if not watches:
+        return await cmd_list(update, context)
+    lines = [f"<b>{names[key]}</b> ({len(watches)})\n", "Обери товар, щоб відкрити його:"]
     rows = []
     for w in watches:
         no_cat = " ⚠️" if not watch_category_ids(w) else ""
@@ -135,19 +168,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows.append([InlineKeyboardButton(f"📦 {label}{no_cat}", callback_data=f"watch_details:{w['id']}")])
     if any(not watch_category_ids(w) for w in watches):
         lines.append("\n⚠️ — не обрано категорію eBay (відкрий товар → ✏️ Редагувати)")
-    rows.extend(
-        [
-            [InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
-            [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
-        ]
-    )
-    await show_panel(
-        update,
-        context,
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode=ParseMode.HTML,
-    )
+    rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
+             [InlineKeyboardButton("◀️ До категорій", callback_data="menu:list")]]
+    await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
+                     parse_mode=ParseMode.HTML)
 
 
 def _watch_details_text(watch):
@@ -255,6 +279,7 @@ async def _show_watch_details(update, context, watch, note=""):
                               callback_data=f"wmp:{watch_id}")],
     ]
     unknown = await asyncio.to_thread(_count_unrecognized, watch)
+    group = await asyncio.to_thread(watch_group, watch)
     if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
         rows.append([InlineKeyboardButton(f"🛠 Нерозпізнані ({unknown})", callback_data=f"unk:{watch_id}:0:w")])
     if learned:   # кнопка лише коли є що прибирати
@@ -265,7 +290,7 @@ async def _show_watch_details(update, context, watch, note=""):
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
             InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
         ],
-        [InlineKeyboardButton("◀️ До моїх товарів", callback_data="menu:list")],
+        [InlineKeyboardButton("◀️ До категорії", callback_data=f"wgrp:{group}")],
     ]
     await show_panel(
         update,
@@ -719,6 +744,7 @@ async def edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"💶 Мінімальна ціна ({f'{min_price:.0f}€' if min_price else 'авто'})",
             callback_data=f"edmin:{watch_id}")],
         [InlineKeyboardButton("🧾 Обов'язкові характеристики", callback_data=f"reqasp:{watch_id}")],
+        [InlineKeyboardButton("🗂 Папка в «Категоріях товарів»", callback_data=f"fld:{watch_id}")],
         [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")],
     ]
     await show_panel(

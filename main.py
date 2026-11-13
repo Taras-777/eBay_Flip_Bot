@@ -33,6 +33,7 @@ from ui.action_log import TimedApplication, slowlog_callback
 from ui.screen_usage import usage_callback
 from core.concurrency import DialogSafeUpdateProcessor
 from ui.screen_unknown import unknown_callback
+from ui.screen_folders import FOLDER_NAME, folder_callback, folder_interrupt, folder_new_start, folder_new_text
 from ui.access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from ui.handlers import (
     ASK_ASPECT,
@@ -67,6 +68,7 @@ from ui.handlers import (
     refresh_stop_callback,
     change_category_callback,
     cmd_list,
+    watch_group_callback,
     cmd_menu,
     cmd_start,
     cmd_stats,
@@ -187,6 +189,21 @@ def main():
         ],
     )
 
+    # «➕ Нова папка»: назва повідомленням
+    folder_conv = ConversationHandler(
+        name="folder_conv",
+        persistent=True,
+        allow_reentry=True,
+        entry_points=[CallbackQueryHandler(folder_new_start, pattern="^fldnew:")],
+        states={
+            FOLDER_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, folder_new_text),
+                CallbackQueryHandler(folder_interrupt, pattern="^(fld:|watch_details:|menu:)"),
+            ],
+        },
+        fallbacks=[CallbackQueryHandler(folder_interrupt, pattern="^(fld:|watch_details:|menu:)")],
+    )
+
     check_conv = ConversationHandler(
         name="check_conv",
         persistent=True,
@@ -227,7 +244,9 @@ def main():
     app.add_handler(edit_conv)
     app.add_handler(check_conv)
     app.add_handler(account_conv)
-    update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv]
+    app.add_handler(folder_conv)
+    update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv, folder_conv]
+    app.add_handler(CallbackQueryHandler(folder_callback, pattern="^fld:"))
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(auctions_callback, pattern="^auctions$"))
@@ -269,6 +288,7 @@ def main():
     app.add_handler(CallbackQueryHandler(discover_hidden_callback, pattern="^(dhidden|dunhide:)"))
     app.add_handler(CallbackQueryHandler(discover_refresh_callback, pattern="^drefresh$"))
     app.add_handler(CallbackQueryHandler(cmd_list, pattern="^menu:list$"))
+    app.add_handler(CallbackQueryHandler(watch_group_callback, pattern="^wgrp:"))
     app.add_handler(CallbackQueryHandler(cmd_stats, pattern="^(menu:stats|stats:d\\d+)$"))
     app.add_handler(CallbackQueryHandler(watch_details_callback, pattern="^watch_details:"))
     app.add_handler(CallbackQueryHandler(watch_min_profit_callback, pattern="^wmp:"))

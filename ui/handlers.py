@@ -38,6 +38,7 @@ from ui.screen_addwatch import (  # noqa: F401
     addwatch_menu_interrupt,
 )
 from ui.screen_watch import (  # noqa: F401
+    watch_group_callback,
     watch_min_profit_callback,
     cmd_start,
     cmd_menu,
@@ -137,7 +138,7 @@ import importlib as _importlib
 _SCREENS = [_importlib.import_module(m) for m in (
     "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_sales",
     "ui.screen_listings", "ui.screen_deals", "ui.screen_discover", "ui.screen_check", "ui.screen_markdowns", "ui.screen_undo", "ui.screen_stats",
-    "ui.screen_unknown",
+    "ui.screen_unknown", "ui.screen_folders",
 )]
 
 
