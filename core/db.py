@@ -605,6 +605,11 @@ def list_watches(chat_id=None, active_only=True):
         return [dict(r) for r in conn.execute(q, params).fetchall()]
 
 
+def get_watch_by_id(watch_id):
+    """Товар за id (будь-якого користувача, лише активний) або None."""
+    return next((w for w in list_watches() if w["id"] == watch_id), None)
+
+
 def get_watch(watch_id, chat_id):
     return next((w for w in list_watches(chat_id=chat_id) if w["id"] == watch_id), None)
 

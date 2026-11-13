@@ -54,7 +54,7 @@ from ebay.ebay_api import _watch_search_kwargs, browse_budget_left, fetch_item_b
 from analysis.market import RESALE_GROUP, _annotate_items, _apply_item_filters, _stat_for_item, estimate_resale_profit, \
     laptop_unknown, max_buy_price
 from analysis.sales import is_slow_seller
-from analysis.textparse import CURRENCY_TO_EUR, PICKUP_NOTE
+from analysis.textparse import CURRENCY_TO_EUR, PICKUP_NOTE, is_accessory_for
 
 PAGE_SIZE = 200
 
@@ -255,14 +255,23 @@ def final_decision(a, state, bid, bids, now=None):
                     f"✅ Ще вигідно — ставити не більше <b>{a['buy_limit'] - a['shipping']:.0f}€</b>.")
 
 
+def _is_accessory(a):
+    """Аукціон, знайдений до фільтра аксесуарів «для товару»: назва — другий рядок першого сповіщення."""
+    from core.db import get_watch_by_id   # тут, щоб не тягнути при імпорті
+    w = get_watch_by_id(a["watch_id"])
+    lines = (a.get("text") or "").split("\n")
+    title = html.unescape(lines[1]) if len(lines) > 1 else ""
+    return bool(w) and is_accessory_for(title, w.get("query") or "")
+
+
 async def check_finals(app, now=None):
     """Аукціони, яким до кінця ≤ AUCTION_FINAL_MINUTES: перевірити ставку й сповістити."""
     due = await asyncio.to_thread(due_auction_finals, AUCTION_FINAL_MINUTES, now)
     chats = set()
     for a in due:
-        if not await asyncio.to_thread(get_auctions_enabled, a["chat_id"]):
+        if not await asyncio.to_thread(get_auctions_enabled, a["chat_id"]) or await asyncio.to_thread(_is_accessory, a):
             await asyncio.to_thread(mark_auction_final, a["chat_id"], a["item_id"])
-            continue   # аукціони вимкнули — більше не турбуємо
+            continue   # аукціони вимкнули або це аксесуар (знайдений до появи фільтра) — не турбуємо
         state, bid, bids = await asyncio.to_thread(current_bid, a["item_id"])
         action, text = final_decision(a, state, bid, bids, now)
         await asyncio.to_thread(mark_auction_final, a["chat_id"], a["item_id"], bid)

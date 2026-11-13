@@ -220,8 +220,27 @@ PHONE_FOR_WORDS = {"für", "fur", "for"}
 # Категорії eBay з аксесуарами/запчастинами — при виборі позначаються ⚠️
 ACCESSORY_CATEGORY_WORDS = (
     "zubehör", "zubehor", "accessor", "ersatzteil", "parts", "hüllen", "cases",
-    "kabel", "taschen", "schutz", "ladegerät", "halterung",
+    "kabel", "taschen", "schutz", "ladegerät", "halterung", "filter", "akkus", "batterien",
 )
+
+# «Filter … compatibles con DJI Mini 4 Pro», «Hülle für Apple iPhone 16 Pro», «Case for PS5»: слово «для»
+# одразу перед назвою товару — це аксесуар ДО товару, а не сам товар. Між ними може стояти лише бренд.
+# «mit / with / con» самі по собі — це комплект («PS5 mit Spiel»), а не аксесуар; лише після «kompatibel» тощо
+ACCESSORY_FOR_RE = (r"(?:für|fuer|for|pour|para|passend(?:\s+(?:für|zu|for))?|"
+                    r"(?:kompatib|compatib)\w*(?:\s+(?:mit|with|con|für|for|para|avec))?)")
+ACCESSORY_BRAND_WORDS = ("apple", "sony", "samsung", "asus", "msi", "dji", "nintendo", "microsoft", "hp", "lenovo",
+                         "google", "xiaomi", "gigabyte", "acer", "dell", "playstation")
+_BRAND_RE = "|".join(ACCESSORY_BRAND_WORDS)
+
+
+def is_accessory_for(title, query):
+    """Назва — аксесуар для товару: «для» + (бренд) + сама назва товару з запиту."""
+    words = [re.escape(w) for w in re.findall(r"\w+", (query or "").lower())]
+    if not words:
+        return False
+    pattern = (rf"\b{ACCESSORY_FOR_RE}\b[\s:,-]+(?:(?:{_BRAND_RE})\b[\s:,-]+)?(?:die\s+|den\s+|das\s+|the\s+)?"
+               + r"[\s\W_]+".join(words) + r"\b")
+    return re.search(pattern, (title or "").lower()) is not None
 
 
 # Переклад назв категорій ebay.de (eBay віддає їх лише німецькою). Спершу

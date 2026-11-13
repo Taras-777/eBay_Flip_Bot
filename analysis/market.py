@@ -45,6 +45,7 @@ from analysis.textparse import (
     console_foreign,
     console_family,
     is_accessory_category,
+    is_accessory_for,
     plural,
     spec_key_from_aspects,
     spec_required_by_default,
@@ -495,6 +496,8 @@ def _apply_item_filters(w, items):
             continue
         if not wants_accessories and any(is_accessory_category(n) for n in it.get("category_names") or []):
             continue
+        if not wants_accessories and is_accessory_for(it["title"], w.get("query") or ""):
+            continue   # «Filter compatibles con DJI Mini 4 Pro», «Hülle für iPhone 16 Pro» — аксесуар
         aspects = it.get("aspects")
         if aspects and any(name in COMPAT_ASPECTS for name in aspects):
             continue
@@ -640,6 +643,24 @@ def prune_laptop_parts():
             mark_market_stale(w["id"])
             removed += len(ids)
             log.info("«%s»: прибрано з історії запчастин/аксесуарів: %s", w["label"], len(ids))
+    return removed
+
+
+def prune_accessories():
+    """Раз на добу: з історії будь-якого товару прибрати аксесуари «для товару» («Filter compatibles con
+    DJI Mini 4 Pro», «Hülle für iPhone 16 Pro»), що потрапили туди до появи фільтра — інакше вони
+    занижують ціни. Повертає кількість прибраних."""
+    removed = 0
+    for w in list_watches(active_only=True):
+        if any(is_accessory_category(c["name"]) for c in get_watch_categories(w)):
+            continue   # товар — сам аксесуар (користувач обрав таку категорію)
+        ids = [r["item_id"] for r in get_all_listing_rows(w["id"])
+               if is_accessory_for(r.get("title") or "", w.get("query") or "")]
+        if ids:
+            delete_listing_obs_by_ids(w["id"], ids)
+            mark_market_stale(w["id"])
+            removed += len(ids)
+            log.info("«%s»: прибрано з історії аксесуарів «для товару»: %s", w["label"], len(ids))
     return removed
 
 

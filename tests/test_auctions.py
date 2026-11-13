@@ -187,3 +187,31 @@ def test_auction_search_ignores_min_price_and_caps_alerts(fake_ebay, monkeypatch
     limit = market.max_buy_price(600, db.get_min_profit(1))
     assert f"💡 Запас ~{limit - 59:.0f}€" in alerts[0][1]                # ставка 54€ + доставка 5€
     assert len(auctions.scan_watch_auctions(w)) == 2                    # решта — наступного сканування
+
+
+def test_accessory_for_product_filtered(fake_ebay):
+    from analysis import textparse
+    assert textparse.is_accessory_for("Neewer Juego de filtros ND y CPL compatibles con DJI Mini 4 Pro", "DJI Mini 4 Pro")
+    assert textparse.is_accessory_for("Hülle für Apple iPhone 16 Pro", "Iphone 16 pro")
+    assert not textparse.is_accessory_for("DJI Mini 4 Pro Drohne mit RC 2", "DJI Mini 4 Pro")
+    assert not textparse.is_accessory_for("Bundle: PS5 mit PlayStation 5 Spiel", "PlayStation 5")   # комплект — товар
+    assert not textparse.is_accessory_for("Gaming Laptop für Studenten MSI Katana 15", "MSI Katana")
+
+    wid = db.add_watch(1, "DJI Mini 4 Pro", "DJI Mini 4 Pro", "", "", 15)
+    db.upsert_market_stats(wid, "used", "*", 580, 30, sale_price=556, sale_source="за проданими")
+    w = db.get_watch(wid, 1)
+    fake_ebay.listings = [listing("nd", "Neewer Juego de filtros ND y CPL compatibles con DJI Mini 4 Pro", 30,
+                                  buyingOptions=["AUCTION"], currentBidPrice={"value": "30", "currency": "EUR"},
+                                  bidCount=0, itemEndDate=_end(8))]
+    assert auctions.scan_watch_auctions(w) == []                             # аксесуар — не аукціон дрона
+
+
+def test_old_accessory_alert_gets_no_final(monkeypatch):
+    wid = db.add_watch(1, "DJI Mini 4 Pro", "DJI Mini 4 Pro", "", "", 15)
+    db.set_auctions_enabled(1, True)
+    db.add_auction_alert(1, "nd", wid, time.time() + 30 * 60, 449, 10, 30,
+                         "🔨 <b>Вигідний аукціон — DJI Mini 4 Pro</b>\nFiltros ND compatibles con DJI Mini 4 Pro\n…", None)
+    monkeypatch.setattr(auctions, "current_bid", lambda item_id: ("active", 30.0, 0))
+    app = _app()
+    asyncio.run(auctions.check_finals(app))
+    assert app.bot.send_message.await_count == 0 and db.due_auction_finals(45) == []

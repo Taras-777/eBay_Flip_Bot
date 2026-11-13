@@ -50,6 +50,7 @@ from analysis.market import (
     _stat_for_item,
     collapse_watch_categories,
     prune_laptop_parts,
+    prune_accessories,
     normalize_saved_specs,
     laptop_unknown,
     max_buy_price,
@@ -387,6 +388,7 @@ async def scheduler_loop(app: Application):
                     await asyncio.to_thread(purge_deleted_watches)
                     await asyncio.to_thread(collapse_watch_categories)
                     await asyncio.to_thread(prune_laptop_parts)
+                    await asyncio.to_thread(prune_accessories)
                     await asyncio.to_thread(normalize_saved_specs)
                     if removed or removed_obs:
                         log.info("Очищено застарілих записів: seen_items %s, listing_obs %s",
