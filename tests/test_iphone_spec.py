@@ -30,16 +30,52 @@ def test_saved_history_normalized():
 
 
 def test_console_storage_only():
-    assert extract_spec_key("Sony PlayStation 4 Slim 500GB + 2 Controller + FIFA (50GB)") == "500GB · Slim"
-    assert extract_spec_key("PS4 Pro 1000GB schwarz") == "1TB · Pro"
-    assert extract_spec_key("PS4 Slim 500GB + 2 Controller") == "500GB · Slim"
-    assert extract_spec_key("PS4 500GB CUH-1216A") == "500GB · Fat"
+    assert extract_spec_key("Sony PlayStation 4 Slim 500GB + 2 Controller + FIFA (50GB)") == "Slim · 500GB"
+    assert extract_spec_key("PS4 Pro 1000GB schwarz") == "Pro · 1TB"
+    assert extract_spec_key("PS4 Slim 500GB + 2 Controller") == "Slim · 500GB"
+    assert extract_spec_key("PS4 500GB CUH-1216A") == "Fat · 500GB"
     assert extract_spec_key("PS4 500GB schwarz") == "500GB"                               # модель не названа
-    assert extract_spec_key("PS4 Pro 1TB (500GB auf 1TB aufgerüstet)") == "unspecified"   # два об'єми
+    assert extract_spec_key("PS4 Pro 1TB (500GB auf 1TB aufgerüstet)") == "Pro"           # два об'єми — лише модель
     assert extract_spec_key("PS4 Konsole + 5GB Spiel") == "unspecified"
     assert extract_spec_key("PlayStation 5 Slim 1TB") == "1TB"
-    assert extract_spec_key("PS5 Digital Edition 825GB") == "825GB · Digital"
+    assert extract_spec_key("PS5 Digital Edition 825GB") == "Digital · 825GB"
     assert extract_spec_key("Xbox One 500GB") == "500GB"                                  # інші — як було
+
+
+def test_console_usable_storage_and_model_first():
+    from analysis.textparse import spec_key_from_aspects
+    assert extract_spec_key("Sony PlayStation 4 PS4 Heimkonsole Schwarz 408,5GB DualShock 4") == "500GB"
+    assert extract_spec_key("PS4 Slim 862 GB") == "Slim · 1TB"                            # видно на консолі
+    assert extract_spec_key("PS5 Digital 667GB") == "Digital · 825GB"
+    assert extract_spec_key("PS4 Slim 800GB") == "Slim"                                   # 800 — не вгадуємо
+    assert extract_spec_key("PS4 1,00 TB") == "1TB"                                       # не «00TB»
+    assert extract_spec_key("Sony PS4 Slim Heimkonsole Schwarz") == "Slim"                # об'єм невідомий
+    assert spec_key_from_aspects("Sony PS4 Slim Heimkonsole Schwarz", {"speicherkapazität": "400"}) == "Slim · 500GB"
+    assert spec_key_from_aspects("Sony PS4 Heimkonsole", {"speicherkapazität": "408,5 GB"}) == "500GB"
+    assert spec_key_from_aspects("Xbox One", {"speicherkapazität": "400"}) == "unspecified"   # лише консолі Sony
+    assert normalize_spec("PS4 Slim 500GB", "500GB · Slim") == "Slim · 500GB"             # старий запис в історії
+
+
+def test_console_history_reparsed_from_title():
+    w = db.add_watch(1, "PlayStation 4", "PlayStation 4", "", "", 15)
+    db.update_listing_observations(w, [
+        {"item_id": "a", "title": "PS4 Heimkonsole 408,5GB", "spec_group": "5GB", "cond_group": "used", "total_price": 150},
+        {"item_id": "b", "title": "PS4 Slim 500GB", "spec_group": "500GB · Slim", "cond_group": "used", "total_price": 160},
+        {"item_id": "c", "title": "Sony PlayStation 2 Slim", "spec_group": "unspecified", "cond_group": "used",
+         "total_price": 40}])
+    market.normalize_saved_specs()
+    with db.get_conn() as conn:
+        rows = dict(conn.execute("SELECT item_id, spec_group FROM listing_obs").fetchall())
+    assert rows == {"a": "500GB", "b": "Slim · 500GB"}                          # PS2 прибрано
+
+
+def test_other_playstation_named_first():
+    from analysis.textparse import console_foreign
+    assert console_foreign("Sony PlayStation 2 Slim Konsole schwarz 8MB", "PlayStation 4")
+    assert console_foreign("PS2 Fat inkl. 2 Controller", "PS4")
+    assert console_foreign("Sony PSP 3004 Handheld", "PlayStation 4")
+    assert not console_foreign("PS4 Slim 500GB inkl. Spiele (auch PS5 kompatibel)", "PlayStation 4")
+    assert not console_foreign("Sony PlayStation 4 Pro 1TB", "PS4")
 
 
 def test_other_console_model_dropped():
@@ -59,7 +95,7 @@ def test_other_console_model_dropped():
     assert market.normalize_saved_specs() == 2
     with db.get_conn() as conn:
         rows = dict(conn.execute("SELECT item_id, spec_group FROM listing_obs").fetchall())
-    assert rows == {"x": "1TB · Pro"}                                        # PS5 прибрано з історії PS4
+    assert rows == {"x": "Pro · 1TB"}                                        # PS5 прибрано з історії PS4
 
 
 def test_console_unknown_storage_kept():

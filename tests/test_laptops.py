@@ -614,3 +614,17 @@ def test_impossible_ram_ignored():
     title = 'Apple MacBook Pro 16" M3 Pro 512GB SSD (2023)'
     assert laptops.laptop_spec(title, asp) == 'M3 Pro · 16"'
     assert "RAM: ❓" in laptops.sources_line(laptops.class_sources(title, asp))
+
+
+def test_mac_pro_max_from_core_counts():
+    from analysis.laptops import class_sources, laptop_spec, sources_line
+    title = 'Apple Macbook Pro 16" 2024 M4 14-Core-20-CORE 1TB / 24 GB RAM'
+    aspects = {"prozessor": "Apple M1 Pro"}                                   # помилка продавця
+    assert laptop_spec(title, aspects) == 'M4 Pro · 16" · 24GB'
+    assert "за кількістю ядер (назва)" in sources_line(class_sources(title, aspects))
+    assert laptop_spec("MacBook Pro 16 M1 10-Core CPU 32-Core GPU 32GB") == 'M1 Max · 16" · 32GB'
+    assert laptop_spec("MacBook Pro 14 M3 11C CPU 14C GPU 18GB") == 'M3 Pro · 14" · 18GB'
+    assert laptop_spec('MacBook Pro 14" M3 16GB', {"anzahl der prozessorkerne": "12"}) == 'M3 Pro · 14" · 16GB'
+    assert laptop_spec('MacBook Pro 14" M4 10-Core 16GB') == 'M4 · 14" · 16GB'   # базовий чип — без змін
+    assert laptop_spec("MacBook Air 13 M2 8-Core 8GB") == 'M2 · 13" · 8GB'
+    assert laptop_spec('MacBook Pro M2 16" 16GB') == 'M2 Pro/Max ? · 16" · 16GB'   # ядер не названо

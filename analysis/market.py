@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import re
 import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -733,6 +734,10 @@ def normalize_saved_specs():
                 continue   # без характеристик краще лишити як є, ніж стерти
         else:
             new = normalize_spec(r["title"], r["spec_group"])
+            if console_family(r["title"] or "") and not re.search(r"\d(GB|TB)", new or ""):
+                # старі записи «5GB» з «408,5GB» — заново з назви (тепер розуміє й об'єм, видимий на консолі)
+                from_title = extract_spec_key(r["title"] or "")
+                new = from_title if re.search(r"\d(GB|TB)", from_title) else new
         if new == r["spec_group"]:
             continue
         set_listing_spec(r["watch_id"], r["item_id"], new)

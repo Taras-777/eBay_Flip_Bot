@@ -105,7 +105,8 @@ def market_group(item):
 # змішаною і однаково неточною для обох варіантів. Тому кожен лот
 # додатково групується за цим "spec_key", і порівняння з медіаною
 # відбувається лише в межах однакової конфігурації.
-SPEC_SIZE_PATTERN = re.compile(r"(\d+)\s?(GB|TB)\b", re.IGNORECASE)
+# «408,5GB» → 408GB, «1,00 TB» → 1TB: дробову частину відкидаємо (раніше бралось «5GB», «00TB»)
+SPEC_SIZE_PATTERN = re.compile(r"(?<![\d.,])(\d+)(?:[.,]\d+)?\s?(GB|TB)\b", re.IGNORECASE)
 
 
 SEARCH_TOKEN_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
@@ -724,7 +725,14 @@ CONSOLE_MODELS = [
      ("Disc", re.compile(r"\bdisc\b|\bdisk\b|laufwerk|blu-?ray", re.I))],
 ]
 SIZE_ALIASES = {"1000GB": "1TB", "2000GB": "2TB", "1024GB": "1TB"}
-SPEC_SEP = " · "   # той самий роздільник, що й у класах ноутбуків: «500GB · Slim» → ширша група «500GB»
+# Скільки місця показує сама консоль (менше за заводський обсяг): продавці часто пишуть саме це.
+# «PS4 408,5GB» = 500GB, «862GB» = 1TB; PS5 «667GB» = 825GB, «848GB» = 1TB. Лише вузькі діапазони
+# навколо відомих значень (800GB чи 512GB — не перекладаємо: це може бути що завгодно).
+CONSOLE_USABLE = [
+    ((395, 415, "500GB"), (855, 870, "1TB"), (1780, 1800, "2TB")),   # PS4
+    ((660, 670, "825GB"), (840, 852, "1TB"), (1840, 1860, "2TB")),   # PS5
+]
+SPEC_SEP = " · "   # той самий роздільник, що й у класах ноутбуків: «Slim · 500GB» → ширша група «Slim»
 
 
 def _console_index(text):
@@ -738,6 +746,18 @@ def console_family(text):
     return None if i is None else CONSOLE_STORAGE[i][1:]
 
 
+def _nominal(size, family_index):
+    """«408GB» → «500GB» для PS4 тощо (див. CONSOLE_USABLE); інше — без змін."""
+    m = re.fullmatch(r"(\d+)(GB|TB)", size)
+    if not m:
+        return size
+    gb = int(m.group(1)) * (1024 if m.group(2) == "TB" else 1)
+    for low, high, nominal in CONSOLE_USABLE[family_index]:
+        if low <= gb <= high:
+            return nominal
+    return size
+
+
 def console_model(title):
     """«Slim», «Pro», «Digital»… — якщо в назві названо рівно одну модель."""
     i = _console_index(title)
@@ -748,24 +768,35 @@ def console_model(title):
 
 
 def normalize_spec(title, spec):
-    """iPhone — лише за об'ємом пам'яті: «128GB+8GB» → «128GB». PS4/PS5 — лише справжні
-    об'єми моделі плюс модель, якщо вона названа: «500GB · Slim»; «1TB+500GB», «5GB», «320GB» →
-    невідома. Кілька об'ємів — конфігурація невідома."""
-    if not spec or spec == "unspecified":
-        return spec
-    tokens = [SIZE_ALIASES.get(t, t) for t in spec.split(SPEC_SEP)[0].split("+")]
+    """iPhone — лише за об'ємом пам'яті: «128GB+8GB» → «128GB». PS4/PS5 — модель (якщо названа) і
+    заводський об'єм: «Slim · 500GB» («408GB» на екрані консолі → 500GB); пам'ять невідома, модель
+    названа — «Slim»; «1TB+500GB», «320GB» → невідома. Кілька об'ємів — конфігурація невідома."""
     text = (title or "").lower()
+    if not spec or spec == "unspecified":
+        if spec == "unspecified" and _console_index(text) is not None:
+            return console_model(title or "") or spec   # «PS4 Slim» без об'єму → «Slim»
+        return spec
+    parts = spec.split(SPEC_SEP)
+    if _console_index(text) is not None:
+        # і новий («Slim · 500GB»), і старий («500GB · Slim») запис — беремо всі об'єми
+        parts = [p for p in parts if re.fullmatch(r"[\d+GBT]+", p)] or ["unspecified"]
+        tokens = [SIZE_ALIASES.get(t, t) for p in parts for t in p.split("+")]
+    else:
+        tokens = [SIZE_ALIASES.get(t, t) for t in parts[0].split("+")]
     if "iphone" in text:
         sizes = {t for t in tokens if t in IPHONE_STORAGE}
         return sizes.pop() if len(sizes) == 1 else "unspecified"
-    family = console_family(text)
-    if family is None:
+    family_index = _console_index(text)
+    if family_index is None:
         return "+".join(sorted(set(tokens)))
-    sizes = {t for t in tokens if t in family[0]}
-    if len(sizes) != 1:
-        return "unspecified"
+    allowed = CONSOLE_STORAGE[family_index][1]
+    sizes = {_nominal(t, family_index) for t in tokens}
+    sizes = {t for t in sizes if t in allowed}
     model = console_model(title or "")
-    return sizes.pop() + (SPEC_SEP + model if model else "")
+    if len(sizes) != 1:
+        return model or "unspecified"   # пам'ять невідома, але модель названа — «Slim»
+    # Модель — спершу: для PS4 різниця Fat / Slim / Pro важить більше за диск; ширша група — «Slim»
+    return (model + SPEC_SEP if model else "") + sizes.pop()
 
 
 # Комплект: консоль з геймпадами чи іграми — дорожча за «лише консоль»
@@ -784,11 +815,24 @@ def is_bundle(title):
     return bool(BUNDLE_PATTERN.search(title or ""))
 
 
+_PS_NAME = re.compile(r"\b(?:ps|playstation)\s?([1-5])\b|\b(psp|ps\s?vita)\b", re.I)
+
+
+def _first_playstation(text):
+    """Яку PlayStation названо першою: «2», «4», «psp»… або None."""
+    m = _PS_NAME.search(text or "")
+    return None if m is None else (m.group(1) or "psp")
+
+
 def console_foreign(title, query):
-    """Оголошення іншої моделі консолі: у товарі «PS4» об'єм 825GB (PS5) чи 320GB (PS3)."""
+    """Оголошення іншої консолі: у товарі «PS4» першою названо іншу PlayStation («Sony PlayStation 2
+    Slim») або об'єм іншої моделі — 825GB (PS5) чи 320GB (PS3)."""
     family = console_family(query)
     if family is None:
         return False
+    first = _first_playstation(title)
+    if first is not None and first != _first_playstation(query):
+        return True
     sizes = {SIZE_ALIASES.get(f"{n}{u.upper()}", f"{n}{u.upper()}") for n, u in SPEC_SIZE_PATTERN.findall(title or "")}
     return bool(sizes & family[1])
 
@@ -805,6 +849,9 @@ def spec_key_from_aspects(title, aspects):
     for name, value in aspects.items():
         if name in STORAGE_ASPECTS or (name in RAM_ASPECTS and laptop_like):
             tokens.update(f"{num}{unit.upper()}" for num, unit in SPEC_SIZE_PATTERN.findall(value or ""))
+            bare = re.fullmatch(r"\s*(\d{3,4})(?:[.,]\d+)?\s*", value or "")
+            if bare and name in STORAGE_ASPECTS and _console_index(title) is not None:
+                tokens.add(f"{bare.group(1)}GB")   # консоль: «Speicherkapazität: 400» — без одиниць, це ГБ
         elif name in CPU_ASPECTS and not cpu:
             cpu = extract_cpu_token(value)
     if cpu:
@@ -823,7 +870,7 @@ def extract_spec_key(title: str) -> str:
         tokens.add(cpu)
 
     if not tokens:
-        return "unspecified"
+        return normalize_spec(title, "unspecified")   # консоль: модель без об'єму — «Slim»
     return normalize_spec(title, "+".join(sorted(tokens)))
 
 

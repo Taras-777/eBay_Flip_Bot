@@ -396,6 +396,43 @@ def _apple_ssd(gb):
     return nearest if abs(nearest - gb) <= nearest * 0.1 else gb
 
 
+# Pro / Max за кількістю ядер (CPU чи GPU), коли в назві лише «M4»: «M4 14-Core / 20-Core» — це M4 Pro.
+# (лише Max, лише Pro, «Pro, якщо нема ознак Max»). Числа, спільні з базовим чипом, не рахуються.
+MAC_CORE_TIERS = {
+    1: ({24, 32}, {14, 16}, {10}),
+    2: ({30, 38}, {16, 19}, {12}),
+    3: ({16, 30, 40}, {11, 12, 18}, {14}),
+    4: ({32, 40}, {12, 20}, {14, 16}),
+}
+_CORE_COUNT = re.compile(r"(?<![\d.])(\d{1,2})\s*-?\s*(?:cores?|kerne?\w*|c)\b"
+                         r"|\b(?:cpu|gpu)\s*:?\s*(\d{1,2})\b", re.I)
+
+
+def _core_counts(text):
+    return {int(a or b) for a, b in _CORE_COUNT.findall(text or "")}
+
+
+def _mac_core_tier(gen, title, aspects):
+    """(«Pro» / «Max», звідки) за кількістю ядер — або (None, None)."""
+    tiers = MAC_CORE_TIERS.get(gen)
+    if not tiers:
+        return None, None
+    max_only, pro_only, pro_weak = tiers
+    core_aspects = {k: v for k, v in (aspects or {}).items()
+                    if k in CPU_ASPECTS | GPU_ASPECTS | {DESC_CPU_ASPECT, DESC_GPU_ASPECT}
+                    or "kern" in k or "core" in k}
+    # «Anzahl der Prozessorkerne: 12» — у полі про ядра число й без слова «Core»
+    aspect_text = " ".join(f"{v} cores" if re.fullmatch(r"\s*\d{1,2}\s*", str(v)) and ("kern" in k or "core" in k)
+                           else str(v) for k, v in core_aspects.items())
+    for text, source in ((title, "назва"), (aspect_text, "характеристики")):
+        counts = _core_counts(text)
+        if counts & max_only:
+            return "Max", source
+        if counts & (pro_only | pro_weak):
+            return "Pro", source
+    return None, None
+
+
 def laptop_spec(title, aspects=None, query=""):
     """Клас ноутбука (див. опис модуля) або "unspecified", якщо з назви нічого не зрозуміло.
     Порядок джерел: назва → характеристики → опис оголошення."""
@@ -410,6 +447,9 @@ def laptop_spec(title, aspects=None, query=""):
         chip = re.sub(r"(PRO|MAX|ULTRA)$", lambda m: " " + m.group(1).capitalize(), token)
         screen = _screen(title, aspects)
         plain_chip = re.fullmatch(r"M\d+", token) is not None
+        tier = _mac_core_tier(int(token[1:]), title, aspects)[0] if plain_chip else None
+        if tier:
+            chip, plain_chip = f"{token} {tier}", False   # «M4 14-Core/20-Core» → M4 Pro
         macbook_pro = bool(re.search(r"macbook\s*pro", f"{title} {query}", re.I)) and \
             "air" not in _search_tokens(title) | _search_tokens(query)
         if plain_chip and screen == '16"':
@@ -460,6 +500,12 @@ def class_sources(title, aspects=None, query=""):
                         (aspects.get(DESC_SCREEN_ASPECT), "опис"))
         if screen[0] is None and len(parts) > 1 and parts[1].endswith('"'):
             screen = (parts[1], "типово для моделі")
+        chip_token = _best_cpu_token(extract_cpu_token(t), extract_cpu_token(_aspect(aspects, CPU_ASPECTS)),
+                                     extract_cpu_token(_aspect(aspects, {DESC_CPU_ASPECT})))
+        if chip_token and re.fullmatch(r"M\d+", chip_token):
+            tier_src = _mac_core_tier(int(chip_token[1:]), t, aspects)[1]
+            if tier_src:
+                chip_src = f"{chip_src}; Pro/Max — за кількістю ядер ({tier_src})"
         return [("чип", parts[0], chip_src), ("екран", *screen), ("RAM", *ram)]
     gpu = _gpu_choice(t, aspects)
     cpu = _cpu_choice(t, aspects)
