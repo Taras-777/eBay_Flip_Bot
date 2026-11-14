@@ -15,7 +15,8 @@ from core.db import (
     get_cached_specs,
     get_listing_groups,
     get_market_stats,
-    watch_min_profit,
+    min_profit_rule,
+    profit_needed,
     get_open_deals,
     get_sold_only,
     get_watch_categories,
@@ -81,7 +82,7 @@ def reprice_deals(chat_id=None):
     if not deals:
         return 0
     watches = {w["id"]: w for w in list_watches(active_only=True)}
-    stats_by_watch, groups_by_watch, laptop_by_watch, min_profit_by_chat = {}, {}, {}, {}
+    stats_by_watch, groups_by_watch, laptop_by_watch, rule_by_watch = {}, {}, {}, {}
     sold_only_by_chat: dict = {}
     removed, stale = 0, []
     for d in deals:
@@ -96,8 +97,8 @@ def reprice_deals(chat_id=None):
         stats = stats_by_watch[wid]
         if not stats:
             continue   # ринок ще не пораховано (напр. одразу після запуску) — нічого не чіпаємо
-        min_profit = min_profit_by_chat.setdefault(wid, watch_min_profit(watch))
-        was_shown = estimate_resale_profit(d["median_price"], d["total_price"])[1] >= min_profit
+        rule = rule_by_watch.setdefault(wid, min_profit_rule(watch)[0])   # свій / категорії / загальний
+        was_shown = estimate_resale_profit(d["median_price"], d["total_price"])[1] >= profit_needed(rule, d["median_price"])
 
         known = groups_by_watch[wid].get(d["item_id"])
         if known:
@@ -128,7 +129,7 @@ def reprice_deals(chat_id=None):
             update_deal_price(d["id"], sale, (sale - d["total_price"]) / sale * 100 if sale else 0,
                               stat["cond_group"], stat["spec_group"], spec,
                               stat["sale_source"], stat["sample_size"])
-        if was_shown and estimate_resale_profit(sale, d["total_price"])[1] < min_profit:
+        if was_shown and estimate_resale_profit(sale, d["total_price"])[1] < profit_needed(rule, sale):
             removed += 1
     if stale:
         set_deals_status(stale, "stale")

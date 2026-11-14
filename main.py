@@ -62,6 +62,7 @@ from ui.handlers import (
     sales_reject_callback,
     sales_check_now_callback,
     deals_callback,
+    category_profit_callback,
     min_profit_callback,
     deal_inbox_action_callback,
     deals_clear_callback,
@@ -307,6 +308,7 @@ def main():
     app.add_handler(CallbackQueryHandler(sales_check_now_callback, pattern="^schk:"))
     app.add_handler(CallbackQueryHandler(deals_callback, pattern="^deals:"))
     app.add_handler(CallbackQueryHandler(min_profit_callback, pattern="^mprof:"))
+    app.add_handler(CallbackQueryHandler(category_profit_callback, pattern="^cprof:"))
     app.add_handler(CallbackQueryHandler(deal_inbox_action_callback, pattern="^dact:"))
     app.add_handler(CallbackQueryHandler(deals_clear_callback, pattern="^dclear$"))
     app.add_handler(CallbackQueryHandler(edit_menu_callback, pattern="^editw:"))

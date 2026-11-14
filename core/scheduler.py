@@ -36,7 +36,8 @@ from core.db import (
     track_prices,
     cleanup_old_seen_items,
     get_market_stats,
-    watch_min_profit,
+    min_profit_rule,
+    profit_needed,
     get_sold_only,
     get_seen_items,
     get_sold_listings,
@@ -144,7 +145,7 @@ async def check_one_watch(app: Application, w: dict):
         """Оцінка оголошень — лише база, без мережі; у потоці, щоб не гальмувати кнопки."""
         new_deals = []
         sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))  # як продаються конфігурації
-        min_profit = watch_min_profit(w)   # свій у товару або загальний
+        rule = min_profit_rule(w)[0]   # свій у товару, категорії або загальний
         sold_only = get_sold_only(w["chat_id"])   # «лише за реальними продажами»
         seen_map = get_seen_items(w["id"], [it["item_id"] for it in items])
         seen_updates = []  # записуються одним пакетом наприкінці
@@ -171,7 +172,7 @@ async def check_one_watch(app: Application, w: dict):
             # не вища за максимальну, що ще дає мінімальний прибуток при перепродажі
             # Вигідно — лише якщо прибуток ≥ мінімуму користувача за ЦІНОЮ ОГОЛОШЕННЯ (торг — бонус,
             # а не підстава: «можна торгуватись» не робить збиткову пропозицію вигідною)
-            if it["total_price"] > max_buy_price(sale_price, min_profit):
+            if it["total_price"] > max_buy_price(sale_price, profit_needed(rule, sale_price)):
                 seen_updates.append((it["item_id"], it["effective_price"], None))
                 continue
             # Дешево, але така конфігурація не продається (при живому ринку) — не сповіщаємо

@@ -107,8 +107,8 @@ from ui.screen_listings import (  # noqa: F401
     unlearn_word_callback,
     deal_action_callback,
 )
+from ui.screen_profit import category_profit_callback, min_profit_callback  # noqa: F401
 from ui.screen_deals import (  # noqa: F401
-    min_profit_callback,
     DEALS_PER_PAGE,
     _deal_card,
     _render_deals,
@@ -138,7 +138,7 @@ import importlib as _importlib
 _SCREENS = [_importlib.import_module(m) for m in (
     "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_sales",
     "ui.screen_listings", "ui.screen_deals", "ui.screen_discover", "ui.screen_check", "ui.screen_markdowns", "ui.screen_undo", "ui.screen_stats",
-    "ui.screen_unknown", "ui.screen_folders", "ui.screen_auctions",
+    "ui.screen_unknown", "ui.screen_folders", "ui.screen_auctions", "ui.screen_profit",
 )]
 
 

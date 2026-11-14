@@ -37,9 +37,10 @@ from core.db import (
     get_auto_min_price,
     get_learned_words,
     get_market_stats,
-    get_min_profit,
+    min_profit_rule,
+    profit_needed,
+    profit_rule_label,
     set_watch_min_profit,
-    watch_min_profit,
     get_price_history,
     get_required_aspects,
     watch_obs_summary,
@@ -82,6 +83,16 @@ from ui.panel import (
 from ui.access import _notify_owner_new_request, require_access
 from ui.notifications import _notify_median_error, _notify_median_problem
 from analysis.sales import weekly_change
+
+
+def profit_source_text(watch, source):
+    """«(свій для цього товару)» / «(категорії 🎮 Консолі)» / «(загальний)»."""
+    if source == "own":
+        return "свій для цього товару"
+    if source == "category":
+        from ui.screen_folders import folder_names
+        return f"категорії {folder_names(watch['chat_id']).get(watch_group(watch), '')}"
+    return "загальний"
 
 
 # ============================================================
@@ -176,8 +187,8 @@ async def watch_group_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def _watch_details_text(watch):
     stats = get_market_stats(watch["id"])
-    min_profit = watch_min_profit(watch)
-    own_profit = watch.get("min_profit") is not None
+    rule, source = min_profit_rule(watch)
+    rule_txt = profit_rule_label(rule) + (" від ціни продажу" if rule[0] == "pct" else "")
     category_txt = html.escape(
         ", ".join(category_label(c["name"], with_original=True) for c in get_watch_categories(watch))
     ) or "усі (не обрано)"
@@ -191,8 +202,8 @@ def _watch_details_text(watch):
         min_price_txt = "без обмеження"
     lines = [
         f"📌 <b>{html.escape(watch['label'])}</b>",
-        f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{min_profit:.0f}€</b>"
-        + (" (свій для цього товару)" if own_profit else " (загальний)") + " — після доставки покупцю",
+        f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{rule_txt}</b> ({html.escape(profit_source_text(watch, source))})"
+        " — після доставки покупцю",
         f"🗂️ Категорії: {category_txt}",
         f"💶 Мінімальна ціна: {min_price_txt}",
         (f"🧾 Обов'язкові характеристики: {html.escape(aspects_label(get_required_aspects(watch)), quote=False)}"
@@ -224,7 +235,7 @@ def _watch_details_text(watch):
     history = get_price_history(watch["id"])
     for s in sorted(stats, key=lambda s: (s["cond_group"], s["spec_group"] != "*", s["spec_group"])):
         sale_price = s["sale_price"] or s["median_price"]
-        buy_limit = max_buy_price(sale_price, min_profit)
+        buy_limit = max_buy_price(sale_price, profit_needed(rule, sale_price))
         trend = ""
         weekly = weekly_change(history.get((s["cond_group"], s["spec_group"])))
         if weekly and abs(weekly[0]) >= 1:
@@ -245,7 +256,7 @@ def _watch_details_text(watch):
     lines.append(
         "\n<i>«Продати за» — оцінка за найдешевшою чвертю поточних оголошень. Коли бот побачить "
         f"щонайменше {MIN_SOLD_SAMPLE} проданих, рахуватиме за ними. "
-        f"«Купувати до» лишає ≥{min_profit:.0f}€ після доставки покупцю.</i>"
+        f"«Купувати до» лишає ≥{rule_txt} після доставки покупцю.</i>"
     )
     return "\n".join(lines)
 
@@ -274,9 +285,7 @@ async def _show_watch_details(update, context, watch, note=""):
             InlineKeyboardButton("📈 Продажі", callback_data=f"sales:{watch_id}"),
         ],
         [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")],
-        [InlineKeyboardButton(f"💰 Мін. прибуток: {watch_min_profit(watch):.0f}€"
-                              + ("" if watch.get("min_profit") is not None else " (загальний)"),
-                              callback_data=f"wmp:{watch_id}")],
+        [InlineKeyboardButton(_profit_button(watch), callback_data=f"wmp:{watch_id}")],
     ]
     unknown = await asyncio.to_thread(_count_unrecognized, watch)
     group = await asyncio.to_thread(watch_group, watch)
@@ -302,6 +311,12 @@ async def _show_watch_details(update, context, watch, note=""):
 
 
 WATCH_MIN_PROFIT_CHOICES = (10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 150, 200)
+_SOURCE_SHORT = {"own": "", "category": " (категорія)", "general": " (загальний)"}
+
+
+def _profit_button(watch):
+    rule, source = min_profit_rule(watch)
+    return f"💰 Мін. прибуток: {profit_rule_label(rule)}{_SOURCE_SHORT[source]}"
 
 
 @require_access
@@ -317,25 +332,26 @@ async def watch_min_profit_callback(update: Update, context: ContextTypes.DEFAUL
         value = None if parts[2] == "def" else float(parts[2])
         await asyncio.to_thread(set_watch_min_profit, watch, value)
         watch = get_watch(watch["id"], update.effective_chat.id)
-        note = ("✅ Тепер як загальний мін. прибуток." if value is None
+        note = ("✅ Тепер як категорія / загальний мін. прибуток." if value is None
                 else f"✅ Мін. прибуток для «{html.escape(watch['label'])}»: <b>{value:.0f}€</b>.")
         return await _show_watch_details(update, context, watch, note=note)
-    current = watch_min_profit(watch)
-    own = watch.get("min_profit") is not None
-    general = get_min_profit(watch["chat_id"])
-    buttons = [InlineKeyboardButton(("✅ " if own and v == current else "") + f"{v}€",
+    rule, source = min_profit_rule(watch)
+    own = source == "own"
+    inherited, inherited_src = min_profit_rule({**watch, "min_profit": None})   # без свого значення
+    inherited_txt = f"{profit_rule_label(inherited)}, {profit_source_text(watch, inherited_src)}"
+    buttons = [InlineKeyboardButton(("✅ " if own and v == rule[1] else "") + f"{v}€",
                                     callback_data=f"wmp:{watch['id']}:{v}") for v in WATCH_MIN_PROFIT_CHOICES]
     rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
-    rows.append([InlineKeyboardButton(("✅ " if not own else "") + f"↩️ Як загальний ({general:.0f}€)",
+    rows.append([InlineKeyboardButton(("✅ " if not own else "") + f"↩️ Як категорія / загальний ({inherited_txt})",
                                       callback_data=f"wmp:{watch['id']}:def")])
     rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch['id']}")])
-    text = (f"💰 <b>Мін. прибуток — {html.escape(watch['label'])}</b>: зараз <b>{current:.0f}€</b>"
-            + (" (свій)" if own else " (загальний)") + "\n\n"
+    text = (f"💰 <b>Мін. прибуток — {html.escape(watch['label'])}</b>: зараз <b>{profit_rule_label(rule)}</b>"
+            f" ({html.escape(profit_source_text(watch, source))})\n\n"
             "Бот пропонує оголошення цього товару, лише якщо після перепродажу (мінус доставка покупцю) "
             "лишається щонайменше стільки. Від цього залежить і «купувати до».\n\n"
-            "<i>Для дешевих товарів (консолі, навушники) варто менше, ніж для ноутбуків: 100€ на PS4 за 110€ "
-            "недосяжні. Інші товари лишаються з загальним порогом "
-            f"({general:.0f}€ — змінюється в «⚙️ Налаштування» → «💰 Мін. прибуток»).</i>")
+            "Свій поріг товару — найголовніший: він важливіший за поріг категорії й загальний. "
+            f"«↩️ Як категорія / загальний» — повернути спільне значення (зараз {html.escape(inherited_txt)}).\n\n"
+            "<i>Пороги для цілих категорій (у € чи %) — у «⚙️ Налаштування» → «💰 Мін. прибуток».</i>")
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 

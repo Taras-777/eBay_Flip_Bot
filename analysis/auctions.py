@@ -129,7 +129,6 @@ def scan_watch_auctions(w, now=None):
         return []   # ринок товару ще не проаналізовано — не з чим порівнювати
     _annotate_items(found, max_lookups=AUCTION_MAX_LOOKUPS, watch=w)
     found = _apply_item_filters(w, found)
-    min_profit = watch_min_profit(w)
     sold_only = get_sold_only(w["chat_id"])
     sold = get_sold_listings(w["id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))
     result = []
@@ -143,7 +142,7 @@ def scan_watch_auctions(w, now=None):
         if stat is None:
             continue
         sale = stat["sale_price"] or stat["median_price"]
-        buy_limit = max_buy_price(sale, min_profit)
+        buy_limit = max_buy_price(sale, watch_min_profit(w, sale))
         if it["total_price"] > buy_limit:
             continue
         if is_slow_seller(sold, RESALE_GROUP, it["spec_group"]):

@@ -350,7 +350,7 @@ def test_min_profit_setting_filters_inbox(monkeypatch, fees15):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("mprof:60")
     asyncio.run(handlers.min_profit_callback(upd, ctx))
-    assert db.get_min_profit(1) == 60 and "✅ 60€" in shown[-1][1] and "Збережено" in shown[-1][0]
+    assert db.get_min_profit(1) == 60 and "✅ 60€" in shown[-1][1] and "Загальний мін. прибуток" in shown[-1][0]
 
 
 def test_best_offer_does_not_make_loss_a_deal(fake_ebay):

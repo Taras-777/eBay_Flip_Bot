@@ -45,7 +45,9 @@ def _recommendation_text(n, r):
         sold = "🛒 продажі ще рахую (потрібно кілька перевірок)"
     else:
         sold = "🛒 за тиждень продажів не помічено"
-    sale_note = " (за продажами)" if r.get("sale_source") == "sold" else ""
+    notes = (["за продажами"] if r.get("sale_source") == "sold" else []) + \
+        ([f"прибуток від {r['min_profit']}€"] if r.get("min_profit") is not None else [])
+    sale_note = f" ({', '.join(notes)})" if notes else ""
     return (f"<b>{n}. {r['emoji']} {html.escape(r['name'])}</b>{spec}\n"
             f"💶 типова ціна ~{r['median']}€ · купувати до ~{r['buy_limit']}€{sale_note}\n"
             f"{deals}\n{sold}")
@@ -87,7 +89,8 @@ async def _render_discover(update, context, note=""):
         lines += [_recommendation_text(n, r) for n, r in enumerate(recs, start + 1)]
         lines.append("<i>Продажі — оголошення, які зникли з eBay задовго до кінця строку; ✅ — продаж "
                      "підтвердив eBay. «За продажами» — ціна рахується за ними, інакше — за оголошеннями. "
-                     "Натисни товар, щоб почати його відстежувати.</i>")
+                     "«Купувати до» і вигідні — з твоїм мін. прибутком (загальним або категорії: "
+                     "«⚙️ Налаштування» → «💰 Мін. прибуток»). Натисни товар, щоб почати його відстежувати.</i>")
         lines.append("<i>➕ — почати відстежувати; 🙈 — не цікавить: товар зникне зі списку "
                      "(і бот перестане витрачати на нього запити).</i>")
         rows += [[InlineKeyboardButton(f"➕ {r['name']}", callback_data=f"dadd:{i}"),

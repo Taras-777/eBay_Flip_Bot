@@ -30,6 +30,8 @@ from core.db import (
     get_market_stats,
     get_meta,
     get_min_profit,
+    min_profit_rules,
+    profit_needed,
     get_sold_only,
     get_markdown_candidates,
     list_watches,
@@ -92,8 +94,8 @@ def markdown_list(chat_id):
     """Знижки, які варто показати, — від найвигіднішої. Кожна з полями для картки."""
     rows = get_markdown_candidates(chat_id, get_drop_pct(chat_id), PRICE_DROP_MIN_DAYS,
                                    PRICE_DROP_FRESH_HOURS * 3600)
-    default_profit = get_min_profit(chat_id)
-    own_profit = {w["id"]: w["min_profit"] for w in list_watches(chat_id=chat_id) if w.get("min_profit") is not None}
+    rules = min_profit_rules(chat_id)   # свій у товару, категорії або загальний
+    default_rule = ("eur", get_min_profit(chat_id))
     sold_only = get_sold_only(chat_id)
     stats_by_watch, result = {}, []
     for r in rows:
@@ -109,7 +111,7 @@ def markdown_list(chat_id):
         if r["price"] > sale:
             continue   # навіть після знижки дорожче за ринок
         _, profit = estimate_resale_profit(sale, r["price"])
-        min_profit = own_profit.get(r["watch_id"], default_profit)   # свій у товару або загальний
+        min_profit = profit_needed(rules.get(r["watch_id"], default_rule), sale)
         r.update(sale_price=sale, profit=profit, buy_limit=max_buy_price(sale, min_profit),
                  drop_pct=(r["first_price"] - r["price"]) / r["first_price"] * 100,
                  # звідки ціна «продати» — для рядка «📊 Ціна продажу …» у картці

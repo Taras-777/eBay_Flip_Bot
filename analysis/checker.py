@@ -196,7 +196,7 @@ def check_listing(watch, text):
     deal = False
     if stat:
         sale = stat["sale_price"] or stat["median_price"]
-        limit = max_buy_price(sale, watch_min_profit(watch))
+        limit = max_buy_price(sale, watch_min_profit(watch, sale))
         effective = total  # вигідність — за ціною оголошення, торг лише бонус
         _, profit = estimate_resale_profit(sale, total)
         group = _group_label(stat["cond_group"], stat["spec_group"])

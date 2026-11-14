@@ -29,15 +29,18 @@ from core.db import (
     get_sold_only,
     discovery_gone_stats,
     get_discovery_sold,
+    get_category_profits,
     get_discovery_results,
+    get_min_profit,
     get_meta,
     list_watches,
+    profit_needed,
     save_discovery_result,
     set_meta,
     update_discovery_obs,
 )
 from ebay.ebay_api import browse_budget_left, search_active_items
-from analysis.market import dedupe_offers, estimate_resale_profit, filter_outliers, max_buy_price, percentile
+from analysis.market import auto_watch_group, dedupe_offers, estimate_resale_profit, filter_outliers, max_buy_price, percentile
 from analysis.sales import summarize
 
 DISCOVERY_INTERVAL_HOURS = 4     # ~135 товарів × 6 разів = ~800 запитів на добу (мінус приховані)
@@ -302,11 +305,34 @@ def analyze_candidate(emoji, name, query, floor):
         "deals_per_week": round(deal_share * new_per_day * 7, 1),
         "sold_per_day": sold_per_day, "new_per_day": new_per_day,
         "sale_source": sale_source,
+        # ціни оголошень — щоб «купувати до» і вигідні перерахувати під мін. прибуток кожного користувача
+        "raw_prices": [round(p, 2) for p in raw],
         "sold_week": len(sold),
         "sold_confirmed": sum(1 for r in sold if r["sold_check"] == "sold"),
         "sold_median": round(statistics.median(sold_prices)) if sold_prices else None,
         "sold_days": round(summarize(sold)["median_days"], 1) if sold and summarize(sold)["median_days"] is not None else None,
     }
+
+
+def candidate_group(result):
+    """Категорія, у яку потрапить товар після «➕» (для порогу мін. прибутку категорії)."""
+    return auto_watch_group({"query": result.get("query") or "", "label": result.get("name") or ""})
+
+
+def personalize(result, rule):
+    """Результат під мін. прибуток користувача (правило ("eur", 60) / ("pct", 12)): «купувати до»,
+    скільки вигідних і прибуток з кожної. Спільний аналіз рахується з порогом за замовчуванням."""
+    sale = result["sale"]
+    needed = profit_needed(rule, sale)
+    buy_limit = max_buy_price(sale, needed)
+    r = dict(result, buy_limit=round(buy_limit), min_profit=round(needed))
+    raw = result.get("raw_prices")
+    if raw:
+        deals = [p for p in raw if sale * 0.5 <= p <= buy_limit]
+        r["deals_now"] = len(deals)
+        r["deal_profit"] = round(statistics.mean(estimate_resale_profit(sale, p)[1] for p in deals)) if deals else 0
+        r["deals_per_week"] = round(len(deals) / len(raw) * (result.get("new_per_day") or 0) * 7, 1)
+    return r
 
 
 def score(result):
@@ -363,8 +389,11 @@ def top_recommendations(chat_id=None, limit=10):
     sold_only = chat_id is not None and get_sold_only(chat_id)
     names = {c[1] for c in CANDIDATES}
     results = [r for r in get_discovery_results()
-               if r["name"] not in tracked and r.get("deals_now")
-               and r["name"] in names and r["name"] not in hidden
+               if r["name"] not in tracked and r["name"] in names and r["name"] not in hidden
                and (not sold_only or r.get("sale_source") == "sold")]
+    if chat_id is not None:   # під мін. прибуток користувача: загальний або його категорії
+        general, rules = ("eur", get_min_profit(chat_id)), get_category_profits(chat_id)
+        results = [personalize(r, rules.get(candidate_group(r), general)) for r in results]
+    results = [r for r in results if r.get("deals_now")]
     results.sort(key=score, reverse=True)
     return results[:limit] if limit else results

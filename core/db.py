@@ -1635,20 +1635,118 @@ def set_min_profit(chat_id, value):
         reset_unnotified_seen([w["id"] for w in list_watches(chat_id=chat_id) if w.get("min_profit") is None])
 
 
-def watch_min_profit(watch):
-    """Мінімальний прибуток товару: свій (задано в картці товару) або загальний користувача."""
+# ---------- мінімальний прибуток: товар → категорія → загальний ----------
+# Правило — ("eur", 60) або ("pct", 12): у відсотках — від ціни продажу (12% від 868€ = ~104€).
+
+def parse_profit_rule(value):
+    """«60» → ("eur", 60.0); «12%» → ("pct", 12.0); порожнє чи зіпсоване → None."""
+    text = str(value or "").strip()
+    try:
+        if text.endswith("%"):
+            return ("pct", float(text[:-1]))
+        return ("eur", float(text)) if text else None
+    except ValueError:
+        return None
+
+
+def profit_rule_label(rule):
+    kind, value = rule
+    return f"{value:g}%" if kind == "pct" else f"{value:.0f}€"
+
+
+def profit_needed(rule, sale):
+    """Скільки € прибутку потрібно за правилом при ціні продажу sale."""
+    kind, value = rule
+    return value * float(sale or 0) / 100 if kind == "pct" else value
+
+
+def get_category_profit(chat_id, group):
+    """Правило мін. прибутку категорії («🎮 Консолі», власна папка «c<id>») або None — як загальний."""
+    return parse_profit_rule(get_meta(f"cat_profit:{chat_id}:{group}"))
+
+
+def get_category_profits(chat_id):
+    """{ключ категорії: правило} — лише категорії зі своїм значенням."""
+    prefix = f"cat_profit:{chat_id}:"
+    with get_conn() as conn:
+        rows = conn.execute("SELECT key, value FROM meta WHERE key LIKE ?", (prefix + "%",)).fetchall()
+    rules = {r["key"][len(prefix):]: parse_profit_rule(r["value"]) for r in rows}
+    return {k: v for k, v in rules.items() if v}
+
+
+def _category_watches(chat_id, group):
+    from analysis.market import watch_group   # тут: analysis.market сам імпортує db
+    custom = {f["id"] for f in list_folders(chat_id)}
+    return [w for w in list_watches(chat_id=chat_id) if w.get("min_profit") is None
+            and watch_group(w, custom) == group]
+
+
+def set_category_profit(chat_id, group, value):
+    """value — «60», «12%» або None (як загальний). Відкинуті раніше оголошення товарів цієї
+    категорії (без свого значення) оцінюються заново: поріг міг знизитись."""
+    key = f"cat_profit:{chat_id}:{group}"
+    with get_conn() as conn:
+        if value is None:
+            conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+        else:
+            conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, str(value)))
+    reset_unnotified_seen([w["id"] for w in _category_watches(chat_id, group)])
+
+
+_GROUP_CACHE: dict = {}   # (id товару, папка, запит, чат) → (час, категорія): автовизначення читає оголошення
+GROUP_CACHE_SECONDS = 600
+
+
+def _cached_group(watch, custom_ids=None):
+    from analysis.market import watch_group   # тут: analysis.market сам імпортує db
+    key = (watch.get("id"), watch.get("folder"), watch.get("query"), watch.get("chat_id"))
+    hit = _GROUP_CACHE.get(key)
+    if hit and time.time() - hit[0] < GROUP_CACHE_SECONDS and key[0] is not None:
+        return hit[1]
+    group = watch_group(watch, custom_ids)
+    _GROUP_CACHE[key] = (time.time(), group)
+    return group
+
+
+def min_profit_rule(watch, category_rules=None, custom_ids=None):
+    """(правило, звідки): свій у товару («own») → категорії («category») → загальний («general»).
+    category_rules / custom_ids — заздалегідь прочитані (для багатьох товарів одразу)."""
     own = watch.get("min_profit")
-    return float(own) if own is not None else get_min_profit(watch["chat_id"])
+    if own is not None:
+        return ("eur", float(own)), "own"
+    rules = category_rules if category_rules is not None else get_category_profits(watch["chat_id"])
+    if rules:
+        rule = rules.get(_cached_group(watch, custom_ids))
+        if rule:
+            return rule, "category"
+    return ("eur", get_min_profit(watch["chat_id"])), "general"
+
+
+def watch_min_profit(watch, sale=None):
+    """Мінімальний прибуток товару в € при ціні продажу sale (потрібна для правила у %)."""
+    rule, _ = min_profit_rule(watch)
+    if rule[0] == "pct" and sale is None:
+        return get_min_profit(watch["chat_id"])   # ціни продажу ще немає — загальний поріг
+    return profit_needed(rule, sale)
+
+
+def min_profit_rules(chat_id=None):
+    """{id товару: правило} для всіх активних товарів (користувача) — для фільтрів у SQL."""
+    result, cache = {}, {}
+    for w in list_watches(chat_id=chat_id):
+        cid = w["chat_id"]
+        if cid not in cache:
+            cache[cid] = (get_category_profits(cid), {f["id"] for f in list_folders(cid)})
+        result[w["id"]] = min_profit_rule(w, *cache[cid])[0]
+    return result
 
 
 def set_watch_min_profit(watch, value):
-    """value=None — як загальний. Якщо поріг знизився — відкинуті раніше оголошення оцінюються заново."""
-    old = watch_min_profit(watch)
+    """value=None — як категорія / загальний. Відкинуті раніше оголошення оцінюються заново."""
     with get_conn() as conn:
         conn.execute("UPDATE watches SET min_profit = ? WHERE id = ?", (value, watch["id"]))
-    new = float(value) if value is not None else get_min_profit(watch["chat_id"])
-    if new < old:
-        reset_unnotified_seen([watch["id"]])
+    reset_unnotified_seen([watch["id"]])
 
 
 def reset_unnotified_seen(watch_ids):
@@ -1661,13 +1759,14 @@ def reset_unnotified_seen(watch_ids):
                      f"({','.join('?' * len(ids))})", ids)
 
 
-# Мінімальний прибуток у SQL: свій у товару, інакше загальний користувача, інакше за замовчуванням
-MIN_PROFIT_SQL = ("COALESCE(w.min_profit, (SELECT CAST(m.value AS REAL) FROM meta m "
-                  "WHERE m.key = 'min_profit:' || w.chat_id), {default})")
-
-
-def _min_profit_sql():
-    return MIN_PROFIT_SQL.format(default=float(settings.MIN_PROFIT_EUR))
+def _min_profit_sql(conn, chat_id=None):
+    """Мін. прибуток у SQL: функція mp(id товару, ціна продажу) за правилами товару / категорії /
+    загальним (правило у % залежить від ціни продажу, тож простого COALESCE замало)."""
+    rules = min_profit_rules(chat_id)
+    default = ("eur", float(settings.MIN_PROFIT_EUR))
+    conn.create_function("mp", 2, lambda wid, sale: profit_needed(rules.get(wid, default), sale),
+                         deterministic=True)
+    return "mp(w.id, d.median_price)"
 
 
 def _profit_sql():
@@ -1680,10 +1779,10 @@ def get_inbox_deals(chat_id, limit=5, offset=0):
     """Актуальні вигідні пропозиції користувача (ще без рішення, з прибутком не нижче
     його мінімального), від найбільшого прибутку. Повертає (сторінка, загальна кількість)."""
     since = int(time.time()) - DEALS_INBOX_DAYS * 86400
-    where = ("w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ? AND "
-             + _profit_sql() + " >= " + _min_profit_sql() + " AND " + SOLD_ONLY_SQL)
     params = (chat_id, since)
     with get_conn() as conn:
+        where = ("w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.created_at >= ? AND "
+                 + _profit_sql() + " >= " + _min_profit_sql(conn, chat_id) + " AND " + SOLD_ONLY_SQL)
         rows = conn.execute(
             "SELECT d.*, w.label AS watch_label FROM deals d JOIN watches w ON w.id = d.watch_id WHERE "
             + where + " ORDER BY " + _profit_sql() + " DESC, d.created_at DESC LIMIT ? OFFSET ?",
@@ -1701,7 +1800,8 @@ def count_unseen_deals(chat_id):
         return conn.execute(
             """SELECT COUNT(*) AS c FROM deals d JOIN watches w ON w.id = d.watch_id
                WHERE w.chat_id = ? AND w.active = 1 AND d.status = 'new' AND d.seen_at IS NULL
-               AND d.created_at >= ? AND """ + _profit_sql() + " >= " + _min_profit_sql() + " AND " + SOLD_ONLY_SQL,
+               AND d.created_at >= ? AND """ + _profit_sql() + " >= " + _min_profit_sql(conn, chat_id)
+            + " AND " + SOLD_ONLY_SQL,
             (chat_id, since),
         ).fetchone()["c"]
 
@@ -1711,19 +1811,18 @@ def get_deals_to_recheck(limit, stale_seconds, deal_ids=None):
     (лише ті, що проходять мін. прибуток свого користувача). Найдавніше перевірені — першими.
     deal_ids — обмежитись цими (сторінка, яку користувач зараз відкриває)."""
     now = int(time.time())
-    min_profit = _min_profit_sql()
-    sql = ("SELECT d.id, d.item_id FROM deals d JOIN watches w ON w.id = d.watch_id "
-           "WHERE w.active = 1 AND d.status = 'new' AND d.created_at >= ? "
-           "AND COALESCE(d.checked_at, d.created_at) < ? AND " + _profit_sql() + " >= " + min_profit
-           + " AND " + SOLD_ONLY_SQL)
-    params = [now - DEALS_INBOX_DAYS * 86400, now - stale_seconds]
-    if deal_ids is not None:
-        if not deal_ids:
-            return []
-        sql += " AND d.id IN (" + ",".join("?" * len(deal_ids)) + ")"
-        params += list(deal_ids)
-    sql += " ORDER BY COALESCE(d.checked_at, d.created_at) LIMIT ?"
+    if deal_ids is not None and not deal_ids:
+        return []
     with get_conn() as conn:
+        sql = ("SELECT d.id, d.item_id FROM deals d JOIN watches w ON w.id = d.watch_id "
+               "WHERE w.active = 1 AND d.status = 'new' AND d.created_at >= ? "
+               "AND COALESCE(d.checked_at, d.created_at) < ? AND " + _profit_sql() + " >= " + _min_profit_sql(conn)
+               + " AND " + SOLD_ONLY_SQL)
+        params = [now - DEALS_INBOX_DAYS * 86400, now - stale_seconds]
+        if deal_ids is not None:
+            sql += " AND d.id IN (" + ",".join("?" * len(deal_ids)) + ")"
+            params += list(deal_ids)
+        sql += " ORDER BY COALESCE(d.checked_at, d.created_at) LIMIT ?"
         return [dict(r) for r in conn.execute(sql, params + [limit]).fetchall()]
 
 

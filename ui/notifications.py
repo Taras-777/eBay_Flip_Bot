@@ -9,7 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from core.settings import log
 from analysis.textparse import _group_label, plural
 from analysis.market import estimate_resale_profit, max_buy_price
-from core.db import count_unseen_deals
+from core.db import count_unseen_deals, watch_min_profit
 
 
 DEAL_RENOTIFY_MINUTES = 60   # поки попередні не переглянуті — нове сповіщення не частіше
@@ -84,7 +84,7 @@ async def _notify_median_ready(app, w, new_stats):
     lines = [f"📊 Ринок для «{w['label']}» проаналізовано — тепер шукаю вигідні пропозиції!"]
     for s in new_stats:
         sale_price = s["sale_price"] or s["median_price"]
-        buy_limit = max_buy_price(sale_price)
+        buy_limit = max_buy_price(sale_price, watch_min_profit(w, sale_price))
         lines.append(
             f"• {_group_label(s['cond_group'], s['spec_group'])}: продати ~{sale_price:.0f}€, "
             f"купувати до ~{buy_limit:.0f}€ ({plural(s['sample_size'], 'оголошення', 'оголошення', 'оголошень')})"

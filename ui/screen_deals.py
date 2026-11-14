@@ -8,7 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from core.settings import LAPTOP_SALES_WINDOW_DAYS, MIN_PROFIT_CHOICES, SALES_WINDOW_DAYS
+from core.settings import LAPTOP_SALES_WINDOW_DAYS, SALES_WINDOW_DAYS
 from analysis.learning import hide_item, learned_words_note, reject_and_learn
 from core.db import (
     pickup_only_items,
@@ -18,8 +18,8 @@ from core.db import (
     mark_deals_seen,
     clear_inbox_deals,
     inbox_deal_ids,
+    get_category_profits,
     get_min_profit,
-    set_min_profit,
     get_sold_listings,
     get_watch,
     set_deal_status,
@@ -33,37 +33,6 @@ from analysis.deal_reprice import basis_line, reprice_deals, specs_line
 from analysis.laptops import laptop_warnings
 from analysis.textparse import PICKUP_NOTE, is_bundle
 from ui.undo import record as undo_record, short
-
-
-# ============================================================
-# «⚙️ МІНІМАЛЬНИЙ ПРИБУТОК» — з якого прибутку пропозиція вважається вигідною
-# ============================================================
-
-@require_access
-async def min_profit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """mprof:show — екран вибору; mprof:<сума> — зберегти."""
-    await _ack_callback(update)
-    chat_id = update.effective_chat.id
-    choice = update.callback_query.data.split(":")[1]
-    note = ""
-    if choice != "show":
-        set_min_profit(chat_id, float(choice))
-        note = f"✅ Збережено: пропозиції з прибутком від <b>{float(choice):.0f}€</b>\n\n"
-    current = get_min_profit(chat_id)
-    buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}€", callback_data=f"mprof:{v}")
-               for v in MIN_PROFIT_CHOICES]
-    rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
-    rows.append([InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")])
-    await show_panel(
-        update, context,
-        f"{note}💰 <b>Мінімальний прибуток</b>: зараз <b>{current:.0f}€</b>\n\n"
-        "Бот пропонує лише оголошення, на яких після перепродажу (мінус доставка покупцю) "
-        "лишається щонайменше стільки. Від цього залежить і «купувати до» в картках товарів.\n"
-        "Це загальний поріг; для окремого товару можна задати свій — у картці товару «💰 Мін. прибуток».\n\n"
-        "Прибуток рахується за ціною оголошення — можливість торгуватися (🎯) лише бонус. "
-        "Зміна одразу прибирає зі «🔥 Вигідні пропозиції» все, що нижче нового порогу.",
-        reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML,
-    )
 
 
 # ============================================================
@@ -129,7 +98,8 @@ async def _render_deals(update, context, page=0, note=""):
     if not deals and page > 0:
         page = max(0, (total - 1) // DEALS_PER_PAGE)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
-    lines = [f"🔥 <b>Вигідні пропозиції</b> ({total}) · прибуток від {get_min_profit(chat_id):.0f}€, "
+    own_rules = " (у деяких категоріях / товарах — свій)" if get_category_profits(chat_id) else ""
+    lines = [f"🔥 <b>Вигідні пропозиції</b> ({total}) · прибуток від {get_min_profit(chat_id):.0f}€{own_rules}, "
              "найвигідніші вгорі. Продані й зняті оголошення бот прибирає сам."]
     if note:
         lines.append(note)
