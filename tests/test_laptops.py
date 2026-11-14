@@ -628,3 +628,38 @@ def test_mac_pro_max_from_core_counts():
     assert laptop_spec('MacBook Pro 14" M4 10-Core 16GB') == 'M4 · 14" · 16GB'   # базовий чип — без змін
     assert laptop_spec("MacBook Air 13 M2 8-Core 8GB") == 'M2 · 13" · 8GB'
     assert laptop_spec('MacBook Pro M2 16" 16GB') == 'M2 Pro/Max ? · 16" · 16GB'   # ядер не названо
+
+
+def test_size_after_comma_is_not_a_decimal():
+    from analysis.laptops import laptop_spec
+    from analysis.textparse import extract_spec_key
+    assert laptop_spec("Apple Macbook pro m4 2024, 1To SSD,16GB 14 Inch") == 'M4 · 14" · 16GB'   # «,16GB» — не дріб
+    assert extract_spec_key("PS4 Heimkonsole 408,5GB") == "500GB"                                 # «408,5GB» — дріб
+
+
+def test_export_2026_11_14_cases():
+    """Випадки з «🛠 Нерозпізнані» 14.11: характеристики іншими мовами, зіпсовані літери, процесор номером."""
+    from analysis.laptops import laptop_spec
+    from analysis.textparse import extract_cpu_token, fix_mojibake, spec_key_from_aspects
+    assert fix_mojibake("bildschirmgrã¶ãe") == "bildschirmgröße" and fix_mojibake("capacitã© du disque dur") == \
+        "capacité du disque dur" and fix_mojibake("Größe") == "Größe"
+    assert laptop_spec("MacBook pro N14 M4 MX2E3D/A 12-Core CPU, 16-Core GPU 24Gb, 512Gb SSD",
+                       {"arbeitsspeichergrã¶ãe": "24Gb", "bildschirmgrã¶ãe": "14,2"}) == 'M4 Pro · 14" · 24GB'
+    assert laptop_spec("MSI Katana 17 B13VFK", {"memoria ram": "16 GB", "processore": "Intel Core i7 13a generazione",
+                                                "gpu": "NVIDIA GeForce RTX 4060"}) == "RTX 4060 · i7 13 gen · 16GB"
+    assert laptop_spec("HP Victus 15-fb0160nf Intel Core i5", {"processeur graphique": "NVIDIA GeForce RTX 4060",
+                                                               "taille de la ram": "16 Go",
+                                                               "processeur": "Intel Core i5-12500H"}) == \
+        "RTX 4060 · i5 12 gen · 16GB"
+    assert laptop_spec("MSI Katana A15 Ryzen 8845HS 16GB/512G", {"grafikprozessor": "RTX 4060"}) == \
+        "RTX 4060 · Ryzen 7 8000 · 16GB"
+    assert extract_cpu_token("8845HS") == "RYZEN7-8845HS" and extract_cpu_token("AMD 5600H") == "RYZEN5-5600H"
+    assert extract_cpu_token("290HX Plus") == "COREULTRA9-290HX" and extract_cpu_token("Ultra 258V") == "COREULTRA7-258V"
+    assert extract_cpu_token("Intel Core i5 Netzteil 230V") == "I5"                          # напруга, не процесор
+    assert extract_cpu_token("intel core 5-210H") == "CORE5-210H"
+    assert laptop_spec("HP Victus 15 Laptop, i5 12. Gen16GB RAM", {"prozessor": "Intel Core i5 10. Gen"}) == \
+        "GPU ? · i5 12 gen · 16GB"                                                         # «Gen16GB» злиплося
+    assert laptop_spec("HP Victus 15", {"prozessor": "Intel Core i5 10. Gen", "prozessor (aus beschreibung)": "i5-12450H",
+                                         "grafikprozessor": "RTX 3050"}) == "RTX 3050 · i5 12 gen"   # точна модель
+    assert laptop_spec("MacBook Pro M3 14 zoll, 18ram, 1tb") == 'M3 Pro · 14" · 18GB'
+    assert spec_key_from_aspects("PS4 Slim", {"speicherkapazitã¤t": "500 GB"}) == "Slim · 500GB"

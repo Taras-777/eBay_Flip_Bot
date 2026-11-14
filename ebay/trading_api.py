@@ -30,6 +30,7 @@ from core.db import (
 )
 from ebay.ebay_api import _request_with_retries, trading_calls_today
 from ebay.ebay_user import UserAuthError, _token_cache, get_user_access_token, is_connected
+from analysis.textparse import fix_mojibake
 
 TRADING_URL = "https://api.ebay.com/ws/api.dll"
 SITE_ID_DE = "77"
@@ -142,7 +143,7 @@ def _item_specifics(item):
         name = _text(pair, "e:Name")
         values = [v.text.strip() for v in pair.findall("e:Value", NS) if v.text and v.text.strip()]
         if name and values:
-            result[name.lower()] = ", ".join(values)
+            result[fix_mojibake(name).lower()] = fix_mojibake(", ".join(values))
     return result
 
 
@@ -234,6 +235,31 @@ def fetch_item_details(item_id):
     )
     record_api_call("trading:specs")
     return _post_get_item(body, parse=parse_item_details)
+
+
+def parse_description(xml_text):
+    """GetItem → текст опису (HTML прибрано) або None (оголошення немає / опису немає)."""
+    from analysis.laptops import _description_text   # без циклу імпортів
+    try:
+        item = safe_fromstring(xml_text).find("e:Item", NS)
+    except ET.ParseError:
+        return None
+    description = _text(item, "e:Description") if item is not None else None
+    return _description_text(description).strip() or None if description else None
+
+
+def fetch_description(item_id):
+    """Лише опис оголошення (для файлу «📤 Вивантажити» — бот його не зберігає)."""
+    body = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+        f"<ItemID>{legacy_item_id(item_id)}</ItemID>"
+        "<OutputSelector>Item.ItemID</OutputSelector>"
+        "<OutputSelector>Item.Description</OutputSelector>"
+        "</GetItemRequest>"
+    )
+    record_api_call("trading:export")
+    return _post_get_item(body, parse=parse_description)
 
 
 def fetch_buy_it_now(item_id):

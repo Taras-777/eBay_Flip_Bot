@@ -35,6 +35,7 @@ from core.settings import (
     log,
 )
 from analysis.textparse import (
+    fix_mojibake,
     COMPAT_ASPECTS,
     CURRENCY_TO_EUR,
     GENERIC_ASPECTS,
@@ -384,7 +385,7 @@ def _browse_item_aspects(item_id):
     data = resp.json()
     _save_availability(item_id, data)
     aspects = {
-        (a.get("name") or "").strip().lower(): a.get("value") or ""
+        fix_mojibake((a.get("name") or "").strip()).lower(): fix_mojibake(a.get("value") or "")
         for a in data.get("localizedAspects") or []
     }
     # Відеокарта, процесор, пам'ять, які продавець написав лише в описі (опис — у цій самій відповіді)

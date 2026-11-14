@@ -106,7 +106,7 @@ def market_group(item):
 # додатково групується за цим "spec_key", і порівняння з медіаною
 # відбувається лише в межах однакової конфігурації.
 # «408,5GB» → 408GB, «1,00 TB» → 1TB: дробову частину відкидаємо (раніше бралось «5GB», «00TB»)
-SPEC_SIZE_PATTERN = re.compile(r"(?<![\d.,])(\d+)(?:[.,]\d+)?\s?(GB|TB)\b", re.IGNORECASE)
+SPEC_SIZE_PATTERN = re.compile(r"(?<!\d)(?<!\d[.,])(\d+)(?:[.,]\d+)?\s?(GB|TB)\b", re.IGNORECASE)
 
 
 SEARCH_TOKEN_PATTERN = re.compile(r"[^\W_]+", re.UNICODE)
@@ -634,6 +634,55 @@ def _title_matches_search(title: str, query: str, exclude_terms: str) -> bool:
     return not title_tokens.intersection(excluded_tokens)
 
 
+# eBay іноді віддає характеристики, зіпсовані подвійним кодуванням: «bildschirmgrã¶ãe» замість
+# «bildschirmgröße», «capacitã© du disque dur» замість «capacité…». Повертаємо нормальні літери.
+_MOJIBAKE = (("ã¶", "ö"), ("ã¤", "ä"), ("ã¼", "ü"), ("ã©", "é"), ("ã¨", "è"), ("ã§", "ç"), ("ã´", "ô"),
+             ("ã®", "î"), ("ã¢", "â"), ("ã\x9f", "ß"), ("ã ", "à"))
+
+
+def fix_mojibake(text):
+    """«bildschirmgrã¶ãe» → «bildschirmgröße», «Grã¶ÃŸe» → «Größe»; звичайний текст — без змін."""
+    if not text or ("ã" not in text and "Ã" not in text):
+        return text
+    try:   # ще не переведене в нижній регістр — розкодовується точно
+        fixed = text.encode("cp1252").decode("utf-8")
+        if "Ã" not in fixed:
+            return fixed
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
+    low = text
+    for bad, good in _MOJIBAKE:
+        low = low.replace(bad, good).replace(bad.upper(), good.upper())
+    return re.sub(r"(?<=[öäü])ã(?=e)", "ß", low)   # «ß» губить другий байт: «grö» + «ã» + «e»
+
+
+# Особисте в описі (для файлу розробнику): email, телефон, посилання, @нік — вирізаємо
+_PERSONAL = [
+    (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "[email]"),
+    (re.compile(r"(?:https?://|www\.)\S+", re.I), "[посилання]"),
+    (re.compile(r"(?<![\w/])(?:\+|00)?\d[\d\s/().-]{7,}\d(?![\w/])"), "[телефон]"),
+    (re.compile(r"(?<!\w)@\w{3,}"), "[нік]"),
+]
+
+
+def scrub_personal(text):
+    """Опис оголошення без email, телефонів, посилань і нікнеймів."""
+    for pattern, repl in _PERSONAL:
+        text = pattern.sub(repl, text or "")
+    return text
+
+
+def _ryzen_tier(digit):
+    """Друга цифра номера Ryzen — рівень: 8845 → 7, 8945 → 9, 5600 → 5, 7335 → 3."""
+    return {"3": "3", "4": "5", "5": "5", "6": "5", "7": "7", "8": "7", "9": "9"}.get(digit)
+
+
+def _ultra_tier(number):
+    """Core Ultra Series 2 за номером: 285/290 → 9, 255–268 → 7, 225–245 → 5."""
+    n = int(number)
+    return "9" if n >= 275 else "7" if n >= 255 else "5"
+
+
 def extract_cpu_token(title: str):
     """
     Шукає в назві лота процесор — Apple Silicon, Intel Core чи AMD
@@ -656,8 +705,8 @@ def extract_cpu_token(title: str):
     if m:
         return f"RYZENAI{m.group(1)}-{m.group(2)}"
 
-    # Intel Core 5/7 без «Ultra» (Series 1/2, 2024+): Core 7 150U, Core 5 210H
-    m = re.search(r"\bCore\s+([3579])\s+(\d{3}[A-Za-z]{0,2})\b", title, re.IGNORECASE)
+    # Intel Core 5/7 без «Ultra» (Series 1/2, 2024+): Core 7 150U, Core 5 210H, «core 5-210H»
+    m = re.search(r"\bCore\s+([3579])[\s-]+(\d{3}[A-Za-z]{0,2})\b", title, re.IGNORECASE)
     if m:
         return f"CORE{m.group(1)}-{m.group(2).upper()}"
 
@@ -677,6 +726,15 @@ def extract_cpu_token(title: str):
     if m:
         return f"RYZEN{m.group(1)}-{m.group(2).upper()}"
 
+    # Лише номер, без рівня: «Ryzen 8845HS», «AMD 7840HS», «8845HS» (HS буває лише в AMD) → Ryzen 7 8000
+    m = re.search(r"\b(?:(?:amd\s+)?ryzen|amd)\s+(\d)(\d)(\d{2})(HX|HS|H|U)?\b|\b(\d)(\d)(\d{2})(HS)\b",
+                  title, re.IGNORECASE)
+    if m:
+        a, b, c, suffix = (m.group(1), m.group(2), m.group(3), m.group(4)) if m.group(1) else m.groups()[4:]
+        tier = _ryzen_tier(b)
+        if tier and a in "3456789":
+            return f"RYZEN{tier}-{a}{b}{c}{(suffix or '').upper()}"
+
     # Без номера моделі — лише рівень (i7, Ryzen 5) як запасний варіант
     m = re.search(r"\bi([3579])\b", title, re.IGNORECASE)
     if m:
@@ -684,6 +742,15 @@ def extract_cpu_token(title: str):
     m = re.search(r"\bRyzen\s?([3579])\b", title, re.IGNORECASE)
     if m:
         return f"RYZEN{m.group(1)}"
+
+    # Core Ultra Series 2 лише номером: «290HX Plus», «Intel 275HX», «Ultra 258V» → Core Ultra 9 / 7
+    # (останнім: «230V» у назві з «i5» — це напруга, а не процесор)
+    m = re.search(r"\b(2[2-9]\d)(HX|H|V)\b", title, re.IGNORECASE)
+    if m:
+        suffix = m.group(2).upper()
+        if suffix == "HX" or (suffix == "H" and re.search(r"intel|core|ultra|plus", title, re.I)) \
+                or (suffix == "V" and re.search(r"ultra", title, re.I)):
+            return f"COREULTRA{_ultra_tier(m.group(1))}-{m.group(1)}{suffix}"
 
     return None
 
@@ -696,13 +763,19 @@ STORAGE_ASPECTS = {
 }
 
 
-RAM_ASPECTS = {"arbeitsspeichergröße", "arbeitsspeicher", "ram size", "ram"}
+RAM_ASPECTS = {"arbeitsspeichergröße", "arbeitsspeicher", "ram size", "ram",
+               # французькою, італійською, іспанською — eBay часто показує характеристики мовою продавця
+               "taille de la ram", "mémoire vive", "capacité de la mémoire vive", "memoria ram", "ram installata",
+               "tamaño de la memoria ram", "memoria ram instalada"}
 
 
-LAPTOP_STORAGE_ASPECTS = {"ssd-speicherkapazität", "ssd capacity", "festplattenkapazität", "hard drive capacity"}
+LAPTOP_STORAGE_ASPECTS = {"ssd-speicherkapazität", "ssd capacity", "festplattenkapazität", "hard drive capacity",
+                          "capacité du lecteur ssd", "capacité du disque dur", "capacità ssd", "capacità hard drive",
+                          "capacidad del ssd", "capacidad del disco duro"}
 
 
-CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type"}
+CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type",
+               "processeur", "processore", "procesador", "modèle de processeur", "modello processore"}
 
 
 # Об'єм пам'яті iPhone. Оперативна (6GB, 8GB) у моделі одна й та сама — ціну не змінює
@@ -845,6 +918,7 @@ def spec_key_from_aspects(title, aspects):
     # RAM беремо з характеристик лише в ноутбуків (є характеристика SSD/диска).
     # У телефонів "Arbeitsspeicher: 6 GB" розбило б одну модель на групи
     # "128GB" і "128GB+6GB" залежно від того, звідки взяли пам'ять.
+    aspects = {fix_mojibake(name): fix_mojibake(value) for name, value in (aspects or {}).items()}
     laptop_like = any(name in LAPTOP_STORAGE_ASPECTS for name in aspects)
     for name, value in aspects.items():
         if name in STORAGE_ASPECTS or (name in RAM_ASPECTS and laptop_like):

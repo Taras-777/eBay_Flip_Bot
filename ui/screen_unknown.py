@@ -125,7 +125,7 @@ async def _render(update, context, watch, page=0, note=""):
 async def _send_export(update, context):
     """unkexp:0 — усі нерозпізнані оголошення одним .txt файлом (щоб надіслати розробнику на аналіз)."""
     chat_id = update.effective_chat.id
-    text, total = await run_with_progress(update, context, "📤 ⏳ Збираю нерозпізнані оголошення у файл…",
+    text, total = await run_with_progress(update, context, "📤 ⏳ Збираю нерозпізнані оголошення й описи з eBay… (до хвилини)",
                                           export_report, chat_id)
     if total:
         name = f"nerozpiznani_{time.strftime('%Y-%m-%d')}.txt"

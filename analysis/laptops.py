@@ -17,7 +17,7 @@
 import html
 import re
 
-from analysis.textparse import SPEC_SIZE_PATTERN, _search_tokens, extract_cpu_token
+from analysis.textparse import SPEC_SIZE_PATTERN, _search_tokens, extract_cpu_token, fix_mojibake
 
 SEP = " · "
 UNKNOWN_GPU = "GPU ?"
@@ -39,13 +39,24 @@ IGPU_LINE_TERMS = {
     "chromebook", "xps", "thinkbook", "inspiron", "vostro", "ideapad", "aspire",
 }
 
+# Назви характеристик німецькою й англійською, а також французькою, італійською та іспанською —
+# eBay показує характеристики мовою, якою продавець їх заповнив
 GPU_ASPECTS = {"grafikprozessor", "gpu", "grafikkarte", "chipsatz/gpu-modell", "graphics processing type",
-               "grafikverarbeitungstyp", "gpu-modell", "grafikchip"}
-RAM_ASPECTS = {"arbeitsspeichergröße", "arbeitsspeicher", "ram size", "ram", "ram-größe"}
+               "grafikverarbeitungstyp", "gpu-modell", "grafikchip",
+               "processeur graphique", "carte graphique", "processore grafico", "scheda video",
+               "procesador gráfico", "tarjeta gráfica"}
+RAM_ASPECTS = {"arbeitsspeichergröße", "arbeitsspeicher", "ram size", "ram", "ram-größe",
+               "taille de la ram", "mémoire vive", "capacité de la mémoire vive", "memoria ram", "ram installata",
+               "tamaño de la memoria ram", "memoria ram instalada"}
 SSD_ASPECTS = {"ssd-speicherkapazität", "ssd capacity", "festplattenkapazität", "hard drive capacity",
-               "speicherkapazität", "storage capacity"}
-CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type"}
-SCREEN_ASPECTS = {"bildschirmgröße", "bildschirmdiagonale", "displaygröße", "screen size"}
+               "speicherkapazität", "storage capacity",
+               "capacité du lecteur ssd", "capacité du disque dur", "capacità ssd", "capacità hard drive",
+               "capacidad del ssd", "capacidad del disco duro"}
+CPU_ASPECTS = {"prozessor", "processor", "prozessortyp", "processor type",
+               "processeur", "processore", "procesador", "modèle de processeur", "modello processore"}
+SCREEN_ASPECTS = {"bildschirmgröße", "bildschirmdiagonale", "displaygröße", "screen size",
+                  "taille d'écran", "taille de l'écran", "dimensioni schermo", "tamaño de pantalla",
+                  "diagonale de l'écran"}
 LAYOUT_ASPECTS = {"tastaturlayout", "tastatursprache", "keyboard language", "keyboard layout"}
 
 _GPU_PATTERNS = [
@@ -68,12 +79,15 @@ _IGPU_PATTERN = re.compile(
 _VRAM_TAGGED = re.compile(r"\b\d+\s?gb\s*(?:gddr\d\w*|vram)\b", re.I)
 _VRAM_AFTER_GPU = re.compile(r"((?:rtx|gtx|rx|mx)\s*-?\s*a?\d{3,4}\s*(?:ti|m|s|xt)?\s*(?:mit\s*|with\s*)?)(\d+)\s?gb\b",
                              re.I)
-_RAM_EXPLICIT = re.compile(r"\b(\d+)\s?gb\s*(?:ram|ddr\d\w*|lpddr\d\w*|arbeitsspeicher|unified|memory)\b", re.I)
+_RAM_EXPLICIT = re.compile(r"\b(\d+)\s?gb\s*(?:ram|ddr\d\w*|lpddr\d\w*|arbeitsspeicher|unified|memory)\b"
+                          r"|\b(\d{1,3})\s?(?:ram|go\s?ram)\b", re.I)   # «18ram», «18 RAM» без «GB»
 _SCREEN_PATTERNS = [
     re.compile(r"\b(1[1-8])(?:[.,]\d)?\s*(?:\"|”|″|''|zoll|inch|-zoll|-inch|in\b)", re.I),
     re.compile(r"\bmacbook\s+(?:pro|air)\s+(1[3-6])\b", re.I),
 ]
-_GEN_PATTERN = re.compile(r"\b(\d{1,2})\s*(?:th|nd|rd|st|\.)?\s*(?:gen\b|generation|generación)", re.I)
+# «12th Gen», «12. Gen», «12. Gen16GB» (злиплося з RAM), «13a generazione», «12ª generación»
+_GEN_PATTERN = re.compile(r"\b(\d{1,2})\s*(?:th|nd|rd|st|\.|a|ª|e|ème)?\s*(?:gen(?=\b|\d)|generation|generación|generazione|génération)",
+                          re.I)
 
 
 def is_laptop(title="", category_names=(), query=""):
@@ -108,8 +122,8 @@ def _plain(text):
 
 def _aspect(aspects, names):
     for name, value in (aspects or {}).items():
-        if name in names and str(value or "").strip():
-            return _plain(str(value))
+        if (name in names or fix_mojibake(name) in names) and str(value or "").strip():
+            return _plain(fix_mojibake(str(value)))
     return ""
 
 
@@ -224,7 +238,7 @@ def _sizes(text):
         # 2/4/6 ГБ — завжди відеопам'ять; 8/12/16 — лише якщо RAM указана окремо
         if vram <= 6 or (vram <= 16 and others):
             clean = clean[:m.start(2)] + " " + clean[m.end():]
-    explicit = [int(n) for n in _RAM_EXPLICIT.findall(clean)]
+    explicit = [int(a or b) for a, b in _RAM_EXPLICIT.findall(clean)]
     small, big = [], []
     for num, unit in SPEC_SIZE_PATTERN.findall(clean):
         gb = int(num) * (1024 if unit.upper() == "TB" else 1)
@@ -292,7 +306,9 @@ def _screen(title, aspects):
             m = pattern.search(text or "")
             if m:
                 return f'{m.group(1)}"'
-    return None
+    # «Bildschirmgröße: 14,2» — у полі про екран число й без «Zoll»
+    m = re.fullmatch(r"\s*(1[1-8])(?:[.,]\d)?\s*", _aspect(aspects, SCREEN_ASPECTS) or "")
+    return f'{m.group(1)}"' if m else None
 
 
 def _best_cpu_token(*tokens):
@@ -383,8 +399,12 @@ def _cpu_choice(title, aspects):
     found = [f for f in found if f[0]]
     if not found:
         return None, None
+    # Точний номер моделі («i5-12450H» в описі) — надійніший за «10. Gen» у характеристиках
+    texts = {"назва": title, "характеристики": aspect_cpu, "опис": desc_cpu}
+    exact = [f for f in found if re.search(r"-\d", extract_cpu_token(texts.get(f[1], "")) or "")
+             and _FULL_CPU.search(f[0])]
     full = [f for f in found if _FULL_CPU.search(f[0])]
-    return (full or found)[0]
+    return (exact or full or found)[0]
 
 
 # SSD у Mac буває лише таких об'ємів; «500 GB» / «1000 GB» у назві — це 512GB / 1TB
@@ -448,6 +468,8 @@ def laptop_spec(title, aspects=None, query=""):
         screen = _screen(title, aspects)
         plain_chip = re.fullmatch(r"M\d+", token) is not None
         tier = _mac_core_tier(int(token[1:]), title, aspects)[0] if plain_chip else None
+        if not tier and token == "M3" and ram == 18:
+            tier = "Pro"   # 18GB буває лише в M3 Pro (звичайний M3 — 8/16/24GB)
         if tier:
             chip, plain_chip = f"{token} {tier}", False   # «M4 14-Core/20-Core» → M4 Pro
         macbook_pro = bool(re.search(r"macbook\s*pro", f"{title} {query}", re.I)) and \
@@ -496,7 +518,7 @@ def class_sources(title, aspects=None, query=""):
                              (extract_cpu_token(_aspect(aspects, CPU_ASPECTS)), "характеристики"),
                              (extract_cpu_token(_aspect(aspects, {DESC_CPU_ASPECT})), "опис"))
         screen = _first((_screen(t, {}), "назва"),
-                        (_screen("", {k: v for k, v in aspects.items() if k in SCREEN_ASPECTS}), "характеристики"),
+                        (_screen("", {k: v for k, v in aspects.items() if fix_mojibake(k) in SCREEN_ASPECTS}), "характеристики"),
                         (aspects.get(DESC_SCREEN_ASPECT), "опис"))
         if screen[0] is None and len(parts) > 1 and parts[1].endswith('"'):
             screen = (parts[1], "типово для моделі")

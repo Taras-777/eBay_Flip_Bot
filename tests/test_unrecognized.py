@@ -223,3 +223,23 @@ def test_product_without_configurations_not_listed():
     for i in range(10):
         db.save_cached_spec(f"d{i}", "unspecified", {"marke": "DJI"})
     assert unrecognized.unrecognized_items(db.get_watch(wid, 1)) == []   # у дрона конфігурацій немає
+
+
+def test_export_adds_scrubbed_descriptions(monkeypatch):
+    from ebay import trading_api
+    _setup()
+    monkeypatch.setattr(trading_api, "trading_room", lambda: 1000)
+    calls = []
+
+    def fake(item_id):
+        calls.append(item_id)
+        return "Top Zustand, 16 GB DDR5, RTX 4060. Kontakt max@gmx.de oder 0176 1234 5678, www.shop.de " + "x" * 700
+    monkeypatch.setattr(trading_api, "fetch_description", fake)
+    text, total = unrecognized.export_report(1)
+    assert calls == ["u1"] and "Описи: 1 з 1" in text
+    assert "   опис: Top Zustand, 16 GB DDR5, RTX 4060. Kontakt [email] oder [телефон], [посилання]" in text
+    assert "max@gmx.de" not in text and "1234 5678" not in text and "…" in text
+    monkeypatch.setattr(trading_api, "trading_room", lambda: 0)       # немає акаунта / ліміту — без описів
+    calls.clear()
+    text, _ = unrecognized.export_report(1)
+    assert calls == [] and "опис:" not in text and "Описи: 0 з 1" in text

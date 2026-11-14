@@ -38,6 +38,8 @@ from analysis.laptops import (
     wants_aspects,
 )
 from analysis.market import _stat_for_item, dedupe_offers
+from analysis.textparse import scrub_personal
+from core.settings import log
 
 MAX_UNRECOGNIZED = 50
 MAX_OPTIONS = 10
@@ -269,15 +271,45 @@ def developer_report(watch):
 EXPORT_VALUE_MAX = 150   # довгі значення характеристик обрізаємо — файл має лишатись читабельним
 
 
-def export_report(chat_id):
+EXPORT_DESC_MAX = 80        # описів у файлі «📤 Вивантажити» (запити Trading API, по одному на оголошення)
+EXPORT_DESC_CHARS = 600     # скільки символів опису показати
+EXPORT_DESC_WORKERS = 5
+
+
+def export_descriptions(item_ids):
+    """{id: опис без особистих даних} — свіжо з eBay (Trading API), лише для файлу: у базу не пишеться.
+    Нічого, якщо акаунт eBay не підключено або на сьогодні замало запитів Trading."""
+    from ebay.trading_api import fetch_description, trading_room   # тут: мережевий модуль лише за потреби
+    ids = list(item_ids)[:min(EXPORT_DESC_MAX, trading_room())]
+    if not ids:
+        return {}
+
+    def one(item_id):
+        try:
+            text = fetch_description(item_id)
+        except Exception as e:   # опис — лише довідка; без нього файл однаково корисний
+            log.debug("Опис %s для вивантаження не отримано: %s", item_id, e)
+            return item_id, None
+        return item_id, scrub_personal(" ".join(text.split())) if text else None
+    with ThreadPoolExecutor(max_workers=EXPORT_DESC_WORKERS) as pool:
+        return {item_id: text for item_id, text in pool.map(one, ids) if text}
+
+
+def export_report(chat_id, descriptions=True):
     """Усі нерозпізнані оголошення всіх товарів чату — текстом для аналізу розробником:
-    назва, ціна, посилання, клас, що бот знайшов і всі характеристики (з бази, без запитів до eBay).
+    назва, ціна, посилання, клас, що бот знайшов, усі характеристики (з бази) і — якщо descriptions —
+    початок опису (свіжо з eBay, без email, телефонів і посилань; у базі не зберігається).
     Повертає (текст, кількість оголошень)."""
+    groups = [(w, unrecognized_items(w)) for w, _ in unrecognized_by_watch(chat_id)]
+    groups = [(w, items) for w, items in groups if items]
+    all_ids = [it["item_id"] for _, items in groups for it in items]
+    descs = export_descriptions(all_ids) if descriptions and all_ids else {}
     lines, total = [f"Нерозпізнані оголошення — вивантажено {time.strftime('%Y-%m-%d %H:%M')}"], 0
-    for w, _ in unrecognized_by_watch(chat_id):
-        items = unrecognized_items(w)
-        if not items:
-            continue
+    if descriptions and all_ids:
+        lines.append(f"Описи: {len(descs)} з {len(all_ids)}" + (" (лише перші " + str(EXPORT_DESC_MAX) + ")"
+                                                                if len(all_ids) > EXPORT_DESC_MAX else "")
+                     + "; email, телефони й посилання вирізано")
+    for w, items in groups:
         cats = ", ".join(c["name"] for c in get_watch_categories(w)) or "—"
         kind = item_kind(w, {}) or "не ноутбук"
         lines.append(f"\n{'=' * 70}\nТОВАР: {w['label']} | запит: {w.get('query') or ''} | тип: {kind} | "
@@ -300,6 +332,9 @@ def export_report(chat_id):
                     lines.append(f"     - {k}: {v[:EXPORT_VALUE_MAX]}{'…' if len(v) > EXPORT_VALUE_MAX else ''}")
             else:
                 lines.append("   характеристики: не збережені")
+            desc = descs.get(it["item_id"])
+            if desc:
+                lines.append(f"   опис: {desc[:EXPORT_DESC_CHARS]}{'…' if len(desc) > EXPORT_DESC_CHARS else ''}")
     if not total:
         lines.append("\nНерозпізнаних оголошень немає.")
     return "\n".join(lines), total
