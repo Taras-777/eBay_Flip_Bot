@@ -308,8 +308,8 @@ def test_account_connected_screen(monkeypatch, screen):
     db.apply_sold_check(1, "a", "sold")
     asyncio.run(account.ebay_account_start(make_update(), MagicMock()))
     text, rows = screen[-1]
-    assert "⚙️ <b>Налаштування</b>" in text and "✅ підключено" in text and "продано: 1" in text
-    assert ["🔄 Увійти в eBay заново", "🔌 Відключити"] in rows and ["💾 Надіслати резервну копію бази"] in rows
+    assert "⚙️ <b>Налаштування</b>" in text and "✅ підключено" in text and "продано <b>1</b>" in text
+    assert ["🔄 Увійти заново", "🔌 Відключити"] in rows and ["💾 Резервна копія бази"] in rows
 
 
 # ---------- «📈 Продажі» у картці товару ----------

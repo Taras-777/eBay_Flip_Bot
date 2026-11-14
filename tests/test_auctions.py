@@ -170,9 +170,9 @@ def test_settings_toggle(monkeypatch):
     upd, ctx = press("auctions")
     asyncio.run(account.auctions_callback(upd, ctx))
     assert db.get_auctions_enabled(1) is True and "увімкнено" in shown[-1][0]
-    assert "🔨 Аукціони: увімкнено ✅" in shown[-1][1]
+    assert "🔨 Аукціони: ✅ увімк." in shown[-1][1]
     asyncio.run(account.auctions_callback(upd, ctx))
-    assert db.get_auctions_enabled(1) is False and "🔨 Аукціони: вимкнено" in shown[-1][1]
+    assert db.get_auctions_enabled(1) is False and "🔨 Аукціони: ❌ вимк." in shown[-1][1]
 
 
 def test_auction_search_ignores_min_price_and_caps_alerts(fake_ebay, monkeypatch):

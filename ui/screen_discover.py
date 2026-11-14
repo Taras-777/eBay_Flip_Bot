@@ -22,6 +22,7 @@ from ui.panel import _ack_callback, show_panel
 from ui.access import require_access
 from analysis.shared_market import attach_shared_history
 from analysis.sales import speed_text
+from ui.style import hint, menu_row, title
 
 
 # ============================================================
@@ -29,7 +30,7 @@ from analysis.sales import speed_text
 # ============================================================
 
 def _recommendation_text(n, r):
-    spec = f" ({html.escape(r['spec'])})" if r.get("spec") else ""
+    spec = f" <i>({html.escape(r['spec'])})</i>" if r.get("spec") else ""
     per_week = r["deals_per_week"]
     if per_week >= 1:
         deals = f"🔥 ~{per_week:.0f} вигідних на тиждень, прибуток ~{r['deal_profit']}€ з кожної"
@@ -45,11 +46,11 @@ def _recommendation_text(n, r):
         sold = "🛒 продажі ще рахую (потрібно кілька перевірок)"
     else:
         sold = "🛒 за тиждень продажів не помічено"
-    notes = (["за продажами"] if r.get("sale_source") == "sold" else []) + \
-        ([f"прибуток від {r['min_profit']}€"] if r.get("min_profit") is not None else [])
-    sale_note = f" ({', '.join(notes)})" if notes else ""
+    source = "за продажами" if r.get("sale_source") == "sold" else "за оголошеннями"
+    profit = f" · прибуток від {r['min_profit']}€" if r.get("min_profit") is not None else ""
     return (f"<b>{n}. {r['emoji']} {html.escape(r['name'])}</b>{spec}\n"
-            f"💶 типова ціна ~{r['median']}€ · купувати до ~{r['buy_limit']}€{sale_note}\n"
+            f"💶 Продати ~{r.get('sale', r['median'])}€ <i>({source})</i> · 📊 в оголошеннях ~{r['median']}€\n"
+            f"🛒 Купувати до <b>~{r['buy_limit']}€</b>{profit}\n"
             f"{deals}\n{sold}")
 
 
@@ -75,24 +76,26 @@ async def _render_discover(update, context, note=""):
     context.user_data["discover_recs"] = [
         {"name": r["name"], "query": r["query"], "floor": r["floor"]} for r in recs
     ]
-    lines = ["💡 <b>Що варто перепродавати</b>",
-             "<i>Бот сам аналізує популярні товари на eBay.de, яких ти ще не відстежуєш, "
-             "і ставить угорі ті, на яких найреальніше заробити.</i>"]
+    lines = [title("💡", "Що варто перепродавати",
+                   "популярні товари eBay.de, яких ти ще не відстежуєш; угорі — на яких найреальніше заробити")]
     if note:
         lines.append(note)
     rows = []
     if recs:
         updated = max(r["updated_at"] for r in recs)
-        lines.append(f"<i>Оновлено: {datetime.fromtimestamp(updated, LOCAL_TZ).strftime('%d.%m %H:%M')}</i>")
+        lines[0] += f"\n<i>🕐 оновлено {datetime.fromtimestamp(updated, LOCAL_TZ).strftime('%d.%m %H:%M')}"
         if pages > 1:
-            lines[-1] += f" · сторінка {page + 1} з {pages} (усього {len(ranked)})"
+            lines[0] += f" · сторінка {page + 1} з {pages} (усього {len(ranked)})"
+        lines[0] += "</i>"
         lines += [_recommendation_text(n, r) for n, r in enumerate(recs, start + 1)]
-        lines.append("<i>Продажі — оголошення, які зникли з eBay задовго до кінця строку; ✅ — продаж "
-                     "підтвердив eBay. «За продажами» — ціна рахується за ними, інакше — за оголошеннями. "
-                     "«Купувати до» і вигідні — з твоїм мін. прибутком (загальним або категорії: "
-                     "«⚙️ Налаштування» → «💰 Мін. прибуток»). Натисни товар, щоб почати його відстежувати.</i>")
-        lines.append("<i>➕ — почати відстежувати; 🙈 — не цікавить: товар зникне зі списку "
-                     "(і бот перестане витрачати на нього запити).</i>")
+        lines.append(hint(
+            "• <b>Продати</b> — ціна, за якою товар реально продається (медіана продажів), або, коли продажів "
+            "замало, — за оголошеннями. <b>В оголошеннях</b> — за скільки його зараз виставляють.\n"
+            "• <b>Купувати до</b> і кількість вигідних — з твоїм мін. прибутком (загальним або категорії: "
+            "«⚙️ Налаштування» → «💰 Мін. прибуток»).\n"
+            "• <b>Продажі</b> — оголошення, які зникли з eBay задовго до кінця строку; ✅ — продаж підтвердив eBay.\n"
+            "• ➕ — почати відстежувати; 🙈 — не цікавить: товар зникне зі списку "
+            "(і бот перестане витрачати на нього запити).", "ℹ️ Як читати"))
         rows += [[InlineKeyboardButton(f"➕ {r['name']}", callback_data=f"dadd:{i}"),
                   InlineKeyboardButton("🙈", callback_data=f"dhide:{i}")] for i, r in enumerate(recs)]
         nav = []
@@ -103,7 +106,7 @@ async def _render_discover(update, context, note=""):
         if nav:
             rows.append(nav)
     else:
-        lines.append("Поки нічого показати: бот перевіряє популярні товари раз на 4 години, "
+        lines.append("✨ Поки нічого показати: бот перевіряє популярні товари раз на 4 години, "
                      "перший результат з'явиться протягом кількох хвилин після запуску. "
                      "Якщо в «⚙️ Налаштування» увімкнено «ціна лише за продажами», тут лише товари, "
                      "для яких уже назбиралось ≥5 продажів за тиждень.")
@@ -112,7 +115,7 @@ async def _render_discover(update, context, note=""):
         rows.append([InlineKeyboardButton(f"🙈 Приховані ({len(hidden)})", callback_data="dhidden")])
     if is_owner(update.effective_user.id):
         rows.append([InlineKeyboardButton("🔄 Оновити аналіз", callback_data="drefresh")])
-    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    rows.append(menu_row())
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
 
@@ -152,8 +155,8 @@ async def discover_hidden_callback(update: Update, context: ContextTypes.DEFAULT
             note = f"↩️ «{html.escape(name)}» повернуто — з'явиться в рейтингу після наступного аналізу.\n\n"
     await _ack_callback(update)
     rows = [[InlineKeyboardButton(f"↩️ {name}", callback_data=f"dunhide:{i}")] for i, name in enumerate(hidden)]
-    rows.append([InlineKeyboardButton("◀️ До «Що перепродавати»", callback_data="menu:discover")])
-    text = (f"{note}🙈 <b>Приховані товари</b> ({len(hidden)})\n\nНатисни товар, щоб повернути його в рейтинг."
+    rows.append([InlineKeyboardButton("◀️ Що перепродавати", callback_data="menu:discover")])
+    text = (f"{note}🙈 <b>Приховані товари</b> ({len(hidden)})\n<i>Натисни товар, щоб повернути його в рейтинг.</i>"
             if hidden else f"{note}🙈 Прихованих товарів немає.")
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 

@@ -83,6 +83,7 @@ from ui.panel import (
 from ui.access import _notify_owner_new_request, require_access
 from ui.notifications import _notify_median_error, _notify_median_problem
 from analysis.sales import weekly_change
+from ui.style import grid, hint, menu_row, title
 
 
 def profit_source_text(watch, source):
@@ -134,11 +135,11 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     watches = list_watches(chat_id=chat_id)
     if not watches:
         await show_panel(
-            update, context, "У тебе ще немає товарів. Додай перший:",
+            update, context, title("🗂", "Категорії товарів") + "\n\nУ тебе ще немає товарів. Додай перший:",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
-                [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")],
-            ]),
+                menu_row(),
+            ]), parse_mode=ParseMode.HTML,
         )
         return
     from ui.screen_folders import custom_folder_ids, folder_names   # тут, щоб не було циклу імпортів
@@ -147,11 +148,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ids = custom_folder_ids(chat_id)
         return folder_names(chat_id), Counter(watch_group(w, ids) for w in watches)
     names, groups = await asyncio.to_thread(_groups)
-    lines = [f"🗂 <b>Категорії товарів</b> ({len(watches)})\n", "Обери категорію:"]
-    rows = [[InlineKeyboardButton(f"{name} ({groups[key]})", callback_data=f"wgrp:{key}")]
-            for key, name in names.items() if groups[key]]
-    rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
-             [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+    lines = [title("🗂", "Категорії товарів", count=len(watches), subtitle="обери категорію, щоб побачити її товари")]
+    rows = grid([InlineKeyboardButton(f"{name} ({groups[key]})", callback_data=f"wgrp:{key}")
+                 for key, name in names.items() if groups[key]])
+    rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")], menu_row()]
     await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
 
@@ -171,16 +171,16 @@ async def watch_group_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     watches = await asyncio.to_thread(lambda: [w for w in all_watches if watch_group(w, ids) == key])
     if not watches:
         return await cmd_list(update, context)
-    lines = [f"<b>{names[key]}</b> ({len(watches)})\n", "Обери товар, щоб відкрити його:"]
+    lines = [f"<b>{names[key]}</b> ({len(watches)})", "<i>обери товар, щоб відкрити його</i>"]
     rows = []
     for w in watches:
         no_cat = " ⚠️" if not watch_category_ids(w) else ""
         label = w["label"] if len(w["label"]) <= 40 else w["label"][:39] + "…"
-        rows.append([InlineKeyboardButton(f"📦 {label}{no_cat}", callback_data=f"watch_details:{w['id']}")])
+        rows.append([InlineKeyboardButton(f"📌 {label}{no_cat}", callback_data=f"watch_details:{w['id']}")])
     if any(not watch_category_ids(w) for w in watches):
         lines.append("\n⚠️ — не обрано категорію eBay (відкрий товар → ✏️ Редагувати)")
     rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
-             [InlineKeyboardButton("◀️ До категорій", callback_data="menu:list")]]
+             [InlineKeyboardButton("◀️ Категорії", callback_data="menu:list"), *menu_row()]]
     await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
 
@@ -202,9 +202,12 @@ def _watch_details_text(watch):
         min_price_txt = "без обмеження"
     lines = [
         f"📌 <b>{html.escape(watch['label'])}</b>",
+        f"<i>🔎 пошук на eBay: «{html.escape(watch.get('query') or '')}»</i>",
+        "",
+        "⚙️ <b>Пошук</b>",
         f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{rule_txt}</b> ({html.escape(profit_source_text(watch, source))})"
         " — після доставки покупцю",
-        f"🗂️ Категорії: {category_txt}",
+        f"🗂️ Категорії eBay: {category_txt}",
         f"💶 Мінімальна ціна: {min_price_txt}",
         (f"🧾 Обов'язкові характеристики: {html.escape(aspects_label(get_required_aspects(watch)), quote=False)}"
          if get_required_aspects(watch) else
@@ -217,7 +220,7 @@ def _watch_details_text(watch):
         sold_line = f"🛒 Продано за {SOLD_LOOKBACK_DAYS} днів: <b>{obs['sold']}</b>"
         if obs["confirmed"]:
             sold_line += f" (✅ підтверджено eBay: {obs['confirmed']})"
-        lines += ["", "👁 <b>Спостереження:</b>",
+        lines += ["", "👁 <b>Спостереження</b>",
                   f"📋 Відстежую оголошень зараз: <b>{obs['active']}</b>", sold_line]
         if obs["pending"]:
             lines.append(f"⏳ У черзі на перевірку «продано?»: <b>{obs['pending']}</b>")
@@ -227,11 +230,11 @@ def _watch_details_text(watch):
     if learned:
         lines.append(f"🧠 Відсіюю за вивченими словами: {html.escape(', '.join(learned))}")
     if not stats:
-        lines.append("\n💰 <b>Ціни ще не пораховані</b> — потрібно щонайменше "
+        lines.append("\n⏳ <b>Ціни ще не пораховані</b> — потрібно щонайменше "
                      f"{plural(MIN_SAMPLE_SIZE, 'оголошення', 'оголошення', 'оголошень')} одного типу продавця (🏪 магазин чи 👤 приватні).")
         return "\n".join(lines)
 
-    lines.append("\n💰 <b>Купівля і продаж:</b>")
+    lines.append("\n💰 <b>Купівля і продаж</b>")
     history = get_price_history(watch["id"])
     for s in sorted(stats, key=lambda s: (s["cond_group"], s["spec_group"] != "*", s["spec_group"])):
         sale_price = s["sale_price"] or s["median_price"]
@@ -253,11 +256,12 @@ def _watch_details_text(watch):
             f"  💶 Продати за: ~<b>{sale_price:.0f}€</b> ({html.escape(s['sale_source'] or 'оцінка')})\n"
             f"  📊 Типова ціна оголошень: {s['median_price']:.0f}€{trend}"
         )
-    lines.append(
-        "\n<i>«Продати за» — оцінка за найдешевшою чвертю поточних оголошень. Коли бот побачить "
-        f"щонайменше {MIN_SOLD_SAMPLE} проданих, рахуватиме за ними. "
-        f"«Купувати до» лишає ≥{rule_txt} після доставки покупцю.</i>"
-    )
+    lines.append("\n" + hint(
+        "«Продати за» — медіана реальних продажів; поки їх менше "
+        f"{MIN_SOLD_SAMPLE} — оцінка за найдешевшою чвертю поточних оголошень.\n"
+        f"«Купувати до» = продати − 7€ доставки − мін. прибуток ({rule_txt}).\n"
+        "📊 Типова ціна оголошень — за скільки товар зараз виставляють (для довідки й тренду).",
+        "ℹ️ Як рахуються ціни"))
     return "\n".join(lines)
 
 
@@ -277,29 +281,27 @@ def _count_unrecognized(watch):
 async def _show_watch_details(update, context, watch, note=""):
     watch_id = watch["id"]
     learned = _learned_excluded(watch_id)
-    rows = [
-        [InlineKeyboardButton("🔎 Переглянути оголошення", callback_data=f"view_listings:{watch_id}")],
-        [InlineKeyboardButton("🔍 Перевірити оголошення", callback_data=f"chkl:{watch_id}")],
-        [
-            InlineKeyboardButton("🧩 Усі конфігурації", callback_data=f"configs:{watch_id}"),
-            InlineKeyboardButton("📈 Продажі", callback_data=f"sales:{watch_id}"),
-        ],
-        [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")],
-        [InlineKeyboardButton(_profit_button(watch), callback_data=f"wmp:{watch_id}")],
-    ]
     unknown = await asyncio.to_thread(_count_unrecognized, watch)
     group = await asyncio.to_thread(watch_group, watch)
+    rows = [
+        [InlineKeyboardButton("📋 Оголошення", callback_data=f"view_listings:{watch_id}"),
+         InlineKeyboardButton("🔍 Перевірити оголошення", callback_data=f"chkl:{watch_id}")],
+        [InlineKeyboardButton("🧩 Конфігурації", callback_data=f"configs:{watch_id}"),
+         InlineKeyboardButton("📈 Продажі", callback_data=f"sales:{watch_id}")],
+        [InlineKeyboardButton(_profit_button(watch), callback_data=f"wmp:{watch_id}")],
+    ]
+    extra = [InlineKeyboardButton("🔄 Оновити ціни", callback_data=f"recalc_median:{watch_id}")]
     if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
-        rows.append([InlineKeyboardButton(f"🛠 Нерозпізнані ({unknown})", callback_data=f"unk:{watch_id}:0:w")])
+        extra.append(InlineKeyboardButton(f"🛠 Нерозпізнані ({unknown})", callback_data=f"unk:{watch_id}:0:w"))
     if learned:   # кнопка лише коли є що прибирати
-        rows.append([InlineKeyboardButton(f"🧠 Вивчені слова ({len(learned)})",
-                                          callback_data=f"lwords:{watch_id}")])
+        extra.append(InlineKeyboardButton(f"🧠 Вивчені слова ({len(learned)})", callback_data=f"lwords:{watch_id}"))
+    rows += grid(extra)
     rows += [
         [
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
             InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
         ],
-        [InlineKeyboardButton("◀️ До категорії", callback_data=f"wgrp:{group}")],
+        [InlineKeyboardButton("◀️ Категорія", callback_data=f"wgrp:{group}"), *menu_row()],
     ]
     await show_panel(
         update,
@@ -341,17 +343,17 @@ async def watch_min_profit_callback(update: Update, context: ContextTypes.DEFAUL
     inherited_txt = f"{profit_rule_label(inherited)}, {profit_source_text(watch, inherited_src)}"
     buttons = [InlineKeyboardButton(("✅ " if own and v == rule[1] else "") + f"{v}€",
                                     callback_data=f"wmp:{watch['id']}:{v}") for v in WATCH_MIN_PROFIT_CHOICES]
-    rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
+    rows = grid(buttons, 4)
     rows.append([InlineKeyboardButton(("✅ " if not own else "") + f"↩️ Як категорія / загальний ({inherited_txt})",
                                       callback_data=f"wmp:{watch['id']}:def")])
     rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch['id']}")])
-    text = (f"💰 <b>Мін. прибуток — {html.escape(watch['label'])}</b>: зараз <b>{profit_rule_label(rule)}</b>"
-            f" ({html.escape(profit_source_text(watch, source))})\n\n"
+    text = (title("💰", f"Мін. прибуток · {html.escape(watch['label'])}")
+            + f"\nЗараз: <b>{profit_rule_label(rule)}</b> ({html.escape(profit_source_text(watch, source))})\n\n"
             "Бот пропонує оголошення цього товару, лише якщо після перепродажу (мінус доставка покупцю) "
             "лишається щонайменше стільки. Від цього залежить і «купувати до».\n\n"
-            "Свій поріг товару — найголовніший: він важливіший за поріг категорії й загальний. "
-            f"«↩️ Як категорія / загальний» — повернути спільне значення (зараз {html.escape(inherited_txt)}).\n\n"
-            "<i>Пороги для цілих категорій (у € чи %) — у «⚙️ Налаштування» → «💰 Мін. прибуток».</i>")
+            + hint("Свій поріг товару — найголовніший: він важливіший за поріг категорії й загальний.\n"
+                   f"«↩️ Як категорія / загальний» — повернути спільне значення (зараз {html.escape(inherited_txt)}).\n"
+                   "Пороги для цілих категорій (у € чи %) — у «⚙️ Налаштування» → «💰 Мін. прибуток»."))
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
@@ -359,7 +361,7 @@ async def _show_learned_words(update, context, watch, note=""):
     words = _learned_excluded(watch["id"])
     lines = [note] if note else []
     lines.append(f"🧠 <b>Вивчені слова — {html.escape(watch['label'])}</b>")
-    lines.append("Бот сам вивів ці слова з оголошень, які ти відхилив (❌ Інший товар), і "
+    lines.append("Бот сам вивів ці слова з оголошень, які ти відхилив (❌ Не той товар), і "
                  "відсіює оголошення з ними. Натисни слово, щоб більше не відсіювати — "
                  "бот його більше не пропонуватиме.")
     rows = [[InlineKeyboardButton(f"🗑 {w}", callback_data=f"lwdel:{watch['id']}:{i}")]
@@ -755,17 +757,21 @@ async def edit_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.pop("edit", None)
     min_price = watch.get("min_price") or 0
     rows = [
-        [InlineKeyboardButton("🗂️ Змінити категорії", callback_data=f"chcat:{watch_id}")],
+        [InlineKeyboardButton("🏷 Категорії eBay", callback_data=f"chcat:{watch_id}"),
+         InlineKeyboardButton("🗂 Папка", callback_data=f"fld:{watch_id}")],
         [InlineKeyboardButton(
-            f"💶 Мінімальна ціна ({f'{min_price:.0f}€' if min_price else 'авто'})",
+            f"💶 Мінімальна ціна: {f'{min_price:.0f}€' if min_price else 'авто'}",
             callback_data=f"edmin:{watch_id}")],
         [InlineKeyboardButton("🧾 Обов'язкові характеристики", callback_data=f"reqasp:{watch_id}")],
-        [InlineKeyboardButton("🗂 Папка в «Категоріях товарів»", callback_data=f"fld:{watch_id}")],
         [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")],
     ]
     await show_panel(
         update, context,
-        f"✏️ <b>{html.escape(watch['label'])}</b>\n\nЩо хочеш відредагувати?",
+        title("✏️", f"Редагування · {html.escape(watch['label'])}", "що хочеш змінити?") + "\n\n"
+        "🏷 <b>Категорії eBay</b> — де шукати оголошення (напр. консолі, а не ігри).\n"
+        "🗂 <b>Папка</b> — у якій категорії товар показується в «🗂 Категорії товарів».\n"
+        "💶 <b>Мінімальна ціна</b> — дешевші оголошення не враховуються (відсіює аксесуари).\n"
+        "🧾 <b>Характеристики</b> — що обов'язково має бути в оголошенні.",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode=ParseMode.HTML,
     )

@@ -84,11 +84,11 @@ def first_text(w, it, sale, buy_limit, now=None):
     lines = [f"🔨 <b>Вигідний аукціон — {html.escape(w['label'])}</b>",
              html.escape(it.get("title") or ""),
              "",
-             f"Ставка зараз: <b>{bid:.0f}€</b>" + (f" + доставка {ship:.0f}€ = {it['total_price']:.0f}€" if ship else "")
+             f"💶 Ставка зараз: <b>{bid:.0f}€</b>" + (f" + доставка {ship:.0f}€ = {it['total_price']:.0f}€" if ship else "")
              + (f" · ставок: {bids}" if bids is not None else ""),
-             f"Купувати до: {buy_limit:.0f}€ → <b>ставити не більше {buy_limit - ship:.0f}€</b>",
+             f"🛒 Купувати до {buy_limit:.0f}€ → <b>ставити не більше {buy_limit - ship:.0f}€</b>",
              f"💡 Запас ~{buy_limit - it['total_price']:.0f}€ — настільки ставка ще може вирости, і аукціон лишиться вигідним",
-             f"Продати ~{sale:.0f}€ → прибуток за поточної ставки ~{profit:.0f}€",
+             f"💰 Продати ~{sale:.0f}€ → прибуток за поточної ставки <b>+{profit:.0f}€</b>",
              f"⏰ Закінчиться {_when(it['end_at'])} (через {_left(it['end_at'], now)})"]
     if it.get("suspicious"):
         lines.append("⚠️ У продавця мало відгуків або низький рейтинг")
@@ -274,7 +274,7 @@ def final_decision(a, state, bid, bids, now=None):
         return "note", f"❌ Ставка вже {bid:.0f}€ — дорожче за «купувати до» ({a['buy_limit']:.0f}€ з доставкою)."
     bids_txt = f" · ставок: {bids}" if bids is not None else ""
     return "send", (f"⏰ <b>Аукціон закінчується {_when(a['end_at'])} ({left})</b>\n"
-                    f"Ставка зараз: <b>{bid:.0f}€</b>{bids_txt}\n"
+                    f"💶 Ставка зараз: <b>{bid:.0f}€</b>{bids_txt}\n"
                     f"✅ Ще вигідно — ставити не більше <b>{a['buy_limit'] - a['shipping']:.0f}€</b>.")
 
 

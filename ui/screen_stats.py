@@ -29,6 +29,7 @@ from analysis.discovery import CANDIDATES, tracked_candidates
 from analysis.sales import weekly_change
 from ui.panel import _ack_callback, show_panel
 from ui.access import require_access
+from ui.style import hint, title
 
 DAY = 86400
 DISCOVERY_PER_PAGE = 15
@@ -85,8 +86,9 @@ def _activity_key(item):
     return (-a["sold_new"], -a["new"], -a["sold"])
 
 
-HEADER = ("<i>🆕 — за останні 24 години. Оголошень і продажів — від початку стеження "
-          f"(бот пам'ятає {LISTING_OBS_RETENTION_DAYS} днів). 📈/📉 — типова ціна за тиждень.</i>")
+HEADER = hint("🆕 — за останні 24 години. Оголошень і продажів — від початку стеження "
+              f"(бот пам'ятає {LISTING_OBS_RETENTION_DAYS} днів). 📈/📉 — зміна типової ціни за тиждень.",
+              "ℹ️ Як читати")
 
 
 def stats_text(chat_id):
@@ -96,12 +98,14 @@ def stats_text(chat_id):
     act = watch_activity([w["id"] for w in watches], since)
     mine = sorted(((w["label"], w["id"], act.get(w["id"]) or {"total": 0, "new": 0, "sold": 0, "sold_new": 0})
                    for w in watches), key=_activity_key)
-    lines = ["📊 <b>Статистика</b>", HEADER, "📦 <b>Мої товари</b>"]
-    lines += [_row("📌", label, a, _watch_trend(wid)) for label, wid, a in mine] or ["Товарів ще немає."]
+    lines = [title("📊", "Статистика", "наскільки «живі» твої товари: нові оголошення, продажі, ціни")]
     deals = get_deal_stats(chat_id)
     if deals:
-        lines.append(f"🔥 Знахідки: ✅ куплено {deals.get('bought', 0)} · ❌ пропущено {deals.get('skipped', 0)}"
+        lines.append(f"🔥 <b>Знахідки</b>: ✅ куплено {deals.get('bought', 0)} · ❌ пропущено {deals.get('skipped', 0)}"
                      f" · 🆕 без рішення {deals.get('new', 0)}")
+    lines.append("📦 <b>Мої товари</b>")
+    lines += [_row("📌", label, a, _watch_trend(wid)) for label, wid, a in mine] or ["Товарів ще немає."]
+    lines.append(HEADER)
     return "\n\n".join(lines)
 
 
@@ -116,12 +120,14 @@ def discovery_stats_text(chat_id, page=0):
                   key=_activity_key)
     pages = max(1, (len(disc) + DISCOVERY_PER_PAGE - 1) // DISCOVERY_PER_PAGE)
     page = min(max(page, 0), pages - 1)
-    title = "📊 <b>Статистика · 💡 Що перепродавати</b>" + (f" · сторінка {page + 1} з {pages}" if pages > 1 else "")
-    lines = [title, HEADER]
+    head = title("📊", "Статистика · 💡 Що перепродавати",
+                 f"сторінка {page + 1} з {pages}" if pages > 1 else None)
+    lines = [head]
     start = page * DISCOVERY_PER_PAGE
     shown = disc[start:start + DISCOVERY_PER_PAGE]
     lines += [_row(emoji[name], name, a, trends.get(name)) for name, _, a in shown] or [
         "Даних ще немає — з'являться після першого аналізу."]
+    lines.append(HEADER)
     return "\n\n".join(lines), pages, page
 
 
@@ -139,7 +145,7 @@ async def show_stats(update, context):
     await _ack_callback(update)
     text = await asyncio.to_thread(stats_text, update.effective_chat.id)
     rows = [[InlineKeyboardButton("💡 Статистика «Що перепродавати»", callback_data="stats:d0")],
-            [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+            [InlineKeyboardButton("🏠 Меню", callback_data="menu:home")]]
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
@@ -151,5 +157,5 @@ async def show_discovery_stats(update, context, page=0):
         nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"stats:d{page - 1}"))
     if page + 1 < pages:
         nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"stats:d{page + 1}"))
-    rows = ([nav] if nav else []) + [[InlineKeyboardButton("◀️ До статистики", callback_data="menu:stats")]]
+    rows = ([nav] if nav else []) + [[InlineKeyboardButton("◀️ Статистика", callback_data="menu:stats")]]
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)

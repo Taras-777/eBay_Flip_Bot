@@ -113,7 +113,7 @@ def test_screen_menu_counter_hide_and_undo(monkeypatch, fees15):
     text, buttons = shown[-1]
     assert "Знизили ціну</b> (2)" in text and "було 700€ → зараз <b>520€</b> (−26%)" in text
     assert "🎯 Можна торгуватись" in text and "✅ Вже вигідно" in text
-    assert "📉 Знизили ціну" in [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
+    assert "📉 Знизили ціну (2)" in [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
 
     upd, ctx2 = press(f"mact:hide:{wid}:a:0")
     ctx2.user_data = {}
@@ -145,7 +145,7 @@ def test_drop_pct_setting(monkeypatch):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("mdpct:30")
     asyncio.run(handlers.drop_pct_callback(upd, ctx))
-    assert db.get_drop_pct(1) == 30 and "✅ 30%" in shown[-1][1] and "◀️ До налаштувань" in shown[-1][1]
+    assert db.get_drop_pct(1) == 30 and "✅ 30%" in shown[-1][1] and "◀️ Налаштування" in shown[-1][1]
     from ui import account
     labels = [b.text for r in account._settings_keyboard(1).inline_keyboard for b in r]
     assert "📉 Поріг знижки: 30%" in labels

@@ -229,13 +229,13 @@ def test_refresh_all_can_be_stopped(monkeypatch):
 def test_main_menu_shows_when_prices_were_updated(monkeypatch):
     from ui import panel
     wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
-    assert "Ціни товарів оновлено" not in panel.main_menu_text(1)   # ще не рахувались
+    assert "Ціни оновлено" not in panel.main_menu_text(1)   # ще не рахувались
     db.upsert_market_stats(wid, "used", "*", 450, 20, sale_price=420, sale_source="x")
-    assert "💰 Ціни товарів оновлено: сьогодні о " in panel.main_menu_text(1)
-    assert "Ціни товарів оновлено" not in panel.main_menu_text(2)   # чужі товари не рахуються
+    assert "💰 Ціни оновлено сьогодні о " in panel.main_menu_text(1)
+    assert "Ціни оновлено" not in panel.main_menu_text(2)   # чужі товари не рахуються
     with db.get_conn() as conn:
         conn.execute("UPDATE market_stats SET updated_at = updated_at - 86400")
-    assert "💰 Ціни товарів оновлено: вчора о " in panel.main_menu_text(1)
+    assert "💰 Ціни оновлено вчора о " in panel.main_menu_text(1)
 
 
 # ---------- «🔥 Вигідні пропозиції» ----------
@@ -282,7 +282,7 @@ def test_menu_badge_and_inbox_marks_seen(monkeypatch):
     asyncio.run(handlers.deals_callback(upd, ctx))
     text, buttons = shown[-1]
     assert "Вигідні пропозиції</b> (3)" in text and text.count("🆕") == 3
-    assert "✅ 1 Куплено" in buttons and "🧹 Очистити список" in buttons
+    assert "✅ 1 Купив" in buttons and "🧹 Очистити список" in buttons
     assert db.count_unseen_deals(1) == 0
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
     assert "🔥 Вигідні пропозиції" in labels   # лічильник зник
@@ -310,10 +310,10 @@ def test_inbox_pagination(monkeypatch):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
-    assert "Далі ▶️" in shown[-1][1] and "5. " in shown[-1][0]
+    assert "Наступні ▶️" in shown[-1][1] and "5. " in shown[-1][0]
     upd, ctx = press("deals:1")
     asyncio.run(handlers.deals_callback(upd, ctx))
-    assert "◀️ Назад" in shown[-1][1] and "7. " in shown[-1][0]
+    assert "◀️ Попередні" in shown[-1][1] and "7. " in shown[-1][0]
 
 
 def test_menu_shows_last_scan_summary(fake_ebay):
@@ -325,7 +325,7 @@ def test_menu_shows_last_scan_summary(fake_ebay):
     summary = db.get_scan_summary(1)
     assert summary["fetched"] == 20 and summary["kept"] == 20 and summary["new_count"] == 20
     text = panel.main_menu_text(1)
-    assert "🔎 Останнє сканування: переглянуто <b>20</b> оголошень · підійшло <b>20</b> · нових у базі <b>20</b>" in text
+    assert "🔎 Сканування: <b>20</b> оголошень · підійшло <b>20</b> · нових <b>20</b>" in text
 
     # Наступне сканування: 2 нові оголошення, решта вже в базі
     fake_ebay.listings = [listing("n1", "Sony PlayStation 5 Slim 1TB Konsole", 470),
@@ -378,7 +378,7 @@ def test_inbox_sorted_by_profit_and_has_min_profit_button(monkeypatch):
     assert not any("Мін. прибуток" in b for b in shown[-1][1]) and "найвигідніші вгорі" in shown[-1][0]
     upd, ctx = press("mprof:show")                     # кнопка тепер у «⚙️ Налаштування»
     asyncio.run(handlers.min_profit_callback(upd, ctx))
-    assert "◀️ До налаштувань" in shown[-1][1]
+    assert "◀️ Налаштування" in shown[-1][1]
 
 
 # ---------- 🤝 продаж за прийнятою пропозицією ----------

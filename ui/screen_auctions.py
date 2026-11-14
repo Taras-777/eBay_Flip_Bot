@@ -18,6 +18,7 @@ from core.db import hide_auction, list_auctions, update_auction_bid
 from analysis.auctions import _is_accessory, _left, _when, current_bid
 from ui.panel import _ack_callback, run_with_progress, show_panel
 from ui.access import require_access
+from ui.style import hint, menu_row, title
 
 PER_PAGE = 5
 REFRESH_MINUTES = 10   # ставку при відкритті списку перевіряти, якщо перевіряли давніше
@@ -69,11 +70,11 @@ def _card(n, a):
     bids = f" · ставок: {a['bid_count']}" if a.get("bid_count") is not None else ""
     checked = (time.strftime(" · перевірено о %H:%M", time.localtime(a["checked_at"])) if a.get("checked_at") else "")
     lines = [f"<b>{n}. {html.escape(a['watch_label'])}</b>",
-             html.escape(_title(a)[:140]),
-             f"💶 Ставка: <b>{bid:.0f}€</b>" + (f" + доставка {ship:.0f}€" if ship else "") + bids + checked,
+             f"<i>{html.escape(_title(a)[:140])}</i>",
+             f"💶 Ставка: <b>{bid:.0f}€</b>" + (f" + доставка {ship:.0f}€" if ship else "") + bids,
              (f"🎯 Ставити не більше <b>{max_bid:.0f}€</b> · запас ~{room:.0f}€" if room >= 0
               else f"❌ Ставка вже дорожча за межу ({max_bid:.0f}€) — невигідно"),
-             f"⏰ Закінчиться {_when(a['end_at'])} (через {_left(a['end_at'])})"]
+             f"⏰ Закінчиться {_when(a['end_at'])} · через <b>{_left(a['end_at'])}</b>{checked}"]
     if a.get("url"):
         lines.append(f'<a href="{html.escape(a["url"])}">🔗 Відкрити на eBay</a>')
     return "\n".join(lines)
@@ -93,20 +94,20 @@ async def _render(update, context, page=0, note=""):
     pages = max(1, (len(rows) + PER_PAGE - 1) // PER_PAGE)
     page = min(page, pages - 1)
     shown = rows[page * PER_PAGE:(page + 1) * PER_PAGE]
-    head = f"🔨 <b>Аукціони</b> ({len(rows)}) · найближчі до кінця вгорі"
-    if pages > 1:
-        head += f" · сторінка {page + 1} з {pages}"
-    lines = [head]
+    lines = [title("🔨", "Аукціони", count=len(rows),
+                   subtitle="найближчі до кінця вгорі" + (f" · сторінка {page + 1} з {pages}" if pages > 1 else ""))]
     if note:
         lines.append(note)
     if removed:
         lines.append(f"🗑 Прибрано завершених чи знятих: {removed}")
-    lines.append("<i>Ставок бот не робить — лише підказує межу. За 45 хв до кінця прийде нагадування "
-                 "з актуальною ставкою.</i>")
     for n, a in enumerate(shown, page * PER_PAGE + 1):
         lines.append(_card(n, a))
     if not rows:
-        lines.append("Зараз вигідних аукціонів немає — бот сповістить, щойно знайде.")
+        lines.append("✨ Зараз вигідних аукціонів немає — бот сповістить, щойно знайде.")
+    else:
+        lines.append(hint("Ставок бот не робить — лише підказує межу: «ставити не більше» = купувати до − доставка.\n"
+                          "За 45 хв до кінця прийде нагадування з актуальною ставкою.\n"
+                          "🙈 — прибрати аукціон зі списку (нагадування не буде)."))
     buttons = [InlineKeyboardButton(f"🙈 {n}", callback_data=f"auc:h:{page}:{n - 1}")
                for n in range(page * PER_PAGE + 1, page * PER_PAGE + len(shown) + 1)]
     kb = [buttons] if buttons else []
@@ -117,7 +118,7 @@ async def _render(update, context, page=0, note=""):
         nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"auc:{page + 1}"))
     if nav:
         kb.append(nav)
-    kb.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    kb.append(menu_row())
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(kb),
                      parse_mode=ParseMode.HTML)
 

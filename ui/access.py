@@ -174,7 +174,7 @@ async def _show_users(update, context, note=""):
         lines.append(f"👤 {_user_name(u)} — ID {u['user_id']} · 📦 {plural(watch_count, 'товар', 'товари', 'товарів')}")
         rows.append([InlineKeyboardButton(f"🗑 Видалити {_user_name(u)}"[:60], callback_data=f"udel:{u['user_id']}")])
     lines.append("\nДеталі по користувачу: /userstats <id>")
-    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    rows.append([InlineKeyboardButton("🏠 Меню", callback_data="menu:home")])
     await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
 
 

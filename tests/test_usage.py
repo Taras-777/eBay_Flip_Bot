@@ -43,7 +43,7 @@ def test_usage_pages_and_empty():
     assert text.index("<b>122</b>") < text.index("<b>120</b>")         # старіший день — вище
     kb = screen_usage.usage_keyboard(1, 3)
     labels = [b.text for r in kb.inline_keyboard for b in r]
-    assert labels[:2] == ["◀️ Старіші", "Новіші ▶️"] and "◀️ До налаштувань" in labels
+    assert labels[:2] == ["◀️ Старіші", "Новіші ▶️"] and "◀️ Налаштування" in labels
 
 
 def test_settings_button_and_callback(monkeypatch):
@@ -67,8 +67,8 @@ def test_settings_button_and_callback(monkeypatch):
 def test_settings_explain_buttons():
     from ui import account
     text = account._settings_text()
-    for button in ("Мін. прибуток", "Поріг знижки", "Ціна для знахідок", "Аукціони", "Статистика запитів", "Журнал повільних дій",
-                   "Надіслати резервну копію бази"):
+    for button in ("Мін. прибуток", "Поріг знижки", "Ціна продажу", "Аукціони", "Статистика запитів", "Повільні дії",
+                   "Резервна копія"):
         assert f"<b>{button}</b>" in text
     assert len(text) < 4096
 
@@ -78,4 +78,4 @@ def test_settings_has_min_profit_button():
     db.set_min_profit(1, 100)
     labels = [b.text for r in account._settings_keyboard(1).inline_keyboard for b in r]
     assert "💰 Мін. прибуток: 100€" in labels
-    assert "купувати до 493€" in account._settings_text()
+    assert "→ 493€" in account._settings_text()

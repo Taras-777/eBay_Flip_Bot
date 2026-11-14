@@ -61,7 +61,7 @@ def test_slow_update_is_recorded(monkeypatch):
     monkeypatch.setattr(Application, "process_update", slow)
     app = Application.builder().application_class(action_log.TimedApplication).token("1:A").build()
     asyncio.run(app.process_update(_update("configs:4")))
-    assert db.get_action_log()[0]["action"] == "🧩 Усі конфігурації"
+    assert db.get_action_log()[0]["action"] == "🧩 Конфігурації"
 
 
 def test_progress_shown_only_for_slow_actions(monkeypatch):

@@ -1,5 +1,5 @@
 """
-«🔎 Переглянути оголошення», «❌ Інший товар» / «🙈 Сховати», вивчені слова; кнопки старих сповіщень.
+«📋 Оголошення», «❌ Не той товар» / «🙈 Сховати», вивчені слова; кнопки старих сповіщень.
 """
 
 import asyncio
@@ -180,7 +180,7 @@ async def _open_listings(update, context, watch_id, requested_sort=None):
 
     nav_rows = [
         [InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{watch_id}")],
-        [InlineKeyboardButton("🗂 До категорій", callback_data="menu:list")],
+        [InlineKeyboardButton("🗂 Категорії", callback_data="menu:list")],
         [InlineKeyboardButton("🏠 Меню", callback_data="menu:home")],
     ]
 
@@ -206,7 +206,7 @@ async def _open_listings(update, context, watch_id, requested_sort=None):
         "page": 0,
         "fetch": fetch,
         "fetched_at": time.time(),
-        "nav": [("◀️ До товару", f"watch_details:{watch_id}"), ("🗂 До категорій", "menu:list"),
+        "nav": [("◀️ До товару", f"watch_details:{watch_id}"), ("🗂 Категорії", "menu:list"),
                 ("🏠 Меню", "menu:home")],
         "query": watch["query"],
     }
@@ -233,7 +233,7 @@ def _short_listing_label(title, query, max_len=26):
 
 
 async def _render_listing_panel(update, context, watch_id, state, note="", undo_words=()):
-    """Список оголошень з кнопками «🔗», «🙈 Сховати» і «❌ Інший товар» для кожного.
+    """Список оголошень з кнопками «🔗», «🙈 Сховати» і «❌ Не той товар» для кожного.
     Стан зберігається, щоб після відхилення перемалювати список без
     нового запиту до eBay."""
     context.user_data[_listing_state_key(watch_id)] = state
@@ -252,8 +252,8 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         total = f"{len(items)}+" if more_on_ebay else f"{len(items)}"
         lines[0] += f"\nПоказано <b>{start + 1}–{start + len(shown)}</b> з {total}"
     if items:
-        lines.append("<i>🙈 Сховати — той товар, але не підходить (пошкодження тощо)\n"
-                     "❌ Інший товар — інша модель чи аксесуар</i>")
+        lines.append("<i>🙈 Сховати — той товар, але не підходить (пошкодження тощо) · "
+                     "❌ Не той товар — інша модель чи аксесуар</i>")
     if note:
         lines.append(html.escape(note))
     rows = []
@@ -282,8 +282,8 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
         if it.get("auction"):
             listed += "\n" + auction_note(it.get("current_bid"), it.get("bid_count"), it.get("end_at"))
         copies = f" · ×{it['copies']} однакових" if it.get("copies", 1) > 1 else ""
-        lines.append(f"<b>{i}. {html.escape(it['title'][:160])}</b>\n"
-                     f"💶 {it['price']:.0f} {html.escape(it['currency'])}{copies}{cond}{listed}")
+        lines.append(f"<b>{i}.</b> <i>{html.escape(it['title'][:160])}</i>\n"
+                     f"💶 <b>{it['price']:.0f} {html.escape(it['currency'])}</b>{copies}{cond}{listed}")
         row = []
         if it.get("url"):
             row.append(InlineKeyboardButton(
@@ -291,7 +291,7 @@ async def _render_listing_panel(update, context, watch_id, state, note="", undo_
                 url=it["url"]))
         if it.get("item_id"):
             row.append(InlineKeyboardButton("🙈 Сховати", callback_data=f"hidel:{watch_id}:{i - 1}"))
-            row.append(InlineKeyboardButton("❌ Інший товар", callback_data=f"rejl:{watch_id}:{i - 1}"))
+            row.append(InlineKeyboardButton("❌ Не той товар", callback_data=f"rejl:{watch_id}:{i - 1}"))
         if row:
             rows.append(row)
     for word in undo_words:
@@ -424,10 +424,10 @@ async def reject_deal_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         rows = [row for row in rows if row]
         text = query_cb.message.text  # type: ignore[attr-defined]
     else:
-        rows = [[InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]]
+        rows = [[InlineKeyboardButton("🏠 Меню", callback_data="menu:home")]]
         text = (f"{query_cb.message.text}\n\n"  # type: ignore[attr-defined]
                 + ("🙈 Сховано — це оголошення більше не показуватиму" if hidden
-                   else "❌ Інший товар — більше не враховую"))
+                   else "❌ Не той товар — більше не враховую"))
     if words:
         text += "\n\n" + learned_words_note(words)
         rows = [[InlineKeyboardButton(f"↩️ Не відсіювати «{w}»", callback_data=f"unlw:{watch['id']}:{w}")]

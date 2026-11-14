@@ -128,7 +128,7 @@ def test_sold_only_hides_listing_priced_deals(monkeypatch):
     upd, ctx = press("soldonly")
     asyncio.run(account.sold_only_callback(upd, ctx))
     assert db.get_sold_only(1) is False and "як раніше" in shown[-1][0]
-    assert any("продажі або оголошення" in b for b in shown[-1][1])
+    assert any("продажі + оголошення" in b for b in shown[-1][1])
 
 
 async def _record(shown, text, reply_markup):
@@ -226,7 +226,7 @@ def test_watch_min_profit_screen(monkeypatch):
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press(f"wmp:{wid}")
     asyncio.run(screen_watch.watch_min_profit_callback(upd, ctx))
-    assert "Мін. прибуток — PlayStation 4" in shown[-1][0] and "25€" in shown[-1][1]
+    assert "Мін. прибуток · PlayStation 4" in shown[-1][0] and "25€" in shown[-1][1]
     upd, ctx = press(f"wmp:{wid}:25")
     asyncio.run(screen_watch.watch_min_profit_callback(upd, ctx))
     assert "💰 Мін. прибуток: 25€" in shown[-1][1] and "свій для цього товару" in shown[-1][0]

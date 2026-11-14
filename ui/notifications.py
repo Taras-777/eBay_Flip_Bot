@@ -2,9 +2,11 @@
 Повідомлення про знахідки та проблеми з ринковими даними.
 """
 
+import html
 import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
 
 from core.settings import log
 from analysis.textparse import _group_label, plural
@@ -32,11 +34,11 @@ async def _notify_new_deals(app, chat_id, found):
     unseen = count_unseen_deals(chat_id)
     drop = "\n🔻 Продавець знизив ціну" if len(found) == 1 and it.get("price_dropped") else ""
     if unseen <= 1:
-        head = "🔥 Нова вигідна пропозиція"
+        head = "🔥 <b>Нова вигідна пропозиція</b>"
     else:
-        head = f"🔥 Нові вигідні пропозиції: {unseen}"
-    text = (f"{head}\n\n{'Найвигідніша — ' if unseen > 1 else ''}{w['label']}: "
-            f"{it['total_price']:.0f}€ → прибуток ~{profit:.0f}€{drop}")
+        head = f"🔥 <b>Нові вигідні пропозиції: {unseen}</b>"
+    text = (f"{head}\n\n{'Найвигідніша — ' if unseen > 1 else ''}<b>{html.escape(w['label'])}</b>\n"
+            f"💶 {it['total_price']:.0f}€ → 💰 прибуток <b>+{profit:.0f}€</b>{drop}")
     markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔥 Відкрити пропозиції", callback_data="deals:0")]])
 
     notices = app.bot_data.setdefault("deal_notice", {})
@@ -44,13 +46,14 @@ async def _notify_new_deals(app, chat_id, found):
     had_unseen_before = unseen > len(found)
     if prev and had_unseen_before and time.time() - prev["sent_at"] < DEAL_RENOTIFY_MINUTES * 60:
         try:
-            await app.bot.edit_message_text(text, chat_id=chat_id, message_id=prev["message_id"], reply_markup=markup)
+            await app.bot.edit_message_text(text, chat_id=chat_id, message_id=prev["message_id"], reply_markup=markup,
+                                            parse_mode=ParseMode.HTML)
             app.bot_data.setdefault("chats_to_repost_panel", set()).add(chat_id)  # оновити лічильник у меню
             return
         except Exception as e:
             log.debug("Не вдалося оновити сповіщення про пропозиції: %s", e)
     try:
-        msg = await app.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+        msg = await app.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode=ParseMode.HTML)
     except Exception as e:
         log.warning("Не вдалося надіслати сповіщення про пропозиції в чат %s: %s", chat_id, e)
         return

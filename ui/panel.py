@@ -54,13 +54,14 @@ MENU_LABELS = {
     "unknown": "🛠 Нерозпізнані",
     "pending": "⏳ Запити на доступ",
     "users": "👥 Користувачі",
-    "refresh_usage": "🔄 Оновити запити",
-    "refresh_prices": "💰 Оновити ціни",
+    "refresh_usage": "📡 Оновити ліміти",
+    "refresh_prices": "🔄 Оновити ціни",
     "ebay_account": "⚙️ Налаштування",
 }
 
 
-MAIN_MENU_TEXT = "📋 <b>Головне меню</b> — обери дію:"
+MAIN_MENU_TEXT = ("🏠 <b>eBay Flip Bot</b>\n"
+                  "<i>Шукаю вигідні оголошення на eBay.de і рахую, на чому можна заробити.</i>")
 
 
 def last_limit_reset(now=None):
@@ -100,12 +101,30 @@ def prices_updated_line(user_id):
         when = f"вчора о {moment:%H:%M}"
     else:
         when = f"{moment:%d.%m} о {moment:%H:%M}"
-    line = f"💰 Ціни товарів оновлено: {when}"
+    line = f"💰 Ціни оновлено {when}"
     scan = get_scan_summary(user_id)
     if scan:
-        line += (f"\n🔎 Останнє сканування: переглянуто <b>{scan['fetched']}</b> оголошень · "
-                 f"підійшло <b>{scan['kept']}</b> · нових у базі <b>{scan['new_count']}</b>")
+        line += (f"\n🔎 Сканування: <b>{scan['fetched']}</b> оголошень · підійшло <b>{scan['kept']}</b> · "
+                 f"нових <b>{scan['new_count']}</b>")
     return line
+
+
+def counters_line(user_id):
+    """«🔥 Нових знахідок: 3 · 🔨 Аукціонів: 2» — що чекає на перегляд."""
+    parts = []
+    unseen = count_unseen_deals(user_id)
+    if unseen:
+        parts.append(f"🔥 Нових знахідок: <b>{unseen}</b>")
+    try:
+        auctions = count_auctions(user_id)
+    except Exception:
+        auctions = 0
+    if auctions:
+        parts.append(f"🔨 Аукціонів: <b>{auctions}</b>")
+    _, unseen_md = markdown_counts(user_id)
+    if unseen_md:
+        parts.append(f"📉 Нових знижок: <b>{unseen_md}</b>")
+    return " · ".join(parts) if parts else "✨ Нових знахідок поки немає — бот шукає далі"
 
 
 def pace_line():
@@ -124,19 +143,20 @@ def main_menu_text(user_id=None):
     """Текст головного меню; власник додатково бачить використання eBay API.
     Внизу — коли оновлювались ціни й версія бота (змінюється сама після оновлення коду)."""
     footer = f"\n\n<i>🏷 Версія {get_version()}</i>"
-    prices = ""
+    status = ""
     if user_id is not None:
         try:
-            line = prices_updated_line(user_id)
-            prices = f"\n\n{line}" if line else ""
+            lines = [counters_line(user_id), prices_updated_line(user_id)]
+            status = "\n\n" + "\n".join(line for line in lines if line)
         except Exception as e:
-            log.debug("Не вдалося визначити час оновлення цін: %s", e)
+            log.debug("Не вдалося визначити стан для меню: %s", e)
     if user_id is not None and is_owner(user_id):
         try:
-            return f"{MAIN_MENU_TEXT}\n\n{api_usage_line(sold_checks_line())}{pace_line()}{prices}{footer}"
+            usage = f"\n\n{api_usage_line(sold_checks_line())}{pace_line()}"
+            return f"{MAIN_MENU_TEXT}{status}{usage}{footer}"
         except Exception as e:
             log.debug("Не вдалося сформувати рядок використання API: %s", e)
-    return MAIN_MENU_TEXT + prices + footer
+    return MAIN_MENU_TEXT + status + footer
 
 
 def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
@@ -148,30 +168,33 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
     unseen = count_unseen_deals(user_id)
     deals_label = MENU_LABELS["deals"] + (f" · 🆕 {unseen}" if unseen else "")
     total_md, unseen_md = markdown_counts(user_id)
-    md_label = MENU_LABELS["markdowns"] + (f" · 🆕 {unseen_md}" if unseen_md else "")
-    rows = [
-        [InlineKeyboardButton(deals_label, callback_data="deals:0")],
-        [btn("list")],
-        [btn("discover")],
-        [btn("stats")],
-    ]
+    md_label = MENU_LABELS["markdowns"] + (f" · 🆕 {unseen_md}" if unseen_md else f" ({total_md})")
+    try:
+        auctions = count_auctions(user_id)
+    except Exception as e:   # лічильник не має ламати меню
+        log.debug("Не вдалося порахувати аукціони: %s", e)
+        auctions = 0
     from analysis.unrecognized import total_unrecognized   # тут: unrecognized імпортує market, а той — panel
     try:
         unknown = total_unrecognized(user_id)
     except Exception as e:   # лічильник не має ламати меню
         log.debug("Не вдалося порахувати нерозпізнані: %s", e)
         unknown = 0
+
+    rows = [[InlineKeyboardButton(deals_label, callback_data="deals:0")]]
+    # «🔨 Аукціони» і «📉 Знизили ціну» — лише коли там щось є; поруч, щоб меню було коротшим
+    extra = []
+    if auctions:
+        extra.append(InlineKeyboardButton(f"{MENU_LABELS['auctions']} ({auctions})", callback_data="auc:0"))
+    if total_md:
+        extra.append(InlineKeyboardButton(md_label, callback_data="mkd:0"))
+    if extra:
+        rows.append(extra)
+    rows.append([btn("list"), btn("discover")])
+    second = [btn("stats")]
     if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
-        rows.append([InlineKeyboardButton(f"{MENU_LABELS['unknown']} ({unknown})", callback_data="unkall:0")])
-    if total_md:   # «📉 Знизили ціну» — лише коли там щось є
-        rows.insert(1, [InlineKeyboardButton(md_label, callback_data="mkd:0")])
-    try:
-        auctions = count_auctions(user_id)
-    except Exception as e:   # лічильник не має ламати меню
-        log.debug("Не вдалося порахувати аукціони: %s", e)
-        auctions = 0
-    if auctions:   # «🔨 Аукціони» — лише коли є знайдені аукціони, що ще тривають
-        rows.insert(1, [InlineKeyboardButton(f"{MENU_LABELS['auctions']} ({auctions})", callback_data="auc:0")])
+        second.append(InlineKeyboardButton(f"{MENU_LABELS['unknown']} ({unknown})", callback_data="unkall:0"))
+    rows.append(second)
     offer = menu_offer(user_id)
     if offer:   # щойно щось видалив і пішов у меню — повернути ще можна
         rows.insert(0, [undo_button(offer["id"], offer["label"])])
@@ -189,7 +212,7 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
 
 
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="menu:home")]])
 
 
 def cancel_keyboard() -> InlineKeyboardMarkup:

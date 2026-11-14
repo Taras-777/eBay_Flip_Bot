@@ -27,11 +27,12 @@ from ebay.ebay_user import (
     is_connected,
 )
 from ui.panel import _ack_callback, show_main_menu, show_panel
+from ui.style import grid, hint, menu_row, title
 from core.backup import backups_summary, make_backup
 
 EBAY_CODE = 0  # чекаємо адресу сторінки після входу в eBay
 
-BACK_ROW = [InlineKeyboardButton("◀️ Меню", callback_data="menu:home")]
+BACK_ROW = menu_row()
 
 WHY_TEXT = (
     "Навіщо: коли оголошення зникає з eBay, бот спитає в eBay, чи його справді "
@@ -46,7 +47,7 @@ def _date(ts):
 
 def _not_configured_text():
     return (
-        "🔐 <b>Акаунт eBay</b>\n\n" + WHY_TEXT + "\n\n"
+        "🔐 <b>Акаунт eBay</b> · ⚠️ не налаштовано\n\n" + WHY_TEXT + "\n\n"
         "Спершу потрібне одноразове налаштування:\n"
         "1. developer.ebay.com → <b>User Tokens</b> → <b>Get a Token from eBay via Your "
         "Application</b> → додай <b>eBay Redirect URL</b> (Production).\n"
@@ -60,18 +61,15 @@ def _connected_text():
     connected_at, expires_at = connection_info()
     stats = sold_check_stats()
     lines = [
-        "🔐 <b>Акаунт eBay</b> — ✅ підключено",
-        f"з {_date(connected_at)}, вхід діє до {_date(expires_at)}",
+        "🔐 <b>Акаунт eBay</b> · ✅ підключено",
+        f"<i>з {_date(connected_at)} · вхід діє до {_date(expires_at)}</i>",
         "",
-        "<b>Зниклі оголошення за 7 днів</b> <i>(бот перепитав eBay, що з ними сталось)</i>:",
-        f"✅ продано: {stats.get('sold', 0)}",
-        f"🚫 знято без продажу: {stats.get('unsold', 0)}",
-        f"↩️ ще продаються: {stats.get('active', 0)}",
-        f"❔ eBay не відповів: {stats.get('unknown', 0)}",
-        f"⏳ чекають перевірки: {stats.get('pending', 0)}",
+        "🧾 <b>Зниклі оголошення за 7 днів</b>",
+        f"✅ продано <b>{stats.get('sold', 0)}</b> · 🚫 знято <b>{stats.get('unsold', 0)}</b> · "
+        f"↩️ ще продаються <b>{stats.get('active', 0)}</b>",
+        f"❔ без відповіді eBay {stats.get('unknown', 0)} · ⏳ у черзі {stats.get('pending', 0)}",
         "",
-        f"📡 Запитів Trading API сьогодні: {trading_calls_today()[0]} / {TRADING_DAILY_BUDGET} "
-        "<i>(перевірки продажів; окремий ліміт, пошук не зменшує)</i>",
+        f"📡 Trading API сьогодні: <b>{trading_calls_today()[0]}</b> / {TRADING_DAILY_BUDGET}",
         *trading_breakdown_lines(),
     ]
     return "\n".join(lines)
@@ -80,7 +78,7 @@ def _connected_text():
 def _login_text(note=""):
     return (
         (f"{note}\n\n" if note else "") +
-        "🔐 <b>Акаунт eBay</b> — вхід\n\n" + WHY_TEXT + "\n\n"
+        "🔐 <b>Вхід в акаунт eBay</b>\n\n" + WHY_TEXT + "\n\n"
         "1. Натисни «🔗 Увійти в eBay» і увійди своїм акаунтом.\n"
         "2. Погодься на доступ (<b>Zustimmen / Agree</b>).\n"
         "3. Відкриється сторінка eBay про успішний вхід — <b>скопіюй її адресу</b> з "
@@ -94,25 +92,22 @@ def _login_keyboard():
 
 
 BUTTONS_HELP = "\n".join([
-    "<b>Що робить кожна кнопка:</b>",
-    "🔄 <b>Увійти в eBay заново</b> — оновити вхід в акаунт eBay (коли він закінчується або злетів). "
+    "🔄 <b>Увійти заново</b> — оновити вхід в акаунт eBay (коли він закінчується або злетів). "
     "Акаунт потрібен, щоб бот перевіряв, чи зникле оголошення справді продали, і бачив фінальну ціну.",
     "🔌 <b>Відключити</b> — вийти з акаунта eBay. Бот і далі шукатиме знахідки, але зниклі оголошення "
     "вважатиме проданими без перевірки.",
-    "💰 <b>Мін. прибуток</b> — скільки щонайменше ти хочеш заробити на одній речі: ціна продажу мінус "
-    "доставка покупцю мінус ціна купівлі. Оголошення з меншим прибутком бот не пропонує у «🔥», а «купувати до» "
-    "в картках = ціна продажу − доставка − цей прибуток. Напр., продати за 600€, мін. прибуток 100€ → "
-    "купувати до 493€. Тут — загальне значення і пороги категорій (🎮 Консолі, 💻 Ноутбуки…) у € або % від "
-    "ціни продажу; для окремого товару можна задати своє в його картці.",
+    "💰 <b>Мін. прибуток</b> — скільки щонайменше ти хочеш заробити на одній речі. "
+    "«Купувати до» = ціна продажу − 7€ доставки − мін. прибуток (600€, 100€ → 493€). "
+    "Там — загальне значення і пороги категорій у € або %.",
     "📉 <b>Поріг знижки</b> — на скільки % продавець має знизити ціну, щоб оголошення потрапило в "
     "«📉 Знизили ціну».",
-    "💰 <b>Ціна для знахідок</b> — звідки ціна «Продати» у «🔥»: <i>лише за продажами</i> (надійніше, "
-    "знахідок менше) або <i>продажі або оголошення</i> (коли продажів замало — за поточними оголошеннями).",
-    "🔨 <b>Аукціони</b> — увімкнути / вимкнути пошук аукціонів, що закінчуються через 6–12 год: сповіщення "
-    "про вигідний і нагадування за 45 хв до кінця. Ставок бот не робить.",
-    "📡 <b>Статистика запитів</b> — скільки запитів до eBay бот зробив за кожен день (ліміт — 5000 на добу).",
-    "🐢 <b>Журнал повільних дій</b> — кнопки, які відкривались довше за 1,5 с або з помилкою.",
-    "💾 <b>Надіслати резервну копію бази</b> — свіжа копія бази файлом у чат. У ній є вхід в акаунт eBay — "
+    "🔨 <b>Аукціони</b> — пошук аукціонів, що закінчуються через 6–12 год: сповіщення про вигідний і "
+    "нагадування за 45 хв до кінця. Ставок бот не робить.",
+    "📊 <b>Ціна продажу</b> — звідки ціна «Продати» у «🔥»: <i>лише за продажами</i> (надійніше, "
+    "знахідок менше) або <i>продажі + оголошення</i> (коли продажів замало — за поточними оголошеннями).",
+    "📡 <b>Статистика запитів</b> — скільки запитів до eBay бот зробив за кожен день.",
+    "🐢 <b>Повільні дії</b> — кнопки, які відкривались довше за 1,5 с або з помилкою (звіт для розробника).",
+    "💾 <b>Резервна копія</b> — свіжа копія бази файлом у чат. У ній є вхід в акаунт eBay — "
     "нікому не пересилай.",
 ])
 
@@ -120,15 +115,15 @@ BUTTONS_HELP = "\n".join([
 def _settings_text(note=""):
     """Екран «⚙️ Налаштування»: акаунт eBay, резервні копії і пояснення кнопок."""
     parts = [note] if note else []
-    parts.append("⚙️ <b>Налаштування</b>")
+    parts.append(title("⚙️", "Налаштування", "акаунт eBay, пороги прибутку і службові дії"))
     if not is_configured():
         parts.append(_not_configured_text())
     elif is_connected():
         parts.append(_connected_text())
     else:
-        parts.append("🔐 <b>Акаунт eBay</b> — ❌ не підключено\n\n" + WHY_TEXT)
+        parts.append("🔐 <b>Акаунт eBay</b> · ❌ не підключено\n\n" + WHY_TEXT)
     parts.append(backups_summary())
-    parts.append(BUTTONS_HELP)
+    parts.append(hint(BUTTONS_HELP, "ℹ️ Що робить кожна кнопка"))
     return "\n\n".join(parts)
 
 
@@ -136,23 +131,21 @@ def _settings_keyboard(chat_id=None):
     rows = []
     if is_configured():
         if is_connected():
-            rows.append([InlineKeyboardButton("🔄 Увійти в eBay заново", callback_data="eacc:connect"),
+            rows.append([InlineKeyboardButton("🔄 Увійти заново", callback_data="eacc:connect"),
                          InlineKeyboardButton("🔌 Відключити", callback_data="eacc:disconnect")])
         else:
             rows.append([InlineKeyboardButton("🔐 Підключити акаунт eBay", callback_data="eacc:connect")])
     if chat_id is not None:
         rows.append([InlineKeyboardButton(f"💰 Мін. прибуток: {get_min_profit(chat_id):.0f}€", callback_data="mprof:show")])
-        rows.append([InlineKeyboardButton(f"📉 Поріг знижки: {get_drop_pct(chat_id):.0f}%",
-                                          callback_data="mdpct:show")])
+        rows.append([InlineKeyboardButton(f"📉 Поріг знижки: {get_drop_pct(chat_id):.0f}%", callback_data="mdpct:show"),
+                     InlineKeyboardButton("🔨 Аукціони: " + ("✅ увімк." if get_auctions_enabled(chat_id) else "❌ вимк."),
+                                          callback_data="auctions")])
         rows.append([InlineKeyboardButton(
-            "💰 Ціна для знахідок: " + ("лише за продажами ✅" if get_sold_only(chat_id) else "продажі або оголошення"),
+            "📊 Ціна продажу: " + ("✅ лише за продажами" if get_sold_only(chat_id) else "продажі + оголошення"),
             callback_data="soldonly")])
-        rows.append([InlineKeyboardButton(
-            "🔨 Аукціони: " + ("увімкнено ✅" if get_auctions_enabled(chat_id) else "вимкнено"),
-            callback_data="auctions")])
-    rows.append([InlineKeyboardButton("📡 Статистика запитів", callback_data="apistat:0"),
-                 InlineKeyboardButton("🐢 Журнал повільних дій", callback_data="slowlog")])
-    rows.append([InlineKeyboardButton("💾 Надіслати резервну копію бази", callback_data="backup:send")])
+    rows += grid([InlineKeyboardButton("📡 Статистика запитів", callback_data="apistat:0"),
+                  InlineKeyboardButton("🐢 Повільні дії", callback_data="slowlog")])
+    rows.append([InlineKeyboardButton("💾 Резервна копія бази", callback_data="backup:send")])
     rows.append(BACK_ROW)
     return InlineKeyboardMarkup(rows)
 

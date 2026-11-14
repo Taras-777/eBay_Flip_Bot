@@ -33,6 +33,7 @@ from analysis.deal_reprice import basis_line, reprice_deals, specs_line
 from analysis.laptops import laptop_warnings
 from analysis.textparse import PICKUP_NOTE, is_bundle
 from ui.undo import record as undo_record, short
+from ui.style import hint, menu_row, title
 
 
 # ============================================================
@@ -47,11 +48,11 @@ def _deal_card(n, d, sold=None):
     note = sales_note(sold, d["cond_group"], d["spec_group"]) if sold and d.get("cond_group") else ""
     _, profit = estimate_resale_profit(sale, d["total_price"])
     new = "🆕 " if d["seen_at"] is None else ""
-    offer = " · 🎯 можна торгуватись" if d["has_best_offer"] else ""
+    tags = ["🎯 можна торгуватись"] if d["has_best_offer"] else []
     if is_bundle(d["title"]):
-        offer += " · 📦 комплект"
+        tags.append("📦 комплект")
     if d.get("watch_count"):
-        offer += f" · 👁 стежать: {d['watch_count']}"
+        tags.append(f"👁 стежать: {d['watch_count']}")
     warn = "\n⚠️ Мало відгуків у продавця — перевір уважно" if d["suspicious"] else ""
     for w in laptop_warnings(d["title"]):
         warn += f"\n{w}"
@@ -69,14 +70,16 @@ def _deal_card(n, d, sold=None):
         warn += "\n" + PICKUP_NOTE
     if d.get("cond_group") == "new":
         warn = (warn or "") + "\n🏪 Продає магазин — є 14 днів на повернення і гарантія"
-    listed = f"📅 виставлено {_listed(d['listed_at'])}\n" if d.get("listed_at") else ""
-    return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b> · знайдено {_when(d['created_at'])}\n"
-            f"{html.escape(d['title'][:90])}\n{listed}"
-            + (f"{html.escape(specs)}\n" if specs else "") +
-            f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток ~<b>{profit:.0f}€</b>{offer}\n"
+    listed = f" · 📅 виставлено {_listed(d['listed_at'])}" if d.get("listed_at") else ""
+    return (f"<b>{n}. {new}{html.escape(d['watch_label'])}</b>\n"
+            f"<i>{html.escape(d['title'][:90])}</i>\n"
+            f"💶 <b>{d['total_price']:.0f}€</b> → продати ~{sale:.0f}€ · 💰 прибуток <b>+{profit:.0f}€</b>\n"
+            + (f"{' · '.join(tags)}\n" if tags else "")
+            + (f"{html.escape(specs)}\n" if specs else "")
             + (f"{html.escape(basis)}\n" if basis else "") + (f"{warn.lstrip()}\n" if warn else "")
-            + (f"{html.escape(note)}\n" if note else "") +
-            f'<a href="{html.escape(d["url"])}">🔗 Відкрити на eBay</a>')
+            + (f"{html.escape(note)}\n" if note else "")
+            + f"🕐 знайдено {_when(d['created_at'])}{listed}\n"
+            + f'<a href="{html.escape(d["url"])}">🔗 Відкрити на eBay</a>')
 
 
 async def _render_deals(update, context, page=0, note=""):
@@ -99,13 +102,15 @@ async def _render_deals(update, context, page=0, note=""):
         page = max(0, (total - 1) // DEALS_PER_PAGE)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     own_rules = " (у деяких категоріях / товарах — свій)" if get_category_profits(chat_id) else ""
-    lines = [f"🔥 <b>Вигідні пропозиції</b> ({total}) · прибуток від {get_min_profit(chat_id):.0f}€{own_rules}, "
-             "найвигідніші вгорі. Продані й зняті оголошення бот прибирає сам."]
+    pages = max(1, (total + DEALS_PER_PAGE - 1) // DEALS_PER_PAGE)
+    page_txt = f" · сторінка {page + 1} з {pages}" if pages > 1 else ""
+    lines = [title("🔥", "Вигідні пропозиції", count=total, subtitle=
+                   f"прибуток від {get_min_profit(chat_id):.0f}€{own_rules} · найвигідніші вгорі{page_txt}")]
     if note:
         lines.append(note)
     rows = []
     if not deals:
-        lines.append("Поки нових немає. Щойно бот знайде вигідну пропозицію — прийде одне коротке "
+        lines.append("✨ Поки нових немає. Щойно бот знайде вигідну пропозицію — прийде одне коротке "
                      "сповіщення, а сама пропозиція з'явиться тут.")
     sold_by_watch = {}
     for i, d in enumerate(deals, 1 + page * DEALS_PER_PAGE):
@@ -113,22 +118,25 @@ async def _render_deals(update, context, page=0, note=""):
             sold_by_watch[d["watch_id"]] = get_sold_listings(d["watch_id"], max(SALES_WINDOW_DAYS, LAPTOP_SALES_WINDOW_DAYS))
         lines.append(_deal_card(i, d, sold_by_watch[d["watch_id"]]))
         rows.append([
-            InlineKeyboardButton(f"✅ {i} Куплено", callback_data=f"dact:buy:{d['id']}:{page}"),
-            InlineKeyboardButton(f"🙈 {i}", callback_data=f"dact:hide:{d['id']}:{page}"),
-            InlineKeyboardButton(f"❌ {i} Інший товар", callback_data=f"dact:rej:{d['id']}:{page}"),
+            InlineKeyboardButton(f"✅ {i} Купив", callback_data=f"dact:buy:{d['id']}:{page}"),
+            InlineKeyboardButton(f"🙈 {i} Сховати", callback_data=f"dact:hide:{d['id']}:{page}"),
+            InlineKeyboardButton(f"❌ {i} Не той товар", callback_data=f"dact:rej:{d['id']}:{page}"),
         ])
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Назад", callback_data=f"deals:{page - 1}"))
+        nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"deals:{page - 1}"))
     if (page + 1) * DEALS_PER_PAGE < total:
-        nav.append(InlineKeyboardButton("Далі ▶️", callback_data=f"deals:{page + 1}"))
+        nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"deals:{page + 1}"))
     if nav:
         rows.append(nav)
     if total:
         rows.append([InlineKeyboardButton("🧹 Очистити список", callback_data="dclear")])
-    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    rows.append(menu_row())
     if deals:
-        lines.append("<i>🙈 — сховати це оголошення; ❌ Інший товар — не той товар, бот запам'ятає.</i>")
+        lines.append(hint("✅ <b>Купив</b> — позначити покупку (піде в статистику).\n"
+                          "🙈 <b>Сховати</b> — прибрати лише це оголошення.\n"
+                          "❌ <b>Не той товар</b> — бот запам'ятає слова з назви й більше таке не пропонуватиме.\n"
+                          "Продані й зняті оголошення бот прибирає сам.", "ℹ️ Кнопки"))
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
     mark_deals_seen([d["id"] for d in deals])

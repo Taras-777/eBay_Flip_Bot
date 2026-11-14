@@ -69,9 +69,10 @@ async def addwatch_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _clear_new_watch(context)
     await show_panel(
         update, context,
-        "📦 <b>Додавання товару</b>\n\n"
-        "Введи назву/модель товару, який хочеш відстежувати на eBay.\n"
-        "Приклад: iPhone 13 128GB, PlayStation 5 Pro, ThinkPad X1 Carbon Gen 10",
+        "➕ <b>Новий товар</b>\n<i>назва → категорії eBay → мінімальна ціна</i>\n\n"
+        "Напиши назву чи модель товару, який хочеш відстежувати на eBay.\n\n"
+        "Приклади: <code>iPhone 13 128GB</code>, <code>PlayStation 5 Pro</code>, "
+        "<code>ThinkPad X1 Carbon Gen 10</code>",
         reply_markup=cancel_keyboard(),
         parse_mode=ParseMode.HTML,
     )

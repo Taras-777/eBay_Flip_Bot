@@ -100,7 +100,7 @@ def test_second_batch_edits_unread_notice_instead_of_new_message(fake_ebay):
     app = make_app()
     edits = []
 
-    async def edit_message_text(text, chat_id=None, message_id=None, reply_markup=None):
+    async def edit_message_text(text, chat_id=None, message_id=None, reply_markup=None, parse_mode=None):
         edits.append(text)
 
     app.bot.edit_message_text = edit_message_text

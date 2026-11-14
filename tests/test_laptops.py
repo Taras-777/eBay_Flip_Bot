@@ -480,7 +480,7 @@ def test_group_listings_collapse_identical_offers(monkeypatch):
     ctx.user_data = {f"cfg_groups_{wid}": [("new", "RTX 5050")]}
     asyncio.run(handlers.config_listings_callback(upd, ctx))
     text = shown[-1][0]
-    assert "з 2" in text and "💶 874 € · ×3 однакових" in text
+    assert "з 2" in text and "💶 <b>874 €</b> · ×3 однакових" in text
 
 
 def test_wider_laptop_groups_are_labelled():
@@ -507,7 +507,7 @@ def test_pickup_only_marked(monkeypatch):
     ctx.user_data = {f"cfg_groups_{wid}": [("used", "RTX 5050")]}
     asyncio.run(handlers.config_listings_callback(upd, ctx))
     text = shown[-1][0]
-    assert "700 € · 🚗 лише самовивіз" in text and "720 € · 🚗" not in text
+    assert "700 €</b> · 🚗 лише самовивіз" in text and "720 €</b> · 🚗" not in text
 
 
 def test_description_ram_with_label_and_comma():

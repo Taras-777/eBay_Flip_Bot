@@ -142,7 +142,7 @@ def check_listing(watch, text):
     # 8. Приховані вручну
     item_id = item.get("itemId")
     if item_id and item_id in get_rejected_ids(watch["id"]):
-        checks.append((FAIL, "Ти раніше прибрав це оголошення кнопкою «🙈 Сховати» або «❌ Інший товар»"))
+        checks.append((FAIL, "Ти раніше прибрав це оголошення кнопкою «🙈 Сховати» або «❌ Не той товар»"))
 
     # 9. Характеристики
     aspects = {

@@ -48,7 +48,7 @@ async def show_folder_choice(update, context, watch, note=""):
                                     callback_data=f"fld:{wid}:{key}") for key, name in names.items()]
     rows += [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton("➕ Нова папка", callback_data=f"fldnew:{wid}")])
-    rows.append([InlineKeyboardButton("📌 До товару", callback_data=f"watch_details:{wid}")])
+    rows.append([InlineKeyboardButton("◀️ До товару", callback_data=f"watch_details:{wid}")])
     text = (f"{note}\n\n" if note else "") + (
         f"🗂 <b>Папка для «{html.escape(watch['label'])}»</b>: зараз <b>{html.escape(names[current])}</b>"
         + ("" if manual else " (автоматично)") + "\n\n"

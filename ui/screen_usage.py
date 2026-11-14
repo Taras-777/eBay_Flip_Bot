@@ -94,7 +94,7 @@ def usage_keyboard(page, pages):
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton("🔄 Оновити", callback_data=f"apistat:{page}")])
-    rows.append([InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")])
+    rows.append([InlineKeyboardButton("◀️ Налаштування", callback_data="menu:ebay_account")])
     return InlineKeyboardMarkup(rows)
 
 

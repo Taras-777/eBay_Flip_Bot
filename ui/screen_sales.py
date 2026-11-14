@@ -30,6 +30,7 @@ from ui.access import require_access
 from ebay.ebay_user import is_connected
 from ebay.trading_api import verify_watch_now
 from analysis.sales import mark_offer_sales, priced, speed_text, summarize
+from ui.style import hint as style_hint
 
 
 SALES_LIST_MAX = 20   # скільки останніх продажів показувати в списку (з фільтром — лише потрібної конфігурації)
@@ -94,8 +95,8 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
     lines = [
         title, "",
         tracking,
-        f"Продано: <b>{len(sold)}</b>" + (f" (✅ підтверджено eBay: {confirmed})" if confirmed else ""),
-        f"За останні 7 днів: <b>{week}</b> (~{week / 7:.1f} на день)",
+        f"🛒 Продано: <b>{len(sold)}</b>" + (f" (✅ підтверджено eBay: {confirmed})" if confirmed else ""),
+        f"📆 За останні 7 днів: <b>{week}</b> (~{week / 7:.1f} на день)",
     ]
 
     groups = {}
@@ -131,7 +132,7 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
 
     shown, flt_spec = _listed(sold, flt)
     total = len(_filtered(sold, flt_spec))
-    title_list = "\n<b>Останні продажі</b>" + (f" · {html.escape(_spec_label(flt_spec))}" if flt_spec else "")
+    title_list = "\n🧾 <b>Останні продажі</b>" + (f" · {html.escape(_spec_label(flt_spec))}" if flt_spec else "")
     if total > len(shown):
         title_list += f" (показано {len(shown)} останніх з {total})"
     lines.append(title_list + ":")
@@ -146,13 +147,15 @@ def _sales_text(watch, sold, show_account_hint=False, flt="", active=None):
                  else f"<b>{r['price']:.0f}€</b>")
         lines.append(f"{n}. {mark}{date}{html.escape(spec)} · {price}{bundle} — {link}")
 
-    lines.append("\n<i>Ціна — з доставкою, остання, яку бачив бот. ✅ — продаж підтвердив eBay; "
-                 "📦 — комплект (додаткові геймпади чи ігри); "
-                 "🤝 — продано за прийнятою пропозицією: eBay не показує її ціну, а ціна оголошення набагато "
-                 "вища за ринок, тож у типову ціну й швидкість продажу такий продаж не входить; "
-                 "⏳ — ще в черзі на перевірку; без позначки — eBay не відповів, оцінка за "
-                 "зникненням (оголошення зникло задовго до кінця строку). "
-                 "Чужий товар у списку — натисни ❌ з його номером, і він більше не впливатиме на ціни.</i>")
+    lines.append("\n" + style_hint(
+        "Ціна — з доставкою, остання, яку бачив бот.\n"
+        "✅ — продаж підтвердив eBay; ⏳ — ще в черзі на перевірку; без позначки — eBay не відповів, "
+        "оцінка за зникненням (оголошення зникло задовго до кінця строку).\n"
+        "📦 — комплект (додаткові геймпади чи ігри).\n"
+        "🤝 — продано за прийнятою пропозицією: eBay не показує її ціну, а ціна оголошення набагато "
+        "вища за ринок, тож у типову ціну й швидкість продажу такий продаж не входить.\n"
+        "Чужий товар у списку — натисни ❌ з його номером, і він більше не впливатиме на ціни.",
+        "ℹ️ Позначки"))
     if show_account_hint:
         lines.append("<i>💡 Підключи «🔐 Акаунт eBay» в меню — тоді бот відсіюватиме оголошення, "
                      "які продавець просто зняв.</i>")
@@ -248,7 +251,7 @@ async def sales_reject_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query_cb.answer("Цього продажу вже немає в списку.")
         return await _show_sales(update, context, watch, flt)
     # «Не той товар»: більше не враховується ні в продажах, ні в цінах, ні в пошуку;
-    # якщо в таких назвах повторюються слова — бот їх вивчить (як ❌ Інший товар)
+    # якщо в таких назвах повторюються слова — бот їх вивчить (як ❌ Не той товар)
     saved: dict = {}
     words = await asyncio.to_thread(reject_and_learn, watch, item_id, row["title"], saved)
     if words:

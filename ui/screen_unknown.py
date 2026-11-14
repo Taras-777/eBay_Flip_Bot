@@ -8,7 +8,7 @@ unks:<товар>:<№>:<варіант>      — зберегти обрани�
 unkb:<товар>:<№>                — «🧩 Зібрати клас» по кроках (відеокарта → процесор → RAM;
                                   MacBook: чип → екран → RAM); unkbp:<товар>:<l|a>:<k> — вибір,
                                   unkbl:<товар> — усі варіанти кроку, unkbs:<товар> — «невідомо»
-unkk / unkr / unkf:<товар>:<№>  — «👌 Залишити як є» / «❌ Інший товар» / «🚩 Для розробника»
+unkk / unkr / unkf:<товар>:<№>  — «👌 Залишити як є» / «❌ Не той товар» / «🚩 Для розробника»
 unkrep:<товар>, unkrepc:<товар> — звіт для розробника / очистити його
 unkexp:0                        — «📤 Вивантажити все файлом»: усі нерозпізнані з характеристиками (.txt)
 """
@@ -91,9 +91,9 @@ async def _render(update, context, watch, page=0, note=""):
     lines = [head]
     if note:
         lines.append(note)
-    lines.append("<i>Бот прочитав назву, характеристики й опис, але клас визначив не повністю — такі оголошення "
-                 "він не пропонує як знахідки. Найдешевші відносно ціни групи — вгорі.\n"
-                 "✏️ вказати клас · 👌 залишити як є · ❌ інший товар · 🚩 приклад для розробника</i>")
+    lines.append("<i>Клас визначено не повністю — такі оголошення бот не пропонує як знахідки. "
+                 "Найдешевші відносно ціни групи — вгорі.</i>\n"
+                 "✏️ вказати клас · 👌 залишити як є · ❌ інший товар · 🚩 приклад для розробника")
     rows = []
     for n, it in enumerate(shown, page * PER_PAGE + 1):
         lines.append(_card(n, it))
@@ -141,17 +141,17 @@ async def _render_all(update, context):
     """З головного меню: товари, де є нерозпізнані оголошення, — від найбільшої кількості."""
     per_watch = await asyncio.to_thread(unrecognized_by_watch, update.effective_chat.id)
     total = sum(n for _, n in per_watch)
-    lines = [f"🛠 <b>Нерозпізнані оголошення</b> ({total})",
-             "<i>Оголошення, клас яких бот не визначив повністю навіть після назви, характеристик і опису. "
+    lines = [f"🛠 <b>Нерозпізнані оголошення</b> ({total})\n"
+             "<i>клас не визначено повністю навіть після назви, характеристик і опису</i>",
              "Обери товар — там можна вказати клас вручну, залишити як є, прибрати чи надіслати "
-             "приклад розробнику.</i>"]
+             "приклад розробнику."]
     if not per_watch:
-        lines.append("Усе розпізнано 👍")
+        lines.append("✨ Усе розпізнано 👍")
     rows = [[InlineKeyboardButton(f"📦 {w['label']} ({n})"[:60], callback_data=f"unk:{w['id']}:0:m")]
             for w, n in per_watch]
     if per_watch:
         rows.append([InlineKeyboardButton("📤 Вивантажити все файлом", callback_data="unkexp:0")])
-    rows.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    rows.append([InlineKeyboardButton("🏠 Меню", callback_data="menu:home")])
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
 
@@ -212,7 +212,7 @@ async def unknown_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "з уже відомим)." + (" Немає потрібної — «🧩 Зібрати клас»." if can_build else ""))
         else:
             hint = ("Готових варіантів у цьому товарі немає — «🧩 Зібрати клас» по кроках." if can_build
-                    else "Готових варіантів у цьому товарі ще немає. Можна «👌 Залишити як є» чи «❌ Інший товар».")
+                    else "Готових варіантів у цьому товарі ще немає. Можна «👌 Залишити як є» чи «❌ Не той товар».")
         text = f"✏️ <b>Вказати клас вручну</b>\n\n{_card(int(parts[2]) + 1, item)}\n\n{hint}"
         return await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows),
                                 parse_mode=ParseMode.HTML)

@@ -52,7 +52,7 @@ def test_stats_discovery_section_and_pages(monkeypatch):
                          "VALUES (?, ?, 100, ?, ?, 'active')", (name, f"x{i}", now - 3600 * (i + 1), now))
     db.set_hidden_candidates(1, [names[0]])
     text, pages, page = screen_stats.discovery_stats_text(1)
-    assert pages == 2 and "· сторінка 1 з 2" in text
+    assert pages == 2 and "сторінка 1 з 2" in text
     assert f"<b>{names[0]}</b>" not in text                     # прихований не показуємо
     handlers, shown, press = _screen(monkeypatch)
     upd, ctx = press("menu:stats")
@@ -61,7 +61,7 @@ def test_stats_discovery_section_and_pages(monkeypatch):
     upd, ctx = press("stats:d1")
     asyncio.run(handlers.cmd_stats(upd, ctx))
     assert "сторінка 2 з 2" in shown[-1][0] and "📦 <b>Мої товари</b>" not in shown[-1][0]
-    assert "◀️ Попередні" in shown[-1][1] and "◀️ До статистики" in shown[-1][1]
+    assert "◀️ Попередні" in shown[-1][1] and "◀️ Статистика" in shown[-1][1]
 
 
 def test_tracked_product_not_duplicated_in_discovery():

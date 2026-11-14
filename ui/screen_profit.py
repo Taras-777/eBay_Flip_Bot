@@ -36,6 +36,7 @@ from core.settings import MIN_PROFIT_CHOICES
 from ui.access import require_access
 from ui.panel import _ack_callback, show_panel
 from ui.screen_folders import folder_names
+from ui.style import grid, hint, note_line, title
 
 CATEGORY_EUR_CHOICES = (15, 20, 30, 40, 50, 60, 80, 100, 150, 200)
 CATEGORY_PCT_CHOICES = (5, 8, 10, 12, 15, 20, 25, 30)
@@ -45,7 +46,6 @@ CUSTOM_EUR_RANGE = (1, 5000)     # своє значення в €
 CUSTOM_PCT_RANGE = (1, 90)       # своє значення у %
 
 HELP_TEXT = (
-    "<b>Як це працює</b>\n"
     "Бот пропонує оголошення, лише якщо після перепродажу лишається щонайменше стільки прибутку:\n"
     "<code>купувати до = ціна продажу − 7€ доставки − мін. прибуток</code>\n\n"
     "<b>Звідки береться поріг</b> (бот перевіряє по черзі):\n"
@@ -80,8 +80,12 @@ async def min_profit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     note = ""
     if choice != "show":
         await asyncio.to_thread(set_min_profit, chat_id, float(choice))
-        note = f"✅ Загальний мін. прибуток: <b>{float(choice):.0f}€</b>\n\n"
+        note = f"✅ Загальний мін. прибуток: <b>{float(choice):.0f}€</b>"
     await show_min_profit(update, context, note)
+
+
+def _rule_short(rules, key):
+    return profit_rule_label(rules[key]) if key in rules else "загальний"
 
 
 async def show_min_profit(update, context, note=""):
@@ -90,19 +94,18 @@ async def show_min_profit(update, context, note=""):
         lambda: (get_min_profit(chat_id), get_category_profits(chat_id), folder_names(chat_id)))
     buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}€", callback_data=f"mprof:{v}")
                for v in MIN_PROFIT_CHOICES]
-    rows = [buttons[i:i + 4] for i in range(0, len(buttons), 4)]
-    rows.append([InlineKeyboardButton("— Пороги категорій (натисни, щоб змінити) —", callback_data="mprof:show")])
-    cat_buttons = [InlineKeyboardButton(f"{name}: " + (profit_rule_label(rules[key]) if key in rules
-                                                        else "як загальний"),
-                                        callback_data=f"cprof:{key}") for key, name in names.items()]
-    rows += [cat_buttons[i:i + 2] for i in range(0, len(cat_buttons), 2)]
-    rows.append([InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")])
-    await show_panel(
-        update, context,
-        f"{note}💰 <b>Мінімальний прибуток</b>\n"
-        f"Загальний: <b>{current:.0f}€</b> — кнопки з сумами вгорі.\n\n{HELP_TEXT}",
-        reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML,
-    )
+    rows = grid(buttons, 4)
+    rows += grid([InlineKeyboardButton(f"{name} · {_rule_short(rules, key)}", callback_data=f"cprof:{key}")
+                  for key, name in names.items()])
+    rows.append([InlineKeyboardButton("◀️ Налаштування", callback_data="menu:ebay_account")])
+    categories = "\n".join(f"{name} — <b>{profit_rule_label(rules[key])}</b>" if key in rules
+                           else f"{name} — як загальний" for key, name in names.items())
+    text = (note_line(note)
+            + title("💰", "Мінімальний прибуток", "скільки щонайменше заробити на одній речі") + "\n\n"
+            + f"🌐 Загальний: <b>{current:.0f}€</b> <i>(кнопки з сумами нижче)</i>\n\n"
+            + "🗂 <b>Пороги категорій</b> <i>(натисни категорію, щоб змінити)</i>\n" + categories + "\n\n"
+            + hint(HELP_TEXT))
+    await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
 _SOURCE_NOTE = {"own": "свій", "category": "категорії", "general": "загальний"}
@@ -148,13 +151,13 @@ async def category_profit_callback(update: Update, context: ContextTypes.DEFAULT
     key = parts[1]
     names = await asyncio.to_thread(folder_names, chat_id)
     if key not in names:
-        return await show_min_profit(update, context, "⚠️ Такої категорії вже немає.\n\n")
+        return await show_min_profit(update, context, "⚠️ Такої категорії вже немає.")
     name = html.escape(names[key])
     if len(parts) > 2:
         value = _parse_choice(parts[2])
         await asyncio.to_thread(set_category_profit, chat_id, key, value)
         saved = "як загальний" if value is None else profit_rule_label(get_category_profit(chat_id, key))
-        return await show_min_profit(update, context, f"✅ {name}: <b>{saved}</b>\n\n")
+        return await show_min_profit(update, context, f"✅ {name}: <b>{saved}</b>")
 
     rule, watch_lines = await asyncio.to_thread(
         lambda: (get_category_profit(chat_id, key), category_watch_lines(chat_id, key)))
@@ -163,27 +166,26 @@ async def category_profit_callback(update: Update, context: ContextTypes.DEFAULT
            for v in CATEGORY_EUR_CHOICES]
     pct = [InlineKeyboardButton(("✅ " if rule == ("pct", float(v)) else "") + f"{v}%", callback_data=f"cprof:{key}:{v}p")
            for v in CATEGORY_PCT_CHOICES]
-    rows = [[InlineKeyboardButton("✏️ У євро — ввести свою суму", callback_data=f"cprofin:{key}:eur")]]
-    rows += [eur[i:i + 5] for i in range(0, len(eur), 5)]
-    rows.append([InlineKeyboardButton("✏️ У відсотках від ціни продажу — ввести свій %",
-                                      callback_data=f"cprofin:{key}:pct")])
-    rows += [pct[i:i + 4] for i in range(0, len(pct), 4)]
+    rows = [[InlineKeyboardButton("💶 У євро · ✏️ ввести свою суму", callback_data=f"cprofin:{key}:eur")]]
+    rows += grid(eur, 5)
+    rows.append([InlineKeyboardButton("📊 У % від ціни продажу · ✏️ ввести свій", callback_data=f"cprofin:{key}:pct")])
+    rows += grid(pct, 4)
     rows.append([InlineKeyboardButton(("✅ " if rule is None else "") + f"↩️ Як загальний ({general:.0f}€)",
                                       callback_data=f"cprof:{key}:def")])
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="mprof:show")])
-    current = "як загальний" if rule is None else profit_rule_label(rule)
+    rows.append([InlineKeyboardButton("◀️ Мін. прибуток", callback_data="mprof:show")])
+    current = f"як загальний ({general:.0f}€)" if rule is None else profit_rule_label(rule)
+    goods = (("📋 <b>Товари в категорії</b> <i>(типова ціна продажу, 👤 приватні)</i>\n" + "\n".join(watch_lines))
+             if watch_lines else "📋 У цій категорії поки немає товарів.")
+    help_text = ("• <b>€</b> — однаковий прибуток для всіх товарів категорії.\n"
+                 "• <b>%</b> — частка від ціни продажу: 10% від 600€ = 60€, від 1500€ = 150€.\n"
+                 f"• <b>↩️ Як загальний</b> — без свого порогу, слідує за загальним ({general:.0f}€).\n"
+                 "• Потрібного значення немає серед кнопок — натисни «✏️» і напиши своє число.\n"
+                 "• Поріг «свій» задано в картці товару — зміна порогу категорії його не чіпає.")
     await show_panel(
         update, context,
-        f"💰 <b>Мін. прибуток — {name}</b>: зараз <b>{current}</b>\n\n"
-        "Діє на всі товари цієї категорії, крім тих, де в картці товару задано свій поріг.\n\n"
-        "• <b>€</b> — однаковий прибуток для всіх товарів категорії.\n"
-        "• <b>%</b> — частка від ціни продажу: 10% від 600€ = 60€, від 1500€ = 150€.\n"
-        f"• <b>↩️ Як загальний</b> — без свого порогу ({general:.0f}€).\n\n"
-        "Потрібного значення немає серед кнопок — натисни «✏️ …» і напиши своє число.\n\n"
-        + ("📋 <b>Товари в цій категорії</b> (типова ціна продажу, 👤 приватні, усі конфігурації):\n"
-           + "\n".join(watch_lines)
-           + "\n<i>Поріг «свій» задано в картці товару — зміна порогу категорії його не чіпає.</i>"
-           if watch_lines else "📋 У цій категорії поки немає товарів."),
+        title("💰", f"Мін. прибуток · {name}") + f"\nЗараз: <b>{current}</b>\n"
+        "<i>Діє на всі товари категорії, крім тих, де в картці задано свій поріг.</i>\n\n"
+        + goods + "\n\n" + hint(help_text, "ℹ️ € чи %"),
         reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML,
     )
 
@@ -195,15 +197,15 @@ async def profit_input_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     _, key, kind = update.callback_query.data.split(":")
     names = await asyncio.to_thread(folder_names, update.effective_chat.id)
     if key not in names:
-        await show_min_profit(update, context, "⚠️ Такої категорії вже немає.\n\n")
+        await show_min_profit(update, context, "⚠️ Такої категорії вже немає.")
         return ConversationHandler.END
     context.user_data["profit_input"] = (key, kind)
     low, high = CUSTOM_EUR_RANGE if kind == "eur" else CUSTOM_PCT_RANGE
     what = (f"суму в <b>євро</b> (від {low} до {high}), напр. <code>75</code>" if kind == "eur" else
             f"<b>відсоток</b> від ціни продажу (від {low} до {high}), напр. <code>18</code> або <code>7.5</code>")
-    rows = [[InlineKeyboardButton("◀️ Назад", callback_data=f"cprof:{key}")]]
+    rows = [[InlineKeyboardButton("❌ Скасувати", callback_data=f"cprof:{key}")]]
     await show_panel(update, context,
-                     f"✏️ <b>Мін. прибуток — {html.escape(names[key])}</b>\n\nНапиши {what}.",
+                     title("✏️", f"Свій поріг · {html.escape(names[key])}") + f"\n\nНапиши {what}.",
                      reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
     return PROFIT_INPUT
 
@@ -233,7 +235,7 @@ async def profit_input_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stored = f"{value:g}%" if kind == "pct" else f"{value:g}"
     await asyncio.to_thread(set_category_profit, update.effective_chat.id, key, stored)
     name = html.escape((await asyncio.to_thread(folder_names, update.effective_chat.id)).get(key, ""))
-    await show_min_profit(update, context, f"✅ {name}: <b>{profit_rule_label(get_category_profit(update.effective_chat.id, key))}</b>\n\n")
+    await show_min_profit(update, context, f"✅ {name}: <b>{profit_rule_label(get_category_profit(update.effective_chat.id, key))}</b>")
     return ConversationHandler.END
 
 

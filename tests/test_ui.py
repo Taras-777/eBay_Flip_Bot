@@ -97,11 +97,11 @@ def test_list_shows_names_not_ids(screen):
     assert screen.buttons()[:4] == ["📱 Телефони (1)", "💻 Ноутбуки (1)", "🎮 Консолі (1)", "🚁 Дрони (1)"]
     run(handlers.watch_group_callback(make_update("wgrp:laptops"), make_context()))
     labels = screen.buttons()
-    assert any(b.startswith("📦 ThinkPad") and b.endswith("⚠️") for b in labels)  # без категорії
-    assert "◀️ До категорій" in labels and "📦 PlayStation 5 Pro" not in labels
+    assert any(b.startswith("📌 ThinkPad") and b.endswith("⚠️") for b in labels)  # без категорії
+    assert "◀️ Категорії" in labels and "📌 PlayStation 5 Pro" not in labels
     run(handlers.watch_group_callback(make_update("wgrp:consoles"), make_context()))
     labels = screen.buttons()
-    assert "📦 PlayStation 5 Pro" in labels
+    assert "📌 PlayStation 5 Pro" in labels
     assert all("#" not in b for b in labels)
     assert all(len(b) <= 45 for b in labels)
 
@@ -136,7 +136,7 @@ def test_paging_row_sits_right_above_navigation(screen):
     run(handlers._render_listing_panel(make_update(), make_context(), 7, state))
     assert screen.rows[-3] == ["➡️ Наступні 10"]
     assert screen.rows[-2:] == [["◀️ До товару"], ["🏠 Меню"]]
-    assert screen.rows[0][1:] == ["🙈 Сховати", "❌ Інший товар"]
+    assert screen.rows[0][1:] == ["🙈 Сховати", "❌ Не той товар"]
     assert screen.rows[0][0].startswith("🔗 1. ") and screen.rows[0][0].endswith("€")   # лише номер і ціна
     assert "Показано <b>1–10</b> з 25" in screen.text
 
@@ -247,7 +247,7 @@ def test_owner_menu_has_refresh_button(monkeypatch):
     monkeypatch.setattr(panel, "is_owner", lambda uid: True)
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
     assert labels == ["🔥 Вигідні пропозиції", "🗂 Категорії товарів", "💡 Що перепродавати", "📊 Статистика",
-                      "🔄 Оновити запити", "💰 Оновити ціни", "⚙️ Налаштування"]
+                      "📡 Оновити ліміти", "🔄 Оновити ціни", "⚙️ Налаштування"]
 
 
 def test_regular_user_menu_has_no_owner_buttons(monkeypatch):

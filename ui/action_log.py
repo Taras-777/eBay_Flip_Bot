@@ -40,8 +40,8 @@ ACTION_LABELS = {
     "menu:ebay_account": "⚙️ Налаштування", "menu:refresh_prices": "💰 Оновити ціни (усі)",
     "menu:refresh_usage": "🔄 Оновити запити", "menu:addwatch": "➕ Додати товар",
     "deals": "🔥 Вигідні пропозиції", "dact": "🔥 Дія з пропозицією", "mkd": "📉 Знизили ціну",
-    "mact": "📉 Дія зі знижкою", "watch_details": "📌 Екран товару", "configs": "🧩 Усі конфігурації",
-    "cfgl": "🔎 Оголошення групи", "view_listings": "🔎 Переглянути оголошення", "lpage": "🔎 Сторінка оголошень",
+    "mact": "📉 Дія зі знижкою", "watch_details": "📌 Екран товару", "configs": "🧩 Конфігурації",
+    "cfgl": "🔎 Оголошення групи", "view_listings": "📋 Оголошення товару", "lpage": "🔎 Сторінка оголошень",
     "sales": "🛒 Продажі", "schk": "🛒 Перевірити продажі", "recalc_median": "🔄 Оновити ціни товару",
     "dadd": "💡 Додати товар", "dhide": "💡 Приховати", "drefresh": "💡 Оновити аналіз",
     "chcat": "🗂️ Категорії", "reqasp": "🧾 Характеристики", "editw": "✏️ Редагувати товар",
@@ -177,5 +177,5 @@ async def slowlog_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = [[InlineKeyboardButton("🔄 Оновити", callback_data="slowlog"),
              InlineKeyboardButton("🗑 Очистити", callback_data="slowlog:clear")],
             [InlineKeyboardButton("📤 Звіт для розробника (файл)", callback_data="slowlog:file")],
-            [InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")]]
+            [InlineKeyboardButton("◀️ Налаштування", callback_data="menu:ebay_account")]]
     await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)

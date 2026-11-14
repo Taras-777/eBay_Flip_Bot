@@ -20,6 +20,7 @@ from ui.panel import _ack_callback, run_with_progress, show_panel
 from ui.access import require_access
 from analysis.textparse import PICKUP_NOTE, plural
 from ui.undo import record as undo_record, short
+from ui.style import hint, menu_row, note_line, title
 
 PER_PAGE = 5
 
@@ -35,12 +36,12 @@ def _card(n, r):
                                    else f"{plural(ago, 'день', 'дні', 'днів')} тому")
     lines = [
         f"<b>{n}. {new}{html.escape(r['watch_label'])}</b> · висить {plural(days, 'день', 'дні', 'днів')}",
-        html.escape((r["title"] or "")[:90]),
+        f"<i>{html.escape((r['title'] or '')[:90])}</i>",
         *([html.escape(sp)] if (sp := specs_line(r["item_id"], r["title"], r.get("spec_group"))) else []),
         f"📉 було {r['first_price']:.0f}€ → зараз <b>{r['price']:.0f}€</b> (−{r['drop_pct']:.0f}%){changed}",
     ]
     if r["price"] <= r["buy_limit"]:
-        lines.append(f"✅ Вже вигідно: продати ~{r['sale_price']:.0f}€ · 💰 прибуток ~<b>{r['profit']:.0f}€</b>")
+        lines.append(f"✅ Вже вигідно: продати ~{r['sale_price']:.0f}€ · 💰 прибуток <b>+{r['profit']:.0f}€</b>")
     else:
         lines.append(f"💶 Продати ~{r['sale_price']:.0f}€ · до вигідної ціни: −{r['price'] - r['buy_limit']:.0f}€ "
                      f"(купувати до {r['buy_limit']:.0f}€)")
@@ -76,33 +77,39 @@ async def _render_markdowns(update, context, page=0, note=""):
         note = f"{note}\n{gone}" if note else gone
 
     pct = get_drop_pct(chat_id)
-    lines = [f"📉 <b>Знизили ціну</b> ({len(rows)}) · знижка від {pct:.0f}%, висять від "
-             f"{plural(PRICE_DROP_MIN_DAYS, 'дня', 'днів', 'днів')}, не дорожче за ринок"]
+    pages = max(1, (len(rows) + PER_PAGE - 1) // PER_PAGE)
+    lines = [title("📉", "Знизили ціну", count=len(rows),
+                   subtitle=f"знижка від {pct:.0f}% · висять від {plural(PRICE_DROP_MIN_DAYS, 'дня', 'днів', 'днів')}"
+                   " · не дорожче за ринок" + (f" · сторінка {page + 1} з {pages}" if pages > 1 else ""))]
     if note:
         lines.append(note)
     if not rows:
-        lines.append("Поки немає. Бот запам'ятовує першу ціну кожного оголошення і показує тут ті, що довго "
+        lines.append("✨ Поки немає. Бот запам'ятовує першу ціну кожного оголошення і показує тут ті, що довго "
                      "висять і помітно подешевшали — продавець хоче продати, з ним легше торгуватись.\n"
                      "<i>Перші знижки з'являться приблизно через тиждень спостережень.</i>")
     buttons = []
     for i, r in enumerate(shown, 1 + page * PER_PAGE):
         lines.append(_card(i, r))
         buttons.append([
-            InlineKeyboardButton(f"🙈 {i}", callback_data=f"mact:hide:{r['watch_id']}:{r['item_id']}:{page}"),
-            InlineKeyboardButton(f"❌ {i} Інший товар", callback_data=f"mact:rej:{r['watch_id']}:{r['item_id']}:{page}"),
+            InlineKeyboardButton(f"🙈 {i} Сховати", callback_data=f"mact:hide:{r['watch_id']}:{r['item_id']}:{page}"),
+            InlineKeyboardButton(f"❌ {i} Не той товар", callback_data=f"mact:rej:{r['watch_id']}:{r['item_id']}:{page}"),
         ])
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton("◀️ Назад", callback_data=f"mkd:{page - 1}"))
+        nav.append(InlineKeyboardButton("◀️ Попередні", callback_data=f"mkd:{page - 1}"))
     if (page + 1) * PER_PAGE < len(rows):
-        nav.append(InlineKeyboardButton("Далі ▶️", callback_data=f"mkd:{page + 1}"))
+        nav.append(InlineKeyboardButton("Наступні ▶️", callback_data=f"mkd:{page + 1}"))
     if nav:
         buttons.append(nav)
     if rows:
         buttons.append([InlineKeyboardButton("🧹 Очистити список", callback_data="mkdclr")])
-    buttons.append([InlineKeyboardButton("◀️ Меню", callback_data="menu:home")])
+    buttons.append(menu_row())
     if shown:
-        lines.append("<i>🙈 — сховати це оголошення; ❌ Інший товар — не той товар, бот запам'ятає.</i>")
+        lines.append(hint("Бот запам'ятовує першу ціну кожного оголошення і показує тут ті, що довго висять і "
+                          "помітно подешевшали — з таким продавцем легше торгуватись.\n"
+                          "🙈 <b>Сховати</b> — прибрати лише це оголошення.\n"
+                          "❌ <b>Не той товар</b> — бот запам'ятає слова з назви.\n"
+                          "Поріг знижки — у «⚙️ Налаштування».", "ℹ️ Як це працює"))
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons),
                      parse_mode=ParseMode.HTML)
     mark_track_seen([(r["watch_id"], r["item_id"]) for r in shown])
@@ -156,16 +163,16 @@ async def drop_pct_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     note = ""
     if choice != "show":
         set_drop_pct(chat_id, float(choice))
-        note = f"✅ Збережено: знижка від <b>{float(choice):.0f}%</b>\n\n"
+        note = f"✅ Збережено: знижка від <b>{float(choice):.0f}%</b>"
     current = get_drop_pct(chat_id)
     buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}%", callback_data=f"mdpct:{v}")
                for v in PRICE_DROP_CHOICES]
     await show_panel(
         update, context,
-        f"{note}⚙️ <b>Поріг знижки</b>: зараз <b>{current:.0f}%</b>\n\n"
-        "У «📉 Знизили ціну» потрапляють оголошення, ціну яких знизили щонайменше на стільки "
-        "від першої ціни, яку бачив бот. Менший поріг — більше оголошень, але й більше дрібних знижок.",
-        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("◀️ До налаштувань", callback_data="menu:ebay_account")]]),
+        note_line(note) + title("📉", "Поріг знижки", "з якої знижки оголошення потрапляє в «📉 Знизили ціну»")
+        + f"\n\nЗараз: <b>{current:.0f}%</b>\n\n"
+        "Рахується від першої ціни, яку бачив бот. Менший поріг — більше оголошень, але й більше дрібних знижок.",
+        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("◀️ Налаштування", callback_data="menu:ebay_account")]]),
         parse_mode=ParseMode.HTML,
     )
 
