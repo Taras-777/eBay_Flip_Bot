@@ -24,6 +24,7 @@ from ui.account import (
     ebay_account_code,
     ebay_account_disconnect,
     sold_only_callback,
+    confirmed_only_callback,
     auctions_callback,
     ebay_account_interrupt,
     ebay_account_start,
@@ -269,6 +270,7 @@ def main():
     app.add_handler(CallbackQueryHandler(folder_callback, pattern="^fld:"))
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
+    app.add_handler(CallbackQueryHandler(confirmed_only_callback, pattern="^confonly$"))
     app.add_handler(CallbackQueryHandler(auctions_callback, pattern="^auctions$"))
     app.add_handler(CallbackQueryHandler(auctions_list_callback, pattern="^auc:"))
     app.add_handler(CallbackQueryHandler(slowlog_callback, pattern="^slowlog(:clear|:file)?$"))

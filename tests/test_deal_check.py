@@ -111,7 +111,7 @@ def test_opening_inbox_rechecks_page(monkeypatch):
     upd, ctx = press("deals:0")
     asyncio.run(handlers.deals_callback(upd, ctx))
     text = shown[-1][0]
-    assert "Прибрано вже проданих чи знятих: 1" in text and "(2)" in text
+    assert "Прибрано проданих, знятих чи подорожчалих: 1" in text and "(2)" in text
     assert "📅 виставлено" in text and "(2 дні тому)" in text
     assert db.get_deal(ids[0])["status"] == "gone"
 
@@ -167,7 +167,7 @@ def test_watchers_shown_in_deal_card(monkeypatch):
     monkeypatch.setattr(deal_check, "is_connected", lambda: True)
     monkeypatch.setattr(deal_check, "trading_calls_today", lambda: (0, None))
     monkeypatch.setattr(deal_check, "get_item_status", lambda item: info)
-    assert deal_check.listing_state("v1|0|0") == (True, 23)
+    assert deal_check.listing_state("v1|0|0") == (True, 23, None)
 
     _, ids = _deals(1)
     _age_checks(11 * 60)
@@ -339,3 +339,35 @@ def test_hide_old_listings_toggle(monkeypatch):
     upd.callback_query.data = f"lold:{wid}:off"
     asyncio.run(handlers_mod.listing_old_callback(upd, ctx))
     assert len(ctx.user_data[key]["items"]) == 3 and "🕰 Без старих (>30 дн.)" in shown[-1][1]
+
+
+def test_recheck_updates_price_and_drops_gone_buy_now(monkeypatch):
+    """Свіжа ціна при перевірці: подорожчало — зникає; подешевшало — нова ціна; у «аукціон + купити
+    зараз» з'явилась ставка — «купити зараз» зникло, пропозиція теж."""
+    db.set_min_profit(1, 50)
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    ids = {p: db.add_deal(wid, f"v1|{p}|0", f"PS5 {p}", p, "EUR", 600, 20, "u", False) for p in (400, 450, 480)}
+    offers = {"v1|400|0": {"total": 560.0},          # подорожчало: 593 − 560 = 33 < 50
+              "v1|450|0": {"total": 430.0},          # подешевшало
+              "v1|480|0": {"bin_gone": True}}        # аукціон уже зі ставкою
+    monkeypatch.setattr(deal_check, "listing_state", lambda item: (True, None, offers[item]))
+    rows = db.get_deals_to_recheck(10, -60)
+    assert deal_check._check(rows) == 2
+    assert db.get_deal(ids[400])["total_price"] == 560 and db.get_deal(ids[450])["total_price"] == 430
+    assert db.get_deal(ids[480])["status"] == "gone"
+    assert [d["total_price"] for d in db.get_inbox_deals(1)[0]] == [430]
+
+
+def test_trading_and_browse_offer_prices():
+    from ebay.ebay_api import browse_buy_now_total
+    assert deal_check._trading_offer({"listing_type": "FixedPriceItem", "sold_price": 420.0, "shipping_cost": 5.0}) == \
+        {"total": 425.0}
+    assert deal_check._trading_offer({"listing_type": "Chinese", "buy_it_now": 465.0, "bin_available": True,
+                                      "shipping_cost": 0.0}) == {"total": 465.0}
+    assert deal_check._trading_offer({"listing_type": "Chinese", "buy_it_now": 465.0, "bin_available": False}) == \
+        {"bin_gone": True}
+    assert deal_check._trading_offer({"listing_type": "FixedPriceItem", "sold_price": 420.0}) is None   # без доставки
+    assert browse_buy_now_total({"buyingOptions": ["AUCTION"], "price": {"value": "200"}}) is None
+    assert browse_buy_now_total({"buyingOptions": ["FIXED_PRICE"], "price": {"value": "420", "currency": "EUR"},
+                                 "shippingOptions": [{"shippingCost": {"value": "6.99"}},
+                                                     {"shippingCost": {"value": "4.99"}}]}) == 424.99

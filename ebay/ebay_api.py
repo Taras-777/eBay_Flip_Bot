@@ -462,6 +462,27 @@ def fetch_item_by_legacy_id(legacy_id):
     return resp.json()
 
 
+def browse_buy_now_total(data):
+    """Ціна «купити зараз» з найдешевшою доставкою (EUR) з відповіді getItem, або None —
+    купити зараз уже не можна (аукціон, де «купити зараз» зникло) чи ціну не зрозуміло."""
+    if not data or "FIXED_PRICE" not in (data.get("buyingOptions") or []):
+        return None
+    try:
+        price = float((data.get("price") or {}).get("value"))
+    except (TypeError, ValueError):
+        return None
+    rate = CURRENCY_TO_EUR.get(((data.get("price") or {}).get("currency") or "EUR").upper())
+    if rate is None:
+        return None
+    costs = []
+    for opt in data.get("shippingOptions") or []:
+        try:
+            costs.append(float((opt.get("shippingCost") or {}).get("value", 0)))
+        except (TypeError, ValueError):
+            pass
+    return round((price + (min(costs) if costs else 0.0)) * rate, 2)
+
+
 _category_tree = {"id": None}
 
 

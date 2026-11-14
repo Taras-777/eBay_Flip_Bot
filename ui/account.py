@@ -13,7 +13,17 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
 from core.settings import LOCAL_TZ, TRADING_DAILY_BUDGET, is_owner, log
-from core.db import get_auctions_enabled, get_drop_pct, get_min_profit, get_sold_only, set_auctions_enabled, set_sold_only, sold_check_stats
+from core.db import (
+    get_auctions_enabled,
+    get_confirmed_only,
+    get_drop_pct,
+    get_min_profit,
+    get_sold_only,
+    set_auctions_enabled,
+    set_confirmed_only,
+    set_sold_only,
+    sold_check_stats,
+)
 from ebay.ebay_api import trading_calls_today
 from ebay.deal_check import trading_breakdown_lines
 from ebay.ebay_user import (
@@ -105,6 +115,9 @@ BUTTONS_HELP = "\n".join([
     "нагадування за 45 хв до кінця. Ставок бот не робить.",
     "📊 <b>Ціна продажу</b> — звідки ціна «Продати» у «🔥»: <i>лише за продажами</i> (надійніше, "
     "знахідок менше) або <i>продажі + оголошення</i> (коли продажів замало — за поточними оголошеннями).",
+    "🧾 <b>Продажі</b> (коли акаунт eBay підключено) — що рахувати продажем: <i>лише підтверджені eBay</i> ✅ "
+    "(надійніше, але продажів менше — у рідкісних товарів ціна частіше за оголошеннями) або <i>підтверджені + "
+    "зниклі</i> (ще й оголошення, про які eBay не відповів: зникли задовго до кінця строку).",
     "📡 <b>Статистика запитів</b> — скільки запитів до eBay бот зробив за кожен день.",
     "🐢 <b>Повільні дії</b> — кнопки, які відкривались довше за 1,5 с або з помилкою (звіт для розробника).",
     "💾 <b>Резервна копія</b> — свіжа копія бази файлом у чат. У ній є вхід в акаунт eBay — "
@@ -143,6 +156,10 @@ def _settings_keyboard(chat_id=None):
         rows.append([InlineKeyboardButton(
             "📊 Ціна продажу: " + ("✅ лише за продажами" if get_sold_only(chat_id) else "продажі + оголошення"),
             callback_data="soldonly")])
+        if is_connected():   # без акаунта eBay підтверджених продажів немає
+            rows.append([InlineKeyboardButton(
+                "🧾 Продажі: " + ("✅ лише підтверджені eBay" if get_confirmed_only() else "підтверджені + зниклі"),
+                callback_data="confonly")])
     rows += grid([InlineKeyboardButton("📡 Статистика запитів", callback_data="apistat:0"),
                   InlineKeyboardButton("🐢 Повільні дії", callback_data="slowlog")])
     rows.append([InlineKeyboardButton("💾 Резервна копія бази", callback_data="backup:send")])
@@ -166,6 +183,24 @@ async def sold_only_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     value = not get_sold_only(chat_id)
     set_sold_only(chat_id, value)
     await show_settings(update, context, note=SOLD_ONLY_NOTE[value])
+
+
+CONFIRMED_NOTE = {
+    True: ("✅ <b>🧾 Лише підтверджені продажі.</b> У ціну продажу, швидкість і «📈 Продажі» йдуть лише продажі, "
+           "які eBay підтвердив (✅). Ціни всіх товарів перераховуються протягом кількох хвилин."),
+    False: ("✅ <b>🧾 Підтверджені + зниклі.</b> Як раніше: ще й оголошення, про які eBay не відповів "
+            "(оцінка за зникненням). Ціни перераховуються протягом кількох хвилин."),
+}
+
+
+async def confirmed_only_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """confonly — перемкнути «лише підтверджені продажі» (лише власник)."""
+    await _ack_callback(update)
+    if not is_owner(update.effective_user.id):
+        return
+    value = not get_confirmed_only()
+    await asyncio.to_thread(set_confirmed_only, value)
+    await show_settings(update, context, note=CONFIRMED_NOTE[value])
 
 
 AUCTIONS_NOTE = {

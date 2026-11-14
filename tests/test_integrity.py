@@ -13,8 +13,18 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGES = ("core", "ebay", "analysis", "ui")
 # Усі модулі бота — знаходяться самі: новий файл у пакеті перевіряється без правок тесту
-MODULES = sorted(f"{pkg}.{name[:-3]}" for pkg in PACKAGES for name in os.listdir(os.path.join(ROOT, pkg))
-                 if name.endswith(".py") and name != "__init__.py") + ["main"]
+def _discover():
+    """Модулі пакетів і вкладених пакетів (core/db/…), без __init__.py."""
+    found = []
+    for pkg in PACKAGES:
+        for folder, dirs, files in os.walk(os.path.join(ROOT, pkg)):
+            dirs[:] = [d for d in dirs if not d.startswith((".", "__"))]
+            rel = os.path.relpath(folder, ROOT).replace(os.sep, ".")
+            found += [f"{rel}.{name[:-3]}" for name in files if name.endswith(".py") and name != "__init__.py"]
+    return sorted(found)
+
+
+MODULES = _discover() + ["main"]
 
 
 def _path(module):

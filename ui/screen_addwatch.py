@@ -465,8 +465,8 @@ from ui.screen_common import (  # noqa: E402
     _category_keyboard,
     _ebay_configured,
 )
+from ui.screen_categories import cmd_list  # noqa: E402
 from ui.screen_watch import (  # noqa: E402
-    cmd_list,
     cmd_stats,
     refresh_all_callback,
 )

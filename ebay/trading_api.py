@@ -115,6 +115,10 @@ def _sale_details(item):
         "quantity": _num(_text(item, "e:Quantity"), int),
         "listing_type": _text(item, "e:ListingType"),
         "watch_count": _num(_text(item, "e:WatchCount"), int),   # скільки людей стежать
+        # «аукціон + купити зараз»: ціна «купити зараз» і чи вона ще доступна (після першої ставки зникає)
+        "buy_it_now": _num(_text(item, "e:ListingDetails/e:ConvertedBuyItNowPrice") or _text(item, "e:BuyItNowPrice")),
+        "bin_available": {"true": True, "false": False}.get((_text(item, "e:ListingDetails/e:BuyItNowAvailable")
+                                                              or "").lower()),
         "shipping_cost": _shipping_cost(item),                   # найдешевша доставка (None — невідомо)
         "aspects": _item_specifics(item),
         # 🏪 магазин / 👤 приватний (лише тип; ім'я продавця не зберігаємо)
@@ -165,6 +169,9 @@ def get_item_status(item_id):
         "<OutputSelector>Item.ItemSpecifics</OutputSelector>"
         "<OutputSelector>Item.Seller.SellerInfo.SellerBusinessType</OutputSelector>"
         "<OutputSelector>Item.ShippingDetails.ShippingServiceOptions</OutputSelector>"
+        "<OutputSelector>Item.BuyItNowPrice</OutputSelector>"
+        "<OutputSelector>Item.ListingDetails.ConvertedBuyItNowPrice</OutputSelector>"
+        "<OutputSelector>Item.ListingDetails.BuyItNowAvailable</OutputSelector>"
         "</GetItemRequest>"
     )
     return _post_get_item(body)

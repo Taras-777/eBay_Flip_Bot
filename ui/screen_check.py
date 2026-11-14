@@ -103,8 +103,8 @@ async def check_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # Імпорти з інших екранів — унизу, щоб модулі могли посилатися один на одного
+from ui.screen_categories import cmd_list  # noqa: E402
 from ui.screen_watch import (  # noqa: E402
-    cmd_list,
     watch_details_callback,
 )
 from ui.screen_discover import (  # noqa: E402

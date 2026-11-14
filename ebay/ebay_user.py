@@ -24,6 +24,9 @@ USER_SCOPES = "https://api.ebay.com/oauth/api_scope"
 _REFRESH_KEY = "ebay_user_refresh_token"
 _REFRESH_EXPIRES_KEY = "ebay_user_refresh_expires_at"
 _CONNECTED_AT_KEY = "ebay_user_connected_at"
+_LOST_KEY = "ebay_login_lost"                   # коли eBay скасував вхід (refresh-токен недійсний)
+_LOST_NOTIFIED_KEY = "ebay_login_lost_notified"
+LOGIN_WARN_DAYS = (14, 3)                       # нагадати власнику, коли до кінця входу стільки днів
 
 _token_cache = {"token": None, "expires_at": 0.0}
 _token_lock = threading.Lock()
@@ -104,6 +107,8 @@ def exchange_code(code):
     set_meta(_REFRESH_KEY, data["refresh_token"])
     set_meta(_REFRESH_EXPIRES_KEY, now + float(data.get("refresh_token_expires_in") or 0))
     set_meta(_CONNECTED_AT_KEY, now)
+    set_meta(_LOST_KEY, "")   # новий вхід — попередні попередження вже не актуальні
+    set_meta(_LOST_NOTIFIED_KEY, "")
     with _token_lock:
         _token_cache.update(token=data.get("access_token"), expires_at=now + float(data.get("expires_in") or 0))
 
@@ -132,6 +137,37 @@ def get_user_access_token():
             return _token_cache["token"]
     if data.get("error") == "invalid_grant":
         log.warning("Вхід в акаунт eBay застарів або скасований — треба увійти знову")
+        set_meta(_LOST_KEY, int(time.time()))   # власнику прийде одне сповіщення (login_notice)
         disconnect()
         raise UserAuthError("вхід в акаунт eBay застарів — увійди знову")
     raise RuntimeError(f"eBay не видав токен доступу: HTTP {status} {data.get('error')}")
+
+
+def login_notice(now=None):
+    """Текст сповіщення власнику про вхід в акаунт eBay або None. Кожне — лише один раз:
+    eBay скасував вхід (перевірка продажів зупинилась) або до кінця входу ≤ 14 / ≤ 3 днів."""
+    now = now or time.time()
+    lost = get_meta(_LOST_KEY)
+    if lost and get_meta(_LOST_NOTIFIED_KEY) != lost:
+        set_meta(_LOST_NOTIFIED_KEY, lost)
+        return ("🔐 <b>eBay скасував вхід в акаунт</b>\n\n"
+                "Бот більше не може перевіряти, чи зниклі оголошення справді продали, і брати характеристики "
+                "через Trading API. Пошук знахідок працює далі.\n\n"
+                "Увійди знову: «⚙️ Налаштування» → «🔐 Підключити акаунт eBay».")
+    if not is_connected():
+        return None
+    _, expires = connection_info()
+    if not expires:
+        return None
+    days_left = (expires - now) / 86400
+    due = [d for d in sorted(LOGIN_WARN_DAYS) if days_left <= d]
+    if not due:
+        return None
+    key = f"ebay_login_warned:{int(expires)}"
+    if get_meta(key) and float(get_meta(key)) <= due[0]:
+        return None   # про цей поріг (або ближчий) уже нагадували
+    set_meta(key, due[0])
+    when = time.strftime("%d.%m.%Y", time.localtime(expires))
+    return (f"⏳ <b>Вхід в акаунт eBay закінчується {when}</b> (через {max(0, int(days_left))} дн.)\n\n"
+            "Після цього бот перестане перевіряти, чи зниклі оголошення справді продали. "
+            "Онови вхід заздалегідь: «⚙️ Налаштування» → «🔄 Увійти заново» — це 1 хвилина.")

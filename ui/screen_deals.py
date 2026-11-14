@@ -96,7 +96,7 @@ async def _render_deals(update, context, page=0, note=""):
     if deals:   # свіжі дані після перевірки (зокрема «👁 стежать»)
         deals, total = get_inbox_deals(chat_id, limit=DEALS_PER_PAGE, offset=page * DEALS_PER_PAGE)
     if removed:
-        gone_note = f"🗑 Прибрано вже проданих чи знятих: {removed}"
+        gone_note = f"🗑 Прибрано проданих, знятих чи подорожчалих: {removed}"
         note = f"{note}\n{gone_note}" if note else gone_note
     if not deals and page > 0:
         page = max(0, (total - 1) // DEALS_PER_PAGE)

@@ -91,7 +91,8 @@ def listing(item_id, title, price, condition_id="3000", created_ago_s=60, **extr
     return data
 
 
-SCREEN_MODULES = ("ui.handlers", "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_sales",
+SCREEN_MODULES = ("ui.handlers", "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_categories",
+                  "ui.screen_edit", "ui.screen_sales",
                   "ui.screen_listings", "ui.screen_deals", "ui.screen_discover", "ui.screen_check", "ui.screen_undo", "ui.screen_markdowns",
                   "ui.screen_stats", "ui.screen_unknown", "ui.screen_folders", "ui.screen_auctions",
                   "ui.screen_profit")
@@ -123,7 +124,7 @@ def no_category_tree(monkeypatch):
         return set(tree.get(str(cid), ()))
 
     monkeypatch.setattr(ebay_api, "category_descendants", descendants)
-    for name in ("ui.screen_watch", "ui.handlers"):
+    for name in ("ui.screen_watch", "ui.screen_edit", "ui.handlers"):
         mod = importlib.import_module(name)
         if hasattr(mod, "category_descendants"):
             monkeypatch.setattr(mod, "category_descendants", descendants)

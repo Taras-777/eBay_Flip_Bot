@@ -66,7 +66,7 @@ def test_sale_details_saved(monkeypatch):
     assert info["result"] == "sold" and info["details"] == {
         "sold_price": 579.0, "sold_at": 1790856000, "bid_count": 0, "offer_count": 4, "quantity": 3,
         "listing_type": "FixedPriceItem", "watch_count": None,
-        "aspects": None, "seller_type": "unknown", "shipping_cost": None}
+        "aspects": None, "seller_type": "unknown", "shipping_cost": None, "buy_it_now": None, "bin_available": None}
     assert trading_api.parse_get_item(xml_item())["details"]["sold_price"] is None   # полів немає — None
 
     for wid in (1, 2):   # той самий лот у двох товарах (спільний ринок)
@@ -728,3 +728,53 @@ def test_aspects_from_trading_reused_without_requests(fake_ebay):
     w = db.get_watch(db.add_watch(1, "iPhone 15 Pro", "iPhone 15 Pro", "", "", 15), 1)
     market._annotate_items(items, max_lookups=10, watch=w)
     assert items[0]["spec_group"] == "256GB" and fake_ebay.calls == []     # з бази, без запиту до eBay
+
+
+def test_login_expiry_and_lost_notices(monkeypatch):
+    from ebay import ebay_user
+    now = 1_800_000_000
+    assert ebay_user.login_notice(now) is None                                  # не підключено
+    db.set_meta("ebay_user_refresh_token", "R")
+    db.set_meta("ebay_user_refresh_expires_at", now + 30 * 86400)
+    assert ebay_user.login_notice(now) is None                                  # ще далеко
+    db.set_meta("ebay_user_refresh_expires_at", now + 10 * 86400)
+    assert "закінчується" in ebay_user.login_notice(now) and ebay_user.login_notice(now) is None   # один раз
+    assert "через 2 дн." in ebay_user.login_notice(now + 8 * 86400)            # ближчий поріг — ще раз
+    assert ebay_user.login_notice(now + 9 * 86400) is None
+
+    # eBay скасував вхід — одне сповіщення, і бот відключає акаунт
+    monkeypatch.setattr(ebay_user, "_token_request", lambda data: (400, {"error": "invalid_grant"}))
+    ebay_user._token_cache.update(token=None, expires_at=0.0)
+    import pytest
+    with pytest.raises(ebay_user.UserAuthError):
+        ebay_user.get_user_access_token()
+    assert not ebay_user.is_connected()
+    assert "скасував вхід" in ebay_user.login_notice(now) and ebay_user.login_notice(now) is None
+
+
+def test_confirmed_only_setting(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from ui import account
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    for item, check in (("a", "sold"), ("b", "unknown"), ("c", None)):
+        make_gone(wid, item, 400)
+        if check:
+            db.apply_sold_check(wid, item, check)
+    assert len(db.get_gone_rows(wid, "used")) == 3                        # без акаунта — усі зниклі
+    db.set_meta("ebay_user_refresh_token", "R")
+    assert len(db.get_gone_rows(wid, "used")) == 2                        # ✅ + «eBay не відповів»; ⏳ — ні
+    db.upsert_market_stats(wid, "used", "*", 450, 20, sale_price=420, sale_source="x")
+    db.set_confirmed_only(True)
+    assert [r["price"] for r in db.get_gone_rows(wid, "used")] == [400]  # лише ✅
+    assert db.watch_obs_summary(wid)["sold"] == 1
+    assert db.get_market_stats(wid)[0]["updated_at"] == 0               # ціни перерахуються
+    labels = [b.text for r in account._settings_keyboard(1).inline_keyboard for b in r]
+    assert "🧾 Продажі: ✅ лише підтверджені eBay" in labels
+
+    shown = []
+    monkeypatch.setattr(account, "show_panel", AsyncMock(side_effect=lambda u, c, t, **k: shown.append(t)))
+    monkeypatch.setattr(account, "is_owner", lambda uid: True)
+    upd = MagicMock()
+    upd.callback_query.answer = AsyncMock()
+    asyncio.run(account.confirmed_only_callback(upd, MagicMock()))
+    assert db.get_confirmed_only() is False and "Підтверджені + зниклі" in shown[-1]

@@ -7,7 +7,8 @@ import asyncio
 import config
 import time
 from concurrent.futures import ThreadPoolExecutor
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import Application, ContextTypes
 
@@ -323,6 +324,27 @@ def pace_interval(app, left, now=None):
     return pace["interval"]
 
 
+async def _notify_login(app):
+    """Нагадування власнику про вхід в акаунт eBay (ebay_user.login_notice)."""
+    from ebay.ebay_user import login_notice   # тут, щоб не тягнути при імпорті
+    if not config.OWNER_TELEGRAM_ID:
+        return
+    try:
+        text = await asyncio.to_thread(login_notice)
+    except Exception as e:
+        log.debug("Не вдалося перевірити вхід в акаунт eBay: %s", e)
+        return
+    if not text:
+        return
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Налаштування", callback_data="menu:ebay_account")]])
+    try:
+        await app.bot.send_message(chat_id=config.OWNER_TELEGRAM_ID, text=text, reply_markup=markup,
+                                   parse_mode=ParseMode.HTML)
+        app.bot_data.setdefault("chats_to_repost_panel", set()).add(config.OWNER_TELEGRAM_ID)
+    except Exception as e:
+        log.warning("Не вдалося надіслати нагадування про вхід в eBay: %s", e)
+
+
 async def scheduler_loop(app: Application):
     try:
         await asyncio.sleep(5)
@@ -374,6 +396,9 @@ async def scheduler_loop(app: Application):
             task = app.bot_data.get("deal_check_task")
             if task is None or task.done():
                 app.bot_data["deal_check_task"] = asyncio.create_task(asyncio.to_thread(_refresh_deals))
+
+            # Вхід в акаунт eBay: скасований або скоро закінчиться — одне сповіщення власнику
+            await _notify_login(app)
 
             # Резервна копія бази — раз на добу (окремим потоком, не заважає перевіркам)
             task = app.bot_data.get("backup_task")

@@ -37,16 +37,8 @@ from ui.screen_addwatch import (  # noqa: F401
     addwatch_cancel,
     addwatch_menu_interrupt,
 )
-from ui.screen_watch import (  # noqa: F401
-    watch_group_callback,
-    watch_min_profit_callback,
-    cmd_start,
-    cmd_menu,
-    cmd_list,
-    _watch_details_text,
-    _show_watch_details,
-    watch_details_callback,
-    all_configs_callback,
+from ui.screen_categories import cmd_list, watch_group_callback  # noqa: F401
+from ui.screen_edit import (  # noqa: F401
     _render_aspect_picker,
     required_aspect_callback,
     toggle_aspect_callback,
@@ -63,6 +55,15 @@ from ui.screen_watch import (  # noqa: F401
     edit_value_text,
     edit_interrupt,
     edit_cancel,
+)
+from ui.screen_watch import (  # noqa: F401
+    watch_min_profit_callback,
+    cmd_start,
+    cmd_menu,
+    _watch_details_text,
+    _show_watch_details,
+    watch_details_callback,
+    all_configs_callback,
     recalculate_median_callback,
     refresh_all_callback,
     refresh_stop_callback,
@@ -136,7 +137,8 @@ from ui.screen_check import (  # noqa: F401
 import importlib as _importlib
 
 _SCREENS = [_importlib.import_module(m) for m in (
-    "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_sales",
+    "ui.screen_common", "ui.screen_addwatch", "ui.screen_watch", "ui.screen_categories", "ui.screen_edit",
+    "ui.screen_sales",
     "ui.screen_listings", "ui.screen_deals", "ui.screen_discover", "ui.screen_check", "ui.screen_markdowns", "ui.screen_undo", "ui.screen_stats",
     "ui.screen_unknown", "ui.screen_folders", "ui.screen_auctions", "ui.screen_profit",
 )]

@@ -2,7 +2,7 @@
 Версія бота у вигляді v2.15, яка зростає сама після кожної зміни коду.
 
 Як це працює: при запуску бот рахує «відбиток» вмісту всіх своїх .py-файлів (корінь і пакети
-core, ebay, analysis, ui; config.py із секретами — ні)
+core, ebay, analysis, ui разом із вкладеними, напр. core/db; config.py із секретами — ні)
 і порівнює з тим, що запам'ятав у базі минулого разу. Якщо код змінився
 (після оновлення з GitHub) — номер збірки збільшується на 1. Перезапуск без
 змін коду номер не змінює. База лежить у data/, тож номер переживає
@@ -31,6 +31,14 @@ def code_fingerprint():
             digest.update(f"{folder}/{name}".encode())
             with open(os.path.join(path, name), "rb") as f:
                 digest.update(f.read())
+        if not folder:
+            continue   # корінь — лише свої файли (без tests тощо)
+        for sub in sorted(d for d in os.listdir(path)
+                          if os.path.isdir(os.path.join(path, d)) and not d.startswith((".", "__"))):
+            for name in sorted(n for n in os.listdir(os.path.join(path, sub)) if n.endswith(".py")):
+                digest.update(f"{folder}/{sub}/{name}".encode())   # вкладені пакети (core/db/…)
+                with open(os.path.join(path, sub, name), "rb") as f:
+                    digest.update(f.read())
     return digest.hexdigest()
 
 

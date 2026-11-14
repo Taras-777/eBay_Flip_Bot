@@ -68,8 +68,8 @@ jobs:
           python - <<'PY'
           import glob, importlib, sys
           sys.path.insert(0, ".")
-          # main.py у корені + усі модулі пакетів core / ebay / analysis / ui
-          files = ["main.py"] + sorted(glob.glob("*/*.py"))
+          # main.py у корені + усі модулі пакетів core / ebay / analysis / ui (і вкладених: core/db)
+          files = ["main.py"] + sorted(glob.glob("*/*.py") + glob.glob("*/*/*.py"))
           for f in files:
               if f.startswith(("tests/", ".")) or f.endswith("__init__.py"):
                   continue
