@@ -75,3 +75,51 @@ def test_settings_screens(monkeypatch):
     assert db.get_category_profit(1, "consoles") is None
     asyncio.run(handlers.category_profit_callback(*press("cprof:c999")))
     assert "Такої категорії вже немає" in shown[-1][0]
+
+
+def test_custom_value_input(monkeypatch):
+    from ui import screen_profit
+    handlers, shown, press = _screen(monkeypatch)
+
+    def typed(text, ctx):
+        upd, _ = press("x")
+        upd.message.text = text
+        return upd, ctx
+
+    upd, ctx = press("cprofin:consoles:eur")
+    ctx.user_data = {}
+    assert asyncio.run(screen_profit.profit_input_start(upd, ctx)) == screen_profit.PROFIT_INPUT
+    assert "в <b>євро</b>" in shown[-1][0]
+    assert asyncio.run(screen_profit.profit_input_text(*typed("abc", ctx))) == screen_profit.PROFIT_INPUT
+    assert "Потрібне число" in shown[-1][0]
+    asyncio.run(screen_profit.profit_input_text(*typed("75€", ctx)))
+    assert db.get_category_profit(1, "consoles") == ("eur", 75.0) and "🎮 Консолі: 75€" in shown[-1][1]
+
+    upd, ctx = press("cprofin:laptops:pct")
+    ctx.user_data = {}
+    asyncio.run(screen_profit.profit_input_start(upd, ctx))
+    assert asyncio.run(screen_profit.profit_input_text(*typed("95", ctx))) == screen_profit.PROFIT_INPUT
+    asyncio.run(screen_profit.profit_input_text(*typed("7,5", ctx)))
+    assert db.get_category_profit(1, "laptops") == ("pct", 7.5) and "💻 Ноутбуки: 7.5%" in shown[-1][1]
+
+
+def test_category_screen_lists_watches(monkeypatch):
+    db.set_min_profit(1, 100)
+    ps5 = db.add_watch(1, "PlayStation 5", "PlayStation 5", "", "", 15)
+    ps4 = db.add_watch(1, "PlayStation 4", "PlayStation 4", "", "", 15)
+    db.add_watch(1, "Nintendo Switch 2", "Nintendo Switch 2", "", "", 15)
+    db.add_watch(1, "iPhone 15", "iPhone 15", "", "", 15)
+    db.set_watch_min_profit(db.get_watch(ps5, 1), 150)
+    with db.get_conn() as conn:
+        for wid, sale in ((ps5, 560), (ps4, 160)):
+            conn.execute("INSERT INTO market_stats (watch_id, cond_group, spec_group, median_price, sale_price, "
+                         "sample_size, updated_at) VALUES (?, 'used', '*', ?, ?, 10, 0)", (wid, sale + 40, sale))
+    db.set_category_profit(1, "consoles", "10%")
+    handlers, shown, press = _screen(monkeypatch)
+    asyncio.run(handlers.category_profit_callback(*press("cprof:consoles")))
+    text = shown[-1][0]
+    assert "Товари в цій категорії" in text and "iPhone" not in text
+    assert "<b>PlayStation 5</b> — продаж ~560€ · поріг 150€ (свій) · купувати до ~403€" in text
+    assert "<b>PlayStation 4</b> — продаж ~160€ · поріг 10% = 16€ (категорії) · купувати до ~137€" in text
+    assert "<b>Nintendo Switch 2</b> — ціни ще не пораховані" in text
+    assert text.index("PlayStation 5") < text.index("PlayStation 4")          # від найдорожчого

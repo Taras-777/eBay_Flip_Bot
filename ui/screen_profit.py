@@ -8,6 +8,7 @@ mprof:show            — екран: загальний поріг і поро�
 mprof:<сума>          — зберегти загальний
 cprof:<категорія>     — вибір порогу категорії
 cprof:<категорія>:<v> — зберегти: «60» (€), «12p» (%), «def» (як загальний)
+cprofin:<категорія>:eur|pct — ввести своє значення повідомленням (діалог profit_conv)
 """
 
 import asyncio
@@ -15,12 +16,18 @@ import html
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 
+from analysis.market import RESALE_GROUP, max_buy_price, watch_group
 from core.db import (
     get_category_profit,
     get_category_profits,
+    get_market_stats,
     get_min_profit,
+    list_folders,
+    list_watches,
+    min_profit_rule,
+    profit_needed,
     profit_rule_label,
     set_category_profit,
     set_min_profit,
@@ -32,6 +39,10 @@ from ui.screen_folders import folder_names
 
 CATEGORY_EUR_CHOICES = (15, 20, 30, 40, 50, 60, 80, 100, 150, 200)
 CATEGORY_PCT_CHOICES = (5, 8, 10, 12, 15, 20, 25, 30)
+CATEGORY_LIST_MAX = 15           # скільки товарів категорії показати в екрані порогу
+PROFIT_INPUT = 0                 # діалог: чекаємо число
+CUSTOM_EUR_RANGE = (1, 5000)     # своє значення в €
+CUSTOM_PCT_RANGE = (1, 90)       # своє значення у %
 
 HELP_TEXT = (
     "<b>Як це працює</b>\n"
@@ -94,6 +105,40 @@ async def show_min_profit(update, context, note=""):
     )
 
 
+_SOURCE_NOTE = {"own": "свій", "category": "категорії", "general": "загальний"}
+
+
+def category_watch_lines(chat_id, key):
+    """Товари категорії для орієнтиру: типова ціна продажу (👤 приватні, усі конфігурації), поріг,
+    який зараз діє, і «купувати до». Від найдорожчого."""
+    custom = {f["id"] for f in list_folders(chat_id)}
+    rows = []
+    for w in list_watches(chat_id=chat_id):
+        if watch_group(w, custom) != key:
+            continue
+        stats = {(st["cond_group"], st["spec_group"]): st for st in get_market_stats(w["id"])}
+        stat = stats.get((RESALE_GROUP, "*")) or stats.get(("new", "*"))
+        sale = (stat["sale_price"] or stat["median_price"]) if stat else None
+        rule, source = min_profit_rule(w)
+        rows.append((sale or 0, w["label"], sale, rule, source))
+    rows.sort(key=lambda row: -row[0])
+    lines = []
+    for _, label, sale, rule, source in rows[:CATEGORY_LIST_MAX]:
+        threshold = profit_rule_label(rule)
+        if sale:
+            needed = profit_needed(rule, sale)
+            if rule[0] == "pct":
+                threshold += f" = {needed:.0f}€"
+            lines.append(f"• <b>{html.escape(label)}</b> — продаж ~{sale:.0f}€ · поріг {threshold} "
+                         f"({_SOURCE_NOTE[source]}) · купувати до ~{max_buy_price(sale, needed):.0f}€")
+        else:
+            lines.append(f"• <b>{html.escape(label)}</b> — ціни ще не пораховані · поріг {threshold} "
+                         f"({_SOURCE_NOTE[source]})")
+    if len(rows) > CATEGORY_LIST_MAX:
+        lines.append(f"…і ще {len(rows) - CATEGORY_LIST_MAX}")
+    return lines
+
+
 @require_access
 async def category_profit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cprof:<категорія> — вибір; cprof:<категорія>:<значення> — зберегти."""
@@ -111,15 +156,17 @@ async def category_profit_callback(update: Update, context: ContextTypes.DEFAULT
         saved = "як загальний" if value is None else profit_rule_label(get_category_profit(chat_id, key))
         return await show_min_profit(update, context, f"✅ {name}: <b>{saved}</b>\n\n")
 
-    rule = await asyncio.to_thread(get_category_profit, chat_id, key)
+    rule, watch_lines = await asyncio.to_thread(
+        lambda: (get_category_profit(chat_id, key), category_watch_lines(chat_id, key)))
     general = get_min_profit(chat_id)
     eur = [InlineKeyboardButton(("✅ " if rule == ("eur", float(v)) else "") + f"{v}€", callback_data=f"cprof:{key}:{v}")
            for v in CATEGORY_EUR_CHOICES]
     pct = [InlineKeyboardButton(("✅ " if rule == ("pct", float(v)) else "") + f"{v}%", callback_data=f"cprof:{key}:{v}p")
            for v in CATEGORY_PCT_CHOICES]
-    rows = [[InlineKeyboardButton("— У євро —", callback_data=f"cprof:{key}")]]
+    rows = [[InlineKeyboardButton("✏️ У євро — ввести свою суму", callback_data=f"cprofin:{key}:eur")]]
     rows += [eur[i:i + 5] for i in range(0, len(eur), 5)]
-    rows.append([InlineKeyboardButton("— У відсотках від ціни продажу —", callback_data=f"cprof:{key}")])
+    rows.append([InlineKeyboardButton("✏️ У відсотках від ціни продажу — ввести свій %",
+                                      callback_data=f"cprofin:{key}:pct")])
     rows += [pct[i:i + 4] for i in range(0, len(pct), 4)]
     rows.append([InlineKeyboardButton(("✅ " if rule is None else "") + f"↩️ Як загальний ({general:.0f}€)",
                                       callback_data=f"cprof:{key}:def")])
@@ -131,6 +178,74 @@ async def category_profit_callback(update: Update, context: ContextTypes.DEFAULT
         "Діє на всі товари цієї категорії, крім тих, де в картці товару задано свій поріг.\n\n"
         "• <b>€</b> — однаковий прибуток для всіх товарів категорії.\n"
         "• <b>%</b> — частка від ціни продажу: 10% від 600€ = 60€, від 1500€ = 150€.\n"
-        f"• <b>↩️ Як загальний</b> — без свого порогу ({general:.0f}€).",
+        f"• <b>↩️ Як загальний</b> — без свого порогу ({general:.0f}€).\n\n"
+        "Потрібного значення немає серед кнопок — натисни «✏️ …» і напиши своє число.\n\n"
+        + ("📋 <b>Товари в цій категорії</b> (типова ціна продажу, 👤 приватні, усі конфігурації):\n"
+           + "\n".join(watch_lines)
+           + "\n<i>Поріг «свій» задано в картці товару — зміна порогу категорії його не чіпає.</i>"
+           if watch_lines else "📋 У цій категорії поки немає товарів."),
         reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML,
     )
+
+
+@require_access
+async def profit_input_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cprofin:<категорія>:eur|pct — попросити число."""
+    await _ack_callback(update)
+    _, key, kind = update.callback_query.data.split(":")
+    names = await asyncio.to_thread(folder_names, update.effective_chat.id)
+    if key not in names:
+        await show_min_profit(update, context, "⚠️ Такої категорії вже немає.\n\n")
+        return ConversationHandler.END
+    context.user_data["profit_input"] = (key, kind)
+    low, high = CUSTOM_EUR_RANGE if kind == "eur" else CUSTOM_PCT_RANGE
+    what = (f"суму в <b>євро</b> (від {low} до {high}), напр. <code>75</code>" if kind == "eur" else
+            f"<b>відсоток</b> від ціни продажу (від {low} до {high}), напр. <code>18</code> або <code>7.5</code>")
+    rows = [[InlineKeyboardButton("◀️ Назад", callback_data=f"cprof:{key}")]]
+    await show_panel(update, context,
+                     f"✏️ <b>Мін. прибуток — {html.escape(names[key])}</b>\n\nНапиши {what}.",
+                     reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+    return PROFIT_INPUT
+
+
+def _parse_number(text):
+    try:
+        return float((text or "").strip().replace(",", ".").rstrip("€%").strip())
+    except ValueError:
+        return None
+
+
+async def profit_input_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Число від користувача — зберегти як поріг категорії."""
+    key, kind = context.user_data.get("profit_input") or (None, None)
+    if key is None:
+        return ConversationHandler.END
+    value = _parse_number(update.message.text)
+    low, high = CUSTOM_EUR_RANGE if kind == "eur" else CUSTOM_PCT_RANGE
+    context.user_data["panel_force_new"] = True   # відповідь — під повідомленням з числом
+    if value is None or not low <= value <= high:
+        unit = "€" if kind == "eur" else "%"
+        rows = [[InlineKeyboardButton("◀️ Назад", callback_data=f"cprof:{key}")]]
+        await show_panel(update, context, f"⚠️ Потрібне число від {low} до {high}{unit}. Напиши ще раз.",
+                         reply_markup=InlineKeyboardMarkup(rows))
+        return PROFIT_INPUT
+    context.user_data.pop("profit_input", None)
+    stored = f"{value:g}%" if kind == "pct" else f"{value:g}"
+    await asyncio.to_thread(set_category_profit, update.effective_chat.id, key, stored)
+    name = html.escape((await asyncio.to_thread(folder_names, update.effective_chat.id)).get(key, ""))
+    await show_min_profit(update, context, f"✅ {name}: <b>{profit_rule_label(get_category_profit(update.effective_chat.id, key))}</b>\n\n")
+    return ConversationHandler.END
+
+
+async def profit_input_interrupt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Інша кнопка замість числа — вийти з діалогу й виконати її."""
+    context.user_data.pop("profit_input", None)
+    data = update.callback_query.data
+    if data.startswith("cprof:"):
+        await category_profit_callback(update, context)
+    elif data.startswith("mprof:"):
+        await min_profit_callback(update, context)
+    else:
+        from ui.panel import show_main_menu
+        await show_main_menu(update, context)
+    return ConversationHandler.END

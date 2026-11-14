@@ -34,6 +34,7 @@ from ui.screen_usage import usage_callback
 from core.concurrency import DialogSafeUpdateProcessor
 from ui.screen_unknown import unknown_callback
 from ui.screen_auctions import auctions_list_callback
+from ui.screen_profit import PROFIT_INPUT, profit_input_interrupt, profit_input_start, profit_input_text
 from ui.screen_folders import FOLDER_NAME, folder_callback, folder_interrupt, folder_new_start, folder_new_text
 from ui.access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
 from ui.handlers import (
@@ -206,6 +207,21 @@ def main():
         fallbacks=[CallbackQueryHandler(folder_interrupt, pattern="^(fld:|watch_details:|menu:)")],
     )
 
+    # Своє значення мін. прибутку категорії (€ чи %): число повідомленням
+    profit_conv = ConversationHandler(
+        name="profit_conv",
+        persistent=True,
+        allow_reentry=True,
+        entry_points=[CallbackQueryHandler(profit_input_start, pattern="^cprofin:")],
+        states={
+            PROFIT_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, profit_input_text),
+                CallbackQueryHandler(profit_input_interrupt, pattern="^(cprof:|mprof:|menu:)"),
+            ],
+        },
+        fallbacks=[CallbackQueryHandler(profit_input_interrupt, pattern="^(cprof:|mprof:|menu:)")],
+    )
+
     check_conv = ConversationHandler(
         name="check_conv",
         persistent=True,
@@ -247,7 +263,9 @@ def main():
     app.add_handler(check_conv)
     app.add_handler(account_conv)
     app.add_handler(folder_conv)
-    update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv, folder_conv]
+    app.add_handler(profit_conv)
+    update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv, folder_conv,
+                                      profit_conv]
     app.add_handler(CallbackQueryHandler(folder_callback, pattern="^fld:"))
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
