@@ -120,7 +120,7 @@ def test_delete_asks_for_confirmation_by_name(screen):
     wid = db.add_watch(1, "PS5 Digital", "PS5 Digital", "", "", 25)
     run(handlers.delwatch_ask_callback(make_update(f"delwatch_ask:{wid}"), make_context()))
     assert "«PS5 Digital»" in screen.text
-    assert screen.buttons() == ["✅ Так, видалити", "❌ Ні"]
+    assert screen.buttons() == ["🗄 Так, в архів", "❌ Ні"] and "нічого не зникне" in screen.text
 
 
 # ---------- список оголошень: гортання ----------

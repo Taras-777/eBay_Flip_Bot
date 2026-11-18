@@ -141,6 +141,11 @@ SOLD_CHECK_MAX_AGE_DAYS = 30   # зниклі давніше не перевір
 # сканування найдешевших — туди потрапляють і старі оголошення після знижки.
 PRICE_DROP_PCT = 20               # на скільки % знизили від першої побаченої ціни (за замовчуванням)
 PRICE_DROP_CHOICES = (10, 15, 20, 30)
+# Які знижки показувати: «deal» — лише вже вигідні; «haggle» — вигідні й ті, до вигідної ціни яких лишається
+# не більше MARKDOWN_HAGGLE_PCT% ціни (реальний торг через «Preis vorschlagen»); «all» — усі
+MARKDOWN_MODES = ("deal", "haggle", "all")
+MARKDOWN_MODE_DEFAULT = "haggle"
+MARKDOWN_HAGGLE_PCT = 15
 PRICE_DROP_MIN_DAYS = 7           # оголошення висить щонайменше стільки днів
 PRICE_DROP_SCAN_HOURS = 3         # сканування найдешевших — раз на стільки годин для кожного товару
 PRICE_DROP_SCAN_PAGES = 2         # сторінок по 200 найдешевших оголошень

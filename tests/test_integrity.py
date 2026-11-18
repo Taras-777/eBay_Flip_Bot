@@ -69,3 +69,13 @@ def test_imported_names_exist():
                 source = importlib.import_module(node.module)
                 for alias in node.names:
                     assert hasattr(source, alias.name), f"{module}: {node.module}.{alias.name} не існує"
+
+
+def test_core_db_exports_every_function():
+    """`from core.db import X` працює для кожної функції з core/db/*.py (пакет збирає їх у __init__.py)."""
+    import core.db as db
+    for module in [m for m in MODULES if m.startswith("core.db.")]:
+        tree = ast.parse(open(_path(module), encoding="utf-8-sig").read())
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert hasattr(db, node.name), f"core.db не експортує {module}.{node.name}"

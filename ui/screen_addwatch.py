@@ -15,7 +15,9 @@ from analysis.textparse import aspect_label, aspects_label, category_label, plur
 from core.db import (
     add_watch,
     encode_required_aspects,
+    find_archived_watch,
     find_duplicate_watch,
+    unarchive_watch,
     get_required_aspects,
     watch_obs_summary,
     get_watch,
@@ -100,6 +102,46 @@ async def addwatch_got_query(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data["new_watch_query"] = query
 
+    # Такий товар уже є в «🗄 Архів» — запропонувати повернути його з усією історією
+    archived = find_archived_watch(chat_id, query)
+    if archived:
+        obs = watch_obs_summary(archived["id"])
+        await show_panel(
+            update, context,
+            f"🗄 <b>«{html.escape(archived['label'])}» є в архіві</b>\n\n"
+            f"🛒 продажів в історії: {obs['sold']}\n\n"
+            "↩️ <b>Повернути з архіву</b> — ціни й продажі будуть одразу, разом з твоїми налаштуваннями "
+            "(категорії, мін. прибуток, вивчені слова).\n"
+            "➕ <b>Додати як новий</b> — звичайне додавання з нуля (архівний лишиться в архіві).",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("↩️ Повернути з архіву", callback_data=f"archadd:back:{archived['id']}")],
+                [InlineKeyboardButton("➕ Додати як новий", callback_data="archadd:new")],
+                [InlineKeyboardButton("❌ Скасувати", callback_data="menu:home")],
+            ]),
+            parse_mode=ParseMode.HTML,
+        )
+        return ASK_CATEGORY
+    return await _after_query(update, context)
+
+
+async def addwatch_archive_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """archadd:back:<id> — повернути товар з архіву; archadd:new — додати як новий."""
+    await _ack_callback(update)
+    parts = update.callback_query.data.split(":")
+    if parts[1] == "back" and len(parts) > 2 and parts[2].isdigit():
+        wid, chat_id = int(parts[2]), update.effective_chat.id
+        if await asyncio.to_thread(unarchive_watch, wid, chat_id):
+            _clear_new_watch(context)
+            await _show_watch_details(update, context, get_watch(wid, chat_id),
+                                      note="↩️ Товар повернуто з архіву разом з історією й налаштуваннями.")
+            return ConversationHandler.END
+    return await _after_query(update, context)
+
+
+async def _after_query(update, context):
+    """Після назви товару: спільні дані ринку (якщо такий товар уже відстежує хтось інший) або категорії."""
+    query = context.user_data["new_watch_query"]
+    chat_id = update.effective_chat.id
     if not _ebay_configured():
         return await _finalize_watch(update, context)
 
@@ -467,6 +509,7 @@ from ui.screen_common import (  # noqa: E402
 )
 from ui.screen_categories import cmd_list  # noqa: E402
 from ui.screen_watch import (  # noqa: E402
+    _show_watch_details,
     cmd_stats,
     refresh_all_callback,
 )

@@ -13,7 +13,6 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from core.settings import (
-    UNDO_KEEP_HOURS,
     MIN_SAMPLE_SIZE,
     MIN_SOLD_SAMPLE,
     SEARCH_RESERVE,
@@ -31,6 +30,8 @@ from analysis.textparse import (
 from analysis.learning import unlearn_word
 from ui.undo import record as undo_record, short
 from core.db import (
+    archive_watch,
+    drop_empty_folders,
     get_current_listings,
     get_auto_min_price,
     get_learned_words,
@@ -46,7 +47,6 @@ from core.db import (
     get_watch,
     get_watch_categories,
     list_watches,
-    remove_watch,
     upsert_user_request,
 )
 from ebay.ebay_api import (
@@ -228,7 +228,7 @@ async def _show_watch_details(update, context, watch, note=""):
     rows += [
         [
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),
-            InlineKeyboardButton("🗑️ Видалити", callback_data=f"delwatch_ask:{watch_id}"),
+            InlineKeyboardButton("🗄 В архів", callback_data=f"delwatch_ask:{watch_id}"),
         ],
         [InlineKeyboardButton("◀️ Категорія", callback_data=f"wgrp:{group}"), *menu_row()],
     ]
@@ -594,7 +594,7 @@ async def _refresh_all(update, context):
 
 @require_access
 async def delwatch_ask_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """delwatch_ask:<id> — підтвердження видалення з картки товару."""
+    """delwatch_ask:<id> — підтвердження: перемістити товар в «🗄 Архів» (кнопка «🗄 В архів» у картці)."""
     query_cb = update.callback_query
     watch_id = int(query_cb.data.split(":")[1])
     watch = get_watch(watch_id, update.effective_chat.id)
@@ -603,12 +603,18 @@ async def delwatch_ask_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     await _ack_callback(update)
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Так, видалити", callback_data=f"delwatch_yes:{watch_id}"),
+        InlineKeyboardButton("🗄 Так, в архів", callback_data=f"delwatch_yes:{watch_id}"),
         InlineKeyboardButton("❌ Ні", callback_data=f"watch_details:{watch_id}"),
     ]])
     await show_panel(
         update, context,
-        f"🗑️ Видалити товар «{html.escape(watch['label'])}»?\n\n↩️ Протягом {UNDO_KEEP_HOURS} год видалення можна скасувати — історія цін і продажів зберігається.",
+        f"🗄 <b>Перемістити «{html.escape(watch['label'])}» в архів?</b>\n\n"
+        "Товар перестане відстежуватись (запити до eBay на нього не витрачаються, знахідок не буде), але "
+        "<b>нічого не зникне</b>: історія продажів і цін, вивчені слова, сховані оголошення, мін. прибуток, "
+        "категорії й папка лишаються.\n\n"
+        "Повернути — «🗂 Категорії товарів» → «🗄 Архів» → «↩️ Повернути». Якщо колись знову додаси такий самий "
+        "товар, бот сам запропонує повернути його з архіву разом з історією.\n"
+        "<i>Видалити назавжди можна лише з архіву.</i>",
         reply_markup=keyboard, parse_mode=ParseMode.HTML,
     )
 
@@ -618,9 +624,9 @@ async def delwatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
     wid = int(update.callback_query.data.split(":")[1])
     chat_id = update.effective_chat.id
     watch = get_watch(wid, chat_id)
-    remove_watch(wid, chat_id)
-    if watch:
-        undo_record(context, chat_id, "watch_delete", f"видалення «{short(watch['label'])}»",
+    if watch and await asyncio.to_thread(archive_watch, wid, chat_id):
+        await asyncio.to_thread(drop_empty_folders, chat_id)
+        undo_record(context, chat_id, "watch_archive", f"архівування «{short(watch['label'])}»",
                     watch_id=wid, screen="watch")
     await _ack_callback(update)
     await cmd_list(update, context)

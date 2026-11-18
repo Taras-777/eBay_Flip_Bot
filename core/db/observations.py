@@ -271,9 +271,11 @@ def watch_obs_summary(watch_id, days=SOLD_LOOKBACK_DAYS):
     return {k: int(row[k] or 0) for k in ("active", "sold", "confirmed", "pending", "withdrawn")}
 
 
-def copy_listing_history(src_watch_ids, dst_watch_id, allowed_conditions=None, exclude_tokens=(), min_price=0):
+def copy_listing_history(src_watch_ids, dst_watch_id, allowed_conditions=None, exclude_tokens=(), min_price=0,
+                         gone_only_from=()):
     """Копіює спостереження (активні й продані лоти) з товарів-«сусідів» новому товару,
-    з урахуванням його фільтрів. Повертає кількість скопійованих."""
+    з урахуванням його фільтрів. gone_only_from — товари, з яких беремо лише зниклі/продані (напр. з архіву:
+    їхні «поточні» оголошення застаріли). Повертає кількість скопійованих."""
     from analysis.textparse import _search_tokens
     if not src_watch_ids:
         return 0
@@ -291,6 +293,8 @@ def copy_listing_history(src_watch_ids, dst_watch_id, allowed_conditions=None, e
         for r in rows:
             r = dict(r)
             if r["item_id"] in rejected:
+                continue
+            if r["watch_id"] in gone_only_from and r["status"] == "active":
                 continue
             # Стани товару (коди eBay) — група тепер «магазин/приватний», тож фільтруємо за кодом стану
             if allowed_conditions and r["condition_id"] and str(r["condition_id"]) not in allowed_conditions:

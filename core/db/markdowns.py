@@ -124,6 +124,17 @@ def set_drop_pct(chat_id, value):
     set_meta(f"drop_pct:{chat_id}", value)
 
 
+def get_markdown_mode(chat_id):
+    """Які знижки показувати в «📉»: deal / haggle / all (див. settings.MARKDOWN_MODES)."""
+    mode = get_meta(f"mdmode:{chat_id}")
+    return mode if mode in settings.MARKDOWN_MODES else settings.MARKDOWN_MODE_DEFAULT
+
+
+def set_markdown_mode(chat_id, mode):
+    if mode in settings.MARKDOWN_MODES:
+        set_meta(f"mdmode:{chat_id}", mode)
+
+
 def get_hidden_candidates(chat_id):
     """«💡 Що перепродавати»: назви товарів, позначених «🙈 Не цікавить»."""
     try:

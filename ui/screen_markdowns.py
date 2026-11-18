@@ -1,5 +1,5 @@
 """
-«📉 Знизили ціну» і «⚙️ Поріг знижки».
+«📉 Знизили ціну» і його налаштування «📉 Поріг знижки» (поріг знижки й які знижки показувати).
 """
 
 import asyncio
@@ -10,9 +10,18 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from core.settings import PRICE_DROP_CHOICES, PRICE_DROP_MIN_DAYS
+from core.settings import MARKDOWN_HAGGLE_PCT, MARKDOWN_MODES, PRICE_DROP_CHOICES, PRICE_DROP_MIN_DAYS
 from analysis.deal_reprice import basis_line, specs_line
-from core.db import dismiss_tracks, get_drop_pct, get_watch, mark_track_seen, pickup_only_items, set_drop_pct
+from core.db import (
+    dismiss_tracks,
+    get_drop_pct,
+    get_markdown_mode,
+    get_watch,
+    mark_track_seen,
+    pickup_only_items,
+    set_drop_pct,
+    set_markdown_mode,
+)
 from analysis.learning import hide_item, learned_words_note, reject_and_learn
 from analysis.laptops import laptop_warnings
 from analysis.markdowns import markdown_list, recheck_rows
@@ -23,6 +32,7 @@ from ui.undo import record as undo_record, short
 from ui.style import hint, menu_row, note_line, title
 
 PER_PAGE = 5
+MODE_LABELS = {"deal": "✅ Лише вигідні", "haggle": f"🎯 Вигідні + торг до {MARKDOWN_HAGGLE_PCT}%", "all": "📋 Усі"}
 
 
 def _card(n, r):
@@ -109,7 +119,8 @@ async def _render_markdowns(update, context, page=0, note=""):
                           "помітно подешевшали — з таким продавцем легше торгуватись.\n"
                           "🙈 <b>Сховати</b> — прибрати лише це оголошення.\n"
                           "❌ <b>Не той товар</b> — бот запам'ятає слова з назви.\n"
-                          "Поріг знижки — у «⚙️ Налаштування».", "ℹ️ Як це працює"))
+                          "Поріг знижки і які знижки показувати (лише вигідні / + торг до 15% / усі) — "
+                          "у «⚙️ Налаштування» → «📉 Поріг знижки».", "ℹ️ Як це працює"))
     await show_panel(update, context, "\n\n".join(lines), reply_markup=InlineKeyboardMarkup(buttons),
                      parse_mode=ParseMode.HTML)
     mark_track_seen([(r["watch_id"], r["item_id"]) for r in shown])
@@ -156,25 +167,40 @@ async def markdown_action_callback(update: Update, context: ContextTypes.DEFAULT
 
 @require_access
 async def drop_pct_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """mdpct:show — вибір порогу; mdpct:<n> — зберегти."""
+    """mdpct:show — екран; mdpct:<n> — поріг знижки; mdpct:m:<deal|haggle|all> — які знижки показувати."""
     await _ack_callback(update)
     chat_id = update.effective_chat.id
-    choice = update.callback_query.data.split(":")[1]
+    parts = update.callback_query.data.split(":")
     note = ""
-    if choice != "show":
-        set_drop_pct(chat_id, float(choice))
-        note = f"✅ Збережено: знижка від <b>{float(choice):.0f}%</b>"
-    current = get_drop_pct(chat_id)
-    buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}%", callback_data=f"mdpct:{v}")
-               for v in PRICE_DROP_CHOICES]
-    await show_panel(
-        update, context,
-        note_line(note) + title("📉", "Поріг знижки", "з якої знижки оголошення потрапляє в «📉 Знизили ціну»")
-        + f"\n\nЗараз: <b>{current:.0f}%</b>\n\n"
-        "Рахується від першої ціни, яку бачив бот. Менший поріг — більше оголошень, але й більше дрібних знижок.",
-        reply_markup=InlineKeyboardMarkup([buttons, [InlineKeyboardButton("◀️ Налаштування", callback_data="menu:ebay_account")]]),
-        parse_mode=ParseMode.HTML,
+    if parts[1] == "m" and len(parts) > 2 and parts[2] in MARKDOWN_MODES:
+        set_markdown_mode(chat_id, parts[2])
+        note = f"✅ Показую: <b>{MODE_LABELS[parts[2]]}</b>"
+    elif parts[1] != "show":
+        set_drop_pct(chat_id, float(parts[1]))
+        note = f"✅ Збережено: знижка від <b>{float(parts[1]):.0f}%</b>"
+    current, mode = get_drop_pct(chat_id), get_markdown_mode(chat_id)
+    pct_buttons = [InlineKeyboardButton(("✅ " if v == current else "") + f"{v}%", callback_data=f"mdpct:{v}")
+                   for v in PRICE_DROP_CHOICES]
+    mode_rows = [[InlineKeyboardButton(("✅ " if m == mode else "") + MODE_LABELS[m], callback_data=f"mdpct:m:{m}")]
+                 for m in MARKDOWN_MODES]
+    rows = [pct_buttons, *mode_rows, [InlineKeyboardButton("◀️ Налаштування", callback_data="menu:ebay_account")]]
+    haggle = MARKDOWN_HAGGLE_PCT
+    text = (
+        note_line(note)
+        + title("📉", "Знизили ціну — налаштування", "які оголошення потрапляють у «📉 Знизили ціну»") + "\n\n"
+        + f"1️⃣ <b>Поріг знижки: {current:.0f}%</b> <i>(перший ряд кнопок)</i>\n"
+        "На скільки продавець має знизити ціну від першої, яку бачив бот. Менший поріг — більше оголошень, "
+        "але й більше дрібних знижок.\n\n"
+        f"2️⃣ <b>Які знижки показувати: {MODE_LABELS[mode]}</b>\n"
+        "• <b>✅ Лише вигідні</b> — тільки ті, які вже зараз вигідно купити за ціною оголошення "
+        "(не дорожче за «купувати до»). Найменше оголошень, торгуватися не треба.\n"
+        f"• <b>🎯 Вигідні + торг до {haggle}%</b> — ще й ті, до вигідної ціни яких лишається не більше "
+        f"{haggle}% ціни оголошення: стільки продавці зазвичай погоджуються скинути на «Preis vorschlagen». "
+        f"Напр., MacBook за 1868€, вигідно до 1842€ (−1%) — показую; PS4 за 68€, вигідно до 38€ (−44%) — ні.\n"
+        "• <b>📋 Усі</b> — усі помітно здешевілі оголошення, не дорожчі за ринок, навіть якщо до вигідної "
+        "ціни дуже далеко. Найбільше оголошень, але багато з них ніколи не стануть вигідними."
     )
+    await show_panel(update, context, text, reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
 
 
 @require_access

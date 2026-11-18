@@ -29,6 +29,7 @@ from core.db import (
     restore_obs_rows,
     restore_user,
     restore_watch,
+    unarchive_watch,
     set_deals_status,
     set_learned_word,
     unreject_item,
@@ -77,6 +78,11 @@ def perform(action):
     if action["created_at"] < time.time() - UNDO_KEEP_HOURS * 3600:
         return False, f"⌛ Минуло понад {UNDO_KEEP_HOURS} год — цю дію вже не повернути."
     kind, p, chat_id = action["kind"], action["payload"], action["chat_id"]
+
+    if kind == "watch_archive":
+        if not unarchive_watch(p["watch_id"], chat_id):
+            return False, "Цього товару вже немає в архіві."
+        return True, "↩️ Товар повернуто з архіву — ринок оновиться за кілька хвилин."
 
     if kind == "watch_delete":
         if not restore_watch(p["watch_id"], chat_id):

@@ -35,6 +35,7 @@ from ui.screen_usage import usage_callback
 from core.concurrency import DialogSafeUpdateProcessor
 from ui.screen_unknown import unknown_callback
 from ui.screen_auctions import auctions_list_callback
+from ui.screen_archive import archive_callback
 from ui.screen_profit import PROFIT_INPUT, profit_input_interrupt, profit_input_start, profit_input_text
 from ui.screen_folders import FOLDER_NAME, folder_callback, folder_interrupt, folder_new_start, folder_new_text
 from ui.access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
@@ -54,6 +55,7 @@ from ui.handlers import (
     check_listing_text,
     addwatch_category_choice,
     addwatch_shared_choice,
+    addwatch_archive_choice,
     addwatch_custom_min_price,
     addwatch_got_query,
     addwatch_menu_interrupt,
@@ -155,6 +157,7 @@ def main():
             ASK_CATEGORY: [
                 CallbackQueryHandler(addwatch_category_choice, pattern="^cat:"),
                 CallbackQueryHandler(addwatch_shared_choice, pattern="^shr:"),
+                CallbackQueryHandler(addwatch_archive_choice, pattern="^archadd:"),
                 menu_interrupt,
             ],
             ASK_ASPECT: [
@@ -268,6 +271,7 @@ def main():
     update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv, folder_conv,
                                       profit_conv]
     app.add_handler(CallbackQueryHandler(folder_callback, pattern="^fld:"))
+    app.add_handler(CallbackQueryHandler(archive_callback, pattern="^arch:"))
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(confirmed_only_callback, pattern="^confonly$"))

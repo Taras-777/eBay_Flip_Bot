@@ -82,6 +82,62 @@ def remove_watch(watch_id, chat_id):
         )
 
 
+# ---------- «🗄 Архів»: товар не сканується, але історія й налаштування лишаються ----------
+
+ARCHIVE_FRESH_SECONDS = 3600   # повернули раніше — поточні оголошення ще актуальні, не збираємо заново
+
+def archive_watch(watch_id, chat_id):
+    """Перемістити товар в архів. True — переміщено."""
+    with get_conn() as conn:
+        return bool(conn.execute(
+            "UPDATE watches SET active = 0, archived_at = ?, deleted_at = NULL WHERE id = ? AND chat_id = ? AND active = 1",
+            (int(time.time()), watch_id, chat_id)).rowcount)
+
+
+def unarchive_watch(watch_id, chat_id):
+    """Повернути товар з архіву. Продажі й налаштування лишаються, а «поточні» оголошення з часу архівації
+    збираються заново — інакше ті, що зникли за цей час, бот прийняв би за свіжі продажі. True — повернуто."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT archived_at FROM watches WHERE id = ? AND chat_id = ? AND archived_at IS NOT NULL",
+                           (watch_id, chat_id)).fetchone()
+        if row is None:
+            return False
+        conn.execute("UPDATE watches SET active = 1, archived_at = NULL WHERE id = ?", (watch_id,))
+        conn.execute("UPDATE market_stats SET updated_at = 0 WHERE watch_id = ?", (watch_id,))
+    if time.time() - row["archived_at"] > ARCHIVE_FRESH_SECONDS:
+        reset_active_listings(watch_id)   # щойно архівований (напр. «↩️ Скасувати») — оголошення ще актуальні
+    return True
+
+
+def list_archived_watches(chat_id=None):
+    """Товари в архіві (усіх або одного чату), найновіші в архіві першими."""
+    q = "SELECT * FROM watches WHERE archived_at IS NOT NULL" + (" AND chat_id = ?" if chat_id is not None else "")
+    with get_conn() as conn:
+        rows = conn.execute(q + " ORDER BY archived_at DESC", (chat_id,) if chat_id is not None else ()).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_archived_watch(watch_id, chat_id):
+    return next((w for w in list_archived_watches(chat_id) if w["id"] == watch_id), None)
+
+
+def find_archived_watch(chat_id, query):
+    """Товар в архіві з такою ж назвою пошуку (без урахування регістру й пробілів) або None."""
+    normalized = " ".join(query.strip().lower().split())
+    return next((w for w in list_archived_watches(chat_id)
+                 if " ".join(w["query"].strip().lower().split()) == normalized), None)
+
+
+def delete_archived_watch(watch_id, chat_id):
+    """Видалити товар з архіву назавжди: історія цін і продажів стирається. True — видалено."""
+    with get_conn() as conn:
+        done = conn.execute("UPDATE watches SET archived_at = NULL WHERE id = ? AND chat_id = ? AND archived_at IS NOT NULL",
+                            (watch_id, chat_id)).rowcount
+        if done:
+            _purge_watch_data(conn, watch_id)
+    return bool(done)
+
+
 def restore_watch(watch_id, chat_id):
     """Скасувати видалення: True, якщо історія ще збереглась і товар знову відстежується."""
     with get_conn() as conn:
@@ -434,10 +490,11 @@ def set_watch_folder(watch_id, folder):
 
 
 def drop_empty_folders(chat_id):
-    """Власні папки, в яких не лишилось жодного товару, — прибрати."""
+    """Власні папки, в яких не лишилось жодного товару (ні активного, ні в архіві), — прибрати."""
     with get_conn() as conn:
         conn.execute("""DELETE FROM watch_folders WHERE chat_id = ? AND NOT EXISTS
-                        (SELECT 1 FROM watches w WHERE w.active = 1 AND w.folder = 'c' || watch_folders.id)""",
+                        (SELECT 1 FROM watches w WHERE (w.active = 1 OR w.archived_at IS NOT NULL)
+                         AND w.folder = 'c' || watch_folders.id)""",
                      (chat_id,))
 
 

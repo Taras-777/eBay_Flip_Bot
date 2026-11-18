@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS watches (
     require_spec INTEGER,
     required_aspect TEXT,
     categories_json TEXT,
-    deleted_at INTEGER          -- видалено, але дані ще зберігаються для «↩️ Скасувати»
+    deleted_at INTEGER,         -- видалено, але дані ще зберігаються для «↩️ Скасувати»
+    archived_at INTEGER         -- у «🗄 Архів»: не сканується, але історія й налаштування зберігаються
 );
 
 CREATE TABLE IF NOT EXISTS market_stats (
@@ -473,6 +474,7 @@ def init_db():
             ("deleted_at", "INTEGER"),
             ("min_profit", "REAL"),   # свій мін. прибуток товару (NULL — загальний користувача)
             ("folder", "TEXT"),       # папка в «🗂 Категорії товарів», обрана вручну (NULL — автоматично)
+            ("archived_at", "INTEGER"),   # у «🗄 Архів» (не сканується, дані зберігаються)
         ]:
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")

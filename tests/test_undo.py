@@ -44,7 +44,8 @@ async def _dispatch(data, upd, ctx):
     routes = {"delwatch_yes": handlers.delwatch_yes_callback, "undo": screen_undo.undo_callback,
               "dact": handlers.deal_inbox_action_callback, "dclear": handlers.deals_clear_callback,
               "srej": handlers.sales_reject_callback, "lwdel": handlers.learned_words_callback,
-              "rejl": handlers.reject_listing_callback, "udelok": access.delete_user_callback}
+              "rejl": handlers.reject_listing_callback, "udelok": access.delete_user_callback,
+              "arch": handlers.archive_callback, "menu": handlers.cmd_list}
     await routes[data.split(":")[0]](upd, ctx)
 
 
@@ -65,12 +66,12 @@ def test_delete_watch_and_undo_keeps_history(monkeypatch):
     press(f"delwatch_yes:{w['id']}")
     assert db.list_watches(chat_id=1) == [] and _obs_count(w["id"]) == 10     # історія ще є
     offer = _last_undo()
-    assert offer["label"] == "видалення «PlayStation 5»"
+    assert offer["label"] == "архівування «PlayStation 5»"
     assert ctx.user_data[undo.OFFER_KEY]["id"] == offer["id"]                 # кнопка на наступному екрані
 
     press(f"undo:{offer['id']}")
     assert [x["id"] for x in db.list_watches(chat_id=1)] == [w["id"]] and _obs_count(w["id"]) == 10
-    assert "Товар повернуто" in shown[-1][0] and "📌" in shown[-1][0]
+    assert "повернуто з архіву" in shown[-1][0] and "📌" in shown[-1][0]
 
     press(f"undo:{offer['id']}")                                               # подвійне натискання
     assert "вже скасовано" in shown[-1][0]
@@ -205,3 +206,69 @@ def test_offer_attached_once_and_shown_in_menu():
         conn.execute("UPDATE undo_actions SET created_at = created_at - 16 * 60")
     labels = [b.text for r in panel.build_main_menu(1).inline_keyboard for b in r]
     assert not labels[0].startswith("↩️")
+
+
+# ---------- 🗄 Архів ----------
+
+def test_archive_keeps_history_and_restores(monkeypatch):
+    shown, ctx, press = _ui(monkeypatch)
+    w = _watch_with_listings(GOOD)
+    db.set_watch_min_profit(w, 70)
+    press(f"delwatch_yes:{w['id']}")
+    assert db.list_watches(chat_id=1) == [] and [a["id"] for a in db.list_archived_watches(1)] == [w["id"]]
+    assert db.purge_deleted_watches(keep_seconds=-1) == 0 and _obs_count(w["id"]) == 10     # архів не чиститься
+
+    press("menu:list")
+    assert "🗄 Архів (1)" in shown[-1][1]
+    press(f"arch:{w['id']}")
+    assert "Свій мін. прибуток: 70€" in shown[-1][0] and "↩️ Повернути у відстеження" in shown[-1][1]
+
+    with db.get_conn() as conn:                        # давно в архіві — поточні оголошення застаріли
+        conn.execute("UPDATE watches SET archived_at = archived_at - 86400 WHERE id = ?", (w["id"],))
+    press(f"arch:{w['id']}:back")
+    restored = db.get_watch(w["id"], 1)
+    assert restored and restored["min_profit"] == 70 and "повернуто з архіву" in shown[-1][0]
+    assert db.list_archived_watches(1) == []
+
+
+def test_archive_delete_forever_and_readd_offer(monkeypatch):
+    shown, ctx, press = _ui(monkeypatch)
+    w = _watch_with_listings(GOOD)
+    db.archive_watch(w["id"], 1)
+    assert db.find_archived_watch(1, "  playstation   5 ")["id"] == w["id"]
+    press(f"arch:{w['id']}:del")
+    assert "назавжди" in shown[-1][0] and _obs_count(w["id"]) == 10
+    press(f"arch:{w['id']}:delyes")
+    assert db.list_archived_watches(1) == [] and _obs_count(w["id"]) == 0
+
+
+def test_archived_sales_shared_with_new_watch():
+    from analysis.shared_market import attach_shared_history
+    w = _watch_with_listings(GOOD)
+    with db.get_conn() as conn:
+        conn.execute("UPDATE listing_obs SET status = 'gone', gone_at = ? WHERE watch_id = ? AND item_id IN "
+                     "(SELECT item_id FROM listing_obs WHERE watch_id = ? LIMIT 3)", (int(time.time()), w["id"], w["id"]))
+    db.archive_watch(w["id"], 1)
+    new = db.get_watch(db.add_watch(1, w["label"], w["query"], "", "", 25), 1)
+    assert attach_shared_history(new) == 3            # лише продані: «поточні» оголошення архіву застаріли
+
+
+def test_readd_offers_archived(monkeypatch):
+    from ui import screen_addwatch
+    shown, ctx, press = _ui(monkeypatch)
+    w = _watch_with_listings(GOOD)
+    db.archive_watch(w["id"], 1)
+    upd = MagicMock()
+    upd.effective_chat.id = upd.effective_user.id = 1
+    upd.callback_query = None
+    upd.message.text = "PlayStation 5"
+    ctx.user_data = {}
+    state = asyncio.run(screen_addwatch.addwatch_got_query(upd, ctx))
+    assert state == screen_addwatch.ASK_CATEGORY and "є в архіві" in shown[-1][0]
+    upd2 = MagicMock()
+    upd2.effective_chat.id = upd2.effective_user.id = 1
+    upd2.callback_query.data = f"archadd:back:{w['id']}"
+    upd2.callback_query.answer = AsyncMock()
+    from telegram.ext import ConversationHandler
+    assert asyncio.run(screen_addwatch.addwatch_archive_choice(upd2, ctx)) == ConversationHandler.END
+    assert db.get_watch(w["id"], 1) and "повернуто з архіву" in shown[-1][0]

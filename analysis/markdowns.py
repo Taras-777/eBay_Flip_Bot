@@ -15,6 +15,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from core import settings
 from core.settings import (
     PRICE_DROP_FRESH_HOURS,
     PRICE_DROP_MAX_LOOKUPS,
@@ -27,6 +28,7 @@ from core.settings import (
 )
 from core.db import (
     get_drop_pct,
+    get_markdown_mode,
     get_market_stats,
     get_meta,
     get_min_profit,
@@ -97,6 +99,7 @@ def markdown_list(chat_id):
     rules = min_profit_rules(chat_id)   # свій у товару, категорії або загальний
     default_rule = ("eur", get_min_profit(chat_id))
     sold_only = get_sold_only(chat_id)
+    mode = get_markdown_mode(chat_id)
     stats_by_watch, result = {}, []
     for r in rows:
         if r["watch_id"] not in stats_by_watch:
@@ -112,6 +115,8 @@ def markdown_list(chat_id):
             continue   # навіть після знижки дорожче за ринок
         _, profit = estimate_resale_profit(sale, r["price"])
         min_profit = profit_needed(rules.get(r["watch_id"], default_rule), sale)
+        if not markdown_fits(mode, r["price"], max_buy_price(sale, min_profit)):
+            continue   # до вигідної ціни задалеко — продавець стільки не скине
         r.update(sale_price=sale, profit=profit, buy_limit=max_buy_price(sale, min_profit),
                  drop_pct=(r["first_price"] - r["price"]) / r["first_price"] * 100,
                  # звідки ціна «продати» — для рядка «📊 Ціна продажу …» у картці
@@ -120,6 +125,15 @@ def markdown_list(chat_id):
         result.append(r)
     result.sort(key=lambda r: -r["profit"])
     return result
+
+
+def markdown_fits(mode, price, buy_limit):
+    """Чи показувати знижку за режимом: deal — уже вигідно; haggle — вигідно або до вигідної ціни лишається
+    не більше MARKDOWN_HAGGLE_PCT% ціни оголошення; all — завжди."""
+    gap = price - buy_limit
+    if mode == "all" or gap <= 0:
+        return True
+    return mode == "haggle" and gap <= price * settings.MARKDOWN_HAGGLE_PCT / 100
 
 
 def markdown_counts(chat_id):

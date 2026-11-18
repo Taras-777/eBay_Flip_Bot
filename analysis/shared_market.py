@@ -18,7 +18,7 @@ import time
 
 from core.settings import log
 from analysis.textparse import _search_tokens
-from core.db import copy_listing_history, get_watch_categories, list_watches, watch_category_ids
+from core.db import copy_listing_history, get_watch_categories, list_archived_watches, list_watches, watch_category_ids
 from ebay.ebay_api import effective_exclude, effective_min_price, search_active_items, search_in_categories
 
 MARKET_CACHE_SECONDS = 45 * 60   # ринкове сканування (раз на годину) — ділиться в межах 45 хв
@@ -136,8 +136,12 @@ def find_shared_watch(query, exclude_chat_id=None):
 
 
 def attach_shared_history(watch):
-    """Новому товару — історія спостережень від «сусідів» (продажі, поточні оголошення)."""
+    """Новому товару — історія спостережень від «сусідів» (продажі, поточні оголошення), зокрема від
+    таких самих товарів в «🗄 Архів» (їхні продажі ще актуальні, а без цього ринок збирався б з нуля)."""
     others = [s for s in siblings(watch) if s["id"] != watch["id"]]
+    key = market_key(watch)
+    archived = [a for a in list_archived_watches() if a["id"] != watch["id"] and market_key(a) == key]
+    others += archived
     if not others:
         return 0
     conds = _conditions(watch)
@@ -146,6 +150,7 @@ def attach_shared_history(watch):
         allowed_conditions=set(conds) if conds else None,
         exclude_tokens=_search_tokens(watch.get("exclude") or ""),
         min_price=watch.get("min_price") or 0,
+        gone_only_from={a["id"] for a in archived},   # «поточні» оголошення архівного товару застаріли
     )
     if copied:
         log.info("watch #%s: підключено спільну історію ринку — %s оголошень", watch["id"], copied)

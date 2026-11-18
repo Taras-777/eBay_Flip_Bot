@@ -21,6 +21,12 @@ from core.db.users import (  # noqa: F401
     upsert_user_request,
 )
 from core.db.watches import (  # noqa: F401
+    archive_watch,
+    unarchive_watch,
+    list_archived_watches,
+    get_archived_watch,
+    find_archived_watch,
+    delete_archived_watch,
     FOLDER_NAME_MAX,
     LISTING_AGE_CHOICES,
     _purge_watch_data,
@@ -171,6 +177,8 @@ from core.db.learning import (  # noqa: F401
     unreject_item,
 )
 from core.db.markdowns import (  # noqa: F401
+    get_markdown_mode,
+    set_markdown_mode,
     PRICE_STEP_EUR,
     SOLD_ONLY_SQL,
     dismiss_tracks,

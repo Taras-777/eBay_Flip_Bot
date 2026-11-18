@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from core.db import (
+    list_archived_watches,
     list_watches,
     watch_category_ids,
 )
@@ -29,11 +30,16 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """menu:list, /list — «🗂 Категорії товарів»: папки (телефони, ноутбуки…) з кількістю товарів."""
     chat_id = update.effective_chat.id
     watches = list_watches(chat_id=chat_id)
+    archived = await asyncio.to_thread(list_archived_watches, chat_id)
+    archive_row = ([[InlineKeyboardButton(f"🗄 Архів ({len(archived)})", callback_data="arch:list")]]
+                   if archived else [])
     if not watches:
         await show_panel(
-            update, context, title("🗂", "Категорії товарів") + "\n\nУ тебе ще немає товарів. Додай перший:",
+            update, context, title("🗂", "Категорії товарів") + "\n\nУ тебе ще немає товарів. Додай перший"
+            + (" або поверни з архіву:" if archived else ":"),
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
+                *archive_row,
                 menu_row(),
             ]), parse_mode=ParseMode.HTML,
         )
@@ -47,7 +53,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [title("🗂", "Категорії товарів", count=len(watches), subtitle="обери категорію, щоб побачити її товари")]
     rows = grid([InlineKeyboardButton(f"{name} ({groups[key]})", callback_data=f"wgrp:{key}")
                  for key, name in names.items() if groups[key]])
-    rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")], menu_row()]
+    rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")], *archive_row, menu_row()]
     await show_panel(update, context, "\n".join(lines), reply_markup=InlineKeyboardMarkup(rows),
                      parse_mode=ParseMode.HTML)
 

@@ -192,3 +192,17 @@ def test_clear_list_returns_only_after_new_drop(monkeypatch):
     assert not any(b.text.startswith("📉") for r in panel.build_main_menu(1).inline_keyboard for b in r)
     db.track_prices(wid, [_item("a", 480), _item("b", 430)])          # «a» подешевшало ще — повертається
     assert [r["item_id"] for r in markdowns.markdown_list(1)] == ["a"]
+
+
+def test_markdown_modes(monkeypatch):
+    from analysis import markdowns as md
+    assert md.markdown_fits("deal", 400, 420) and not md.markdown_fits("deal", 400, 390)
+    assert md.markdown_fits("haggle", 1868, 1842)                    # −1% — реальний торг
+    assert md.markdown_fits("haggle", 585, 500) and not md.markdown_fits("haggle", 585, 492)   # 14.5% / 15.9%
+    assert not md.markdown_fits("haggle", 68, 38) and md.markdown_fits("all", 68, 38)          # PS4: −44%
+    assert db.get_markdown_mode(1) == "haggle"
+    handlers, shown, press = _screen(monkeypatch)
+    upd, ctx = press("mdpct:m:deal")
+    asyncio.run(handlers.drop_pct_callback(upd, ctx))
+    assert db.get_markdown_mode(1) == "deal" and "✅ ✅ Лише вигідні" in shown[-1][1]
+    assert "Вигідні + торг до 15%" in shown[-1][0] and "PS4 за 68€" in shown[-1][0]
