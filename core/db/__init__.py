@@ -177,6 +177,8 @@ from core.db.learning import (  # noqa: F401
     unreject_item,
 )
 from core.db.markdowns import (  # noqa: F401
+    _spec_parts,
+    listing_relisted,
     get_markdown_mode,
     set_markdown_mode,
     PRICE_STEP_EUR,

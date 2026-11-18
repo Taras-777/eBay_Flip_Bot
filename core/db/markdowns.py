@@ -11,6 +11,28 @@ from core import settings
 # ---------- «📉 Знизили ціну» ----------
 
 PRICE_STEP_EUR = 0.5   # дрібні коливання (копійки курсу валют) — не зниження
+TITLE_SAME_MIN = 0.5   # назва «та сама», якщо щонайменше половина слів коротшої назви є в іншій
+
+
+def _spec_parts(spec):
+    """«Slim · 500GB» → {"Slim", "500GB"}; невідома / неповна конфігурація — None (не порівнюємо)."""
+    if not spec or spec in ("unspecified", "*") or spec.startswith("GPU ?"):
+        return None
+    return {p.strip() for p in spec.split(" · ") if p.strip()}
+
+
+def listing_relisted(old_title, old_spec, new_title, new_spec):
+    """Продавець переробив те саме оголошення під інший товар: змінилась конфігурація (1TB → 825GB,
+    M3 Pro → M3) або назва майже повністю інша. Уточнення («RTX 4060» → «RTX 4060 · i7 13 gen»), інший порядок
+    («500GB · Slim» → «Slim · 500GB») і дописані слова («Top Zustand», «OVP») — не переробка."""
+    from analysis.textparse import _search_tokens   # тут: textparse — шар аналізу, база від нього не залежить
+    a, b = _spec_parts(old_spec), _spec_parts(new_spec)
+    if a and b and not (a <= b or b <= a):
+        return True
+    old_words, new_words = _search_tokens(old_title or ""), _search_tokens(new_title or "")
+    if len(old_words) < 3 or len(new_words) < 3:
+        return False   # надто коротка назва — порівнювати ненадійно
+    return len(old_words & new_words) / min(len(old_words), len(new_words)) < TITLE_SAME_MIN
 
 
 def track_prices(watch_id, items):
@@ -20,16 +42,30 @@ def track_prices(watch_id, items):
     now = int(time.time())
     rows = [(watch_id, it["item_id"], it.get("title"), it.get("url"), it.get("cond_group"),
              it.get("spec_group", "unspecified"), it.get("created_at"), int(bool(it.get("has_best_offer"))),
-             it["total_price"], now, it["total_price"], it["total_price"], now)
+             it["total_price"], now, it["total_price"], it["total_price"], now, it.get("title"),
+             it.get("spec_group", "unspecified"))
             for it in items
             if it.get("item_id") and it.get("total_price") and not it.get("is_variation")]
     if not rows:
         return 0
     with get_conn() as conn:
+        # Оголошення переробили під інший товар — стара «перша ціна» вже не про нього: рахуємо з нуля
+        known = {r["item_id"]: r for r in conn.execute(
+            f"SELECT item_id, first_title, first_spec FROM price_track WHERE watch_id = ? AND item_id IN "
+            f"({','.join('?' * len(rows))})", [watch_id] + [r[1] for r in rows]).fetchall()}
+        for row in rows:
+            old = known.get(row[1])
+            if old and listing_relisted(old["first_title"], old["first_spec"], row[2], row[5]):
+                conn.execute(
+                    """UPDATE price_track SET first_price = ?, first_seen = ?, min_price = ?, price = ?,
+                       first_title = ?, first_spec = ?, price_changed_at = NULL, seen_at = NULL,
+                       dismissed_price = NULL WHERE watch_id = ? AND item_id = ?""",
+                    (row[8], now, row[8], row[8], row[2], row[5], watch_id, row[1]))
         conn.executemany(
             f"""INSERT INTO price_track (watch_id, item_id, title, url, cond_group, spec_group, listed_at,
-                                        has_best_offer, first_price, first_seen, price, min_price, last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        has_best_offer, first_price, first_seen, price, min_price, last_seen,
+                                        first_title, first_spec)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(watch_id, item_id) DO UPDATE SET
                  title = excluded.title, url = excluded.url, cond_group = excluded.cond_group,
                  spec_group = excluded.spec_group, listed_at = COALESCE(price_track.listed_at, excluded.listed_at),
@@ -39,6 +75,8 @@ def track_prices(watch_id, items):
                  seen_at = CASE WHEN excluded.price < price_track.price - {PRICE_STEP_EUR}
                                 THEN NULL ELSE price_track.seen_at END,
                  min_price = MIN(price_track.min_price, excluded.price),
+                 first_title = COALESCE(price_track.first_title, excluded.first_title),
+                 first_spec = COALESCE(price_track.first_spec, excluded.first_spec),
                  price = excluded.price""",
             rows,
         )

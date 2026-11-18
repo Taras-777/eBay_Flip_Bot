@@ -241,6 +241,9 @@ CREATE TABLE IF NOT EXISTS price_track (
     price_changed_at INTEGER,   -- коли ціну востаннє знизили
     last_seen INTEGER NOT NULL, -- 0 — перевірили: продано чи знято
     seen_at INTEGER,            -- коли користувач бачив поточну знижку (NULL — нова)
+    dismissed_price REAL,
+    first_title TEXT,           -- назва й конфігурація, коли бот побачив оголошення вперше (якщо продавець
+    first_spec TEXT,            -- переробив оголошення під інший товар — знижка рахується заново)
     PRIMARY KEY (watch_id, item_id)
 );
 
@@ -419,6 +422,11 @@ def init_db():
         if track_cols and "dismissed_price" not in track_cols:
             # «🧹 Очистити список» у «📉 Знизили ціну»: ціна, за якої оголошення прибрали зі списку
             conn.execute("ALTER TABLE price_track ADD COLUMN dismissed_price REAL")
+        if track_cols and "first_title" not in track_cols:
+            # Перші назва й конфігурація: оголошення переробили під інший товар — знижку рахуємо заново
+            conn.execute("ALTER TABLE price_track ADD COLUMN first_title TEXT")
+            conn.execute("ALTER TABLE price_track ADD COLUMN first_spec TEXT")
+            conn.execute("UPDATE price_track SET first_title = title, first_spec = spec_group")
 
         deal_cols = {r["name"] for r in conn.execute("PRAGMA table_info(deals)").fetchall()}
         if deal_cols and "seen_at" not in deal_cols:

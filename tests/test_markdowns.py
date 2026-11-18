@@ -206,3 +206,26 @@ def test_markdown_modes(monkeypatch):
     asyncio.run(handlers.drop_pct_callback(upd, ctx))
     assert db.get_markdown_mode(1) == "deal" and "✅ ✅ Лише вигідні" in shown[-1][1]
     assert "Вигідні + торг до 15%" in shown[-1][0] and "PS4 за 68€" in shown[-1][0]
+
+
+def test_relisted_listing_starts_over():
+    """Те саме оголошення переробили під інший товар — «знижка» від ціни старого товару не рахується."""
+    assert db.listing_relisted("Sony PS5 Slim 1TB Disc", "Slim · 1TB", "Sony PS5 Slim 825GB Digital", "Digital · 825GB")
+    assert not db.listing_relisted("PS4 Slim 500GB", "500GB · Slim", "PS4 Slim 500GB", "Slim · 500GB")   # порядок
+    assert not db.listing_relisted("Victus 15 Laptop", "RTX 4060", "Victus 15 Laptop", "RTX 4060 · i7 13 gen · 16GB")
+    assert not db.listing_relisted("Sony PlayStation 5 Slim 1TB", "Slim · 1TB",
+                                   "Sony PlayStation 5 Slim 1TB Top Zustand OVP", "Slim · 1TB")    # дописали слова
+    assert db.listing_relisted("Apple MacBook Pro 16 M3 Pro 36GB", None, "Samsung Galaxy S24 Ultra 256GB Titan", None)
+    assert not db.listing_relisted("PS5", None, "Xbox", None)                                     # закоротко
+
+    wid = db.add_watch(1, "PS5", "PS5", "", "", 15)
+    db.track_prices(wid, [{"item_id": "a", "title": "Sony PS5 Slim 1TB Disc", "spec_group": "Slim · 1TB",
+                           "total_price": 500}])
+    db.track_prices(wid, [{"item_id": "a", "title": "Sony PS5 Slim 1TB Disc", "spec_group": "Slim · 1TB",
+                           "total_price": 450}])
+    row = db.get_track_row(wid, "a")
+    assert row["first_price"] == 500 and row["price"] == 450                  # справжня знижка
+    db.track_prices(wid, [{"item_id": "a", "title": "Sony PS5 Slim 825GB Digital", "spec_group": "Digital · 825GB",
+                           "total_price": 250}])
+    row = db.get_track_row(wid, "a")
+    assert row["first_price"] == 250 and row["price"] == 250 and row["first_spec"] == "Digital · 825GB"
