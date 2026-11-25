@@ -128,6 +128,8 @@ async def check_one_watch(app: Application, w: dict):
         if drops:
             await _notify_price_drops(app, w, drops)
     else:
+        if w.get("observe_until"):
+            return   # «👀 Спостерігати»: лише ринкові сканування (продажі), без пошуку знахідок
         stats = {(r["cond_group"], r["spec_group"]): r for r in rows}
         def _deal_scan():
             # Спільний пошук: той самий товар інших користувачів — один запит на всіх
@@ -137,6 +139,8 @@ async def check_one_watch(app: Application, w: dict):
 
         items = await asyncio.to_thread(_deal_scan)
 
+    if w.get("observe_until"):
+        return   # «👀 Спостерігати»: продажі збираються, знахідок і «📉» немає
     if items:   # «📉 Знизили ціну»: перша й поточна ціна кожного оголошення
         await asyncio.to_thread(track_prices, w["id"], items)
     if not items or not stats:
@@ -324,6 +328,24 @@ def pace_interval(app, left, now=None):
     return pace["interval"]
 
 
+async def _finish_observations(app):
+    from core.db import observations_due
+    from ui.screen_appraise import finish_observation   # тут, щоб не тягнути UI при імпорті
+    try:
+        due = await asyncio.to_thread(observations_due)
+    except Exception as e:
+        log.debug("Не вдалося перевірити «👀 Спостерігати»: %s", e)
+        return
+    for w in due:
+        try:
+            text, wid = await asyncio.to_thread(finish_observation, w)
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Відстежувати далі", callback_data=f"arch:{wid}:back")]])
+            await app.bot.send_message(chat_id=w["chat_id"], text=text, reply_markup=markup, parse_mode=ParseMode.HTML)
+            app.bot_data.setdefault("chats_to_repost_panel", set()).add(w["chat_id"])
+        except Exception as e:
+            log.warning("Не вдалося завершити спостереження за «%s»: %s", w.get("label"), e)
+
+
 async def _notify_login(app):
     """Нагадування власнику про вхід в акаунт eBay (ebay_user.login_notice)."""
     from ebay.ebay_user import login_notice   # тут, щоб не тягнути при імпорті
@@ -399,6 +421,9 @@ async def scheduler_loop(app: Application):
 
             # Вхід в акаунт eBay: скасований або скоро закінчиться — одне сповіщення власнику
             await _notify_login(app)
+
+            # «👀 Спостерігати»: строк минув — оцінка за зібраними продажами, товар — в архів
+            await _finish_observations(app)
 
             # Резервна копія бази — раз на добу (окремим потоком, не заважає перевіркам)
             task = app.bot_data.get("backup_task")

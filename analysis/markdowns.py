@@ -74,6 +74,8 @@ def run_markdown_scan():
     now = time.time()
     done = 0
     for w in list_watches():
+        if w.get("observe_until"):
+            continue   # «👀 Спостерігати» — лише продажі
         key = f"mdscan:{w['id']}"
         if now - float(get_meta(key) or 0) < PRICE_DROP_SCAN_HOURS * 3600:
             continue

@@ -435,6 +435,8 @@ def cleanup_old_listing_obs():
         conn.execute("DELETE FROM price_history WHERE day < ?", (old_day,))
         conn.execute("DELETE FROM item_specs WHERE fetched_at < ?", (cutoff,))
         conn.execute("DELETE FROM price_track WHERE last_seen < ?", (cutoff,))
+        # Продажі не губляться: спершу — в «🗃 Архів продажів», потім видаляємо
+        archive_watch_sales(conn, "o.last_seen < ?", (cutoff,))
         return conn.execute("DELETE FROM listing_obs WHERE last_seen < ?", (cutoff,)).rowcount
 
 
@@ -624,3 +626,4 @@ def discovery_activity(since):
 # Імпорти з інших частин бази — унизу, щоб модулі могли посилатися один на одного
 from core.db.api_usage import _utc_day  # noqa: E402
 from core.db.base import get_conn, get_meta, set_meta  # noqa: E402
+from core.db.sales_archive import archive_watch_sales  # noqa: E402

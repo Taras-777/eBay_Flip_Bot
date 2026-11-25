@@ -21,6 +21,8 @@ from core.db.users import (  # noqa: F401
     upsert_user_request,
 )
 from core.db.watches import (  # noqa: F401
+    observations_due,
+    set_observe,
     archive_watch,
     unarchive_watch,
     list_archived_watches,
@@ -199,6 +201,10 @@ from core.db.markdowns import (  # noqa: F401
     track_prices,
 )
 from core.db.discovery import (  # noqa: F401
+    APPRAISED_PREFIX,
+    add_appraised_product,
+    list_appraised_products,
+    mark_appraised_scanned,
     apply_discovery_check,
     discovery_gone_stats,
     get_discovery_results,
@@ -206,6 +212,14 @@ from core.db.discovery import (  # noqa: F401
     get_pending_discovery_checks,
     save_discovery_result,
     update_discovery_obs,
+)
+from core.db.sales_archive import (  # noqa: F401
+    _archive_where,
+    archive_discovery_sales,
+    archive_watch_sales,
+    archived_queries,
+    get_archived_sales,
+    sales_archive_stats,
 )
 from core.db.service import (  # noqa: F401
     ACTION_LOG_KEEP,

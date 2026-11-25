@@ -165,8 +165,8 @@ def run_auction_scan(now=None):
         return []
     alerts = []
     for w in list_watches():
-        if w["chat_id"] not in chats:
-            continue
+        if w["chat_id"] not in chats or w.get("observe_until"):
+            continue   # аукціони вимкнено або «👀 Спостерігати» (лише продажі)
         key = f"aucscan:{w['id']}"
         if now - float(get_meta(key) or 0) < AUCTION_SCAN_HOURS * 3600:
             continue

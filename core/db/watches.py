@@ -68,6 +68,7 @@ def find_duplicate_watch(chat_id, query):
 
 
 def _purge_watch_data(conn, watch_id):
+    archive_watch_sales(conn, "o.watch_id = ?", (watch_id,))   # продажі — в «🗃 Архів продажів»
     for table in ("market_stats", "seen_items", "listing_obs", "price_history", "scan_stats", "price_track"):
         conn.execute(f"DELETE FROM {table} WHERE watch_id = ?", (watch_id,))
 
@@ -107,6 +108,21 @@ def unarchive_watch(watch_id, chat_id):
     if time.time() - row["archived_at"] > ARCHIVE_FRESH_SECONDS:
         reset_active_listings(watch_id)   # щойно архівований (напр. «↩️ Скасувати») — оголошення ще актуальні
     return True
+
+
+def set_observe(watch_id, until):
+    """«👀 Спостерігати» до until (unix-час) або None — звичайне відстеження."""
+    with get_conn() as conn:
+        conn.execute("UPDATE watches SET observe_until = ? WHERE id = ?", (until, watch_id))
+
+
+def observations_due(now=None):
+    """Активні товари «👀 Спостерігати», строк яких минув."""
+    now = int(now or time.time())
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM watches WHERE active = 1 AND observe_until IS NOT NULL AND observe_until <= ?",
+            (now,)).fetchall()]
 
 
 def list_archived_watches(chat_id=None):
@@ -193,6 +209,7 @@ def reset_watch_market(watch_id):
     стара статистика й спостереження стосуються вже іншої вибірки."""
     with get_conn() as conn:
         conn.execute("DELETE FROM market_stats WHERE watch_id = ?", (watch_id,))
+        archive_watch_sales(conn, "o.watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM listing_obs WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM price_history WHERE watch_id = ?", (watch_id,))
         conn.execute("DELETE FROM scan_stats WHERE watch_id = ?", (watch_id,))
@@ -524,3 +541,4 @@ def set_old_listing_filter(chat_id, enabled=None, days=None):
 
 # Імпорти з інших частин бази — унизу, щоб модулі могли посилатися один на одного
 from core.db.base import get_conn, get_meta, set_meta  # noqa: E402
+from core.db.sales_archive import archive_watch_sales  # noqa: E402

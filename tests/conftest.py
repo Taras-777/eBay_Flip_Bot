@@ -95,7 +95,7 @@ SCREEN_MODULES = ("ui.handlers", "ui.screen_common", "ui.screen_addwatch", "ui.s
                   "ui.screen_edit", "ui.screen_sales",
                   "ui.screen_listings", "ui.screen_deals", "ui.screen_discover", "ui.screen_check", "ui.screen_undo", "ui.screen_markdowns",
                   "ui.screen_stats", "ui.screen_unknown", "ui.screen_folders", "ui.screen_auctions",
-                  "ui.screen_profit", "ui.screen_archive")
+                  "ui.screen_profit", "ui.screen_archive", "ui.screen_appraise")
 
 
 def patch_ui(monkeypatch, name, value):

@@ -36,6 +36,14 @@ from core.concurrency import DialogSafeUpdateProcessor
 from ui.screen_unknown import unknown_callback
 from ui.screen_auctions import auctions_list_callback
 from ui.screen_archive import archive_callback
+from ui.screen_appraise import (
+    APPRAISE_INPUT,
+    appraise_action_callback,
+    appraise_interrupt,
+    appraise_start,
+    appraise_text,
+    observe_off_callback,
+)
 from ui.screen_profit import PROFIT_INPUT, profit_input_interrupt, profit_input_start, profit_input_text
 from ui.screen_folders import FOLDER_NAME, folder_callback, folder_interrupt, folder_new_start, folder_new_text
 from ui.access import access_decision_callback, cmd_approve, cmd_pending, cmd_revoke, cmd_users, cmd_userstats, delete_user_callback
@@ -226,6 +234,21 @@ def main():
         fallbacks=[CallbackQueryHandler(profit_input_interrupt, pattern="^(cprof:|mprof:|menu:)")],
     )
 
+    # «💶 Оцінити товар»: посилання чи назва повідомленням (можна кілька поспіль)
+    appraise_conv = ConversationHandler(
+        name="appraise_conv",
+        persistent=True,
+        allow_reentry=True,
+        entry_points=[CallbackQueryHandler(appraise_start, pattern="^menu:appraise$")],
+        states={
+            APPRAISE_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, appraise_text),
+                CallbackQueryHandler(appraise_interrupt, pattern="^(menu:|appr:|watch_details:)"),
+            ],
+        },
+        fallbacks=[CallbackQueryHandler(appraise_interrupt, pattern="^(menu:|appr:|watch_details:)")],
+    )
+
     check_conv = ConversationHandler(
         name="check_conv",
         persistent=True,
@@ -265,13 +288,16 @@ def main():
     app.add_handler(addwatch_conv)
     app.add_handler(edit_conv)
     app.add_handler(check_conv)
+    app.add_handler(appraise_conv)
     app.add_handler(account_conv)
     app.add_handler(folder_conv)
     app.add_handler(profit_conv)
     update_processor.conversations = [addwatch_conv, edit_conv, check_conv, account_conv, folder_conv,
-                                      profit_conv]
+                                      profit_conv, appraise_conv]
     app.add_handler(CallbackQueryHandler(folder_callback, pattern="^fld:"))
     app.add_handler(CallbackQueryHandler(archive_callback, pattern="^arch:"))
+    app.add_handler(CallbackQueryHandler(appraise_action_callback, pattern="^appr:"))
+    app.add_handler(CallbackQueryHandler(observe_off_callback, pattern="^obsoff:"))
     app.add_handler(CallbackQueryHandler(ebay_account_disconnect, pattern="^eacc:disconnect$"))
     app.add_handler(CallbackQueryHandler(sold_only_callback, pattern="^soldonly$"))
     app.add_handler(CallbackQueryHandler(confirmed_only_callback, pattern="^confonly$"))

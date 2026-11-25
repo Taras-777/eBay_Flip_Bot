@@ -20,11 +20,15 @@ import statistics
 import time
 from collections import Counter
 
-from core.settings import DEFAULT_CONDITION_IDS, MIN_SOLD_SAMPLE, SEARCH_RESERVE, log
+from core.settings import DEFAULT_CONDITION_IDS, LISTING_OBS_RETENTION_DAYS, MIN_SOLD_SAMPLE, SEARCH_RESERVE, log
 from analysis.laptops import is_laptop, laptop_spec
 from analysis.textparse import _search_tokens, _title_matches_search, extract_spec_key, is_accessory_category
 import config
 from core.db import (
+    APPRAISED_PREFIX,
+    archive_discovery_sales,
+    list_appraised_products,
+    mark_appraised_scanned,
     get_hidden_candidates,
     get_sold_only,
     discovery_gone_stats,
@@ -47,6 +51,10 @@ DISCOVERY_INTERVAL_HOURS = 4     # ~135 товарів × 6 разів = ~800 з
 DISCOVERY_SOLD_DAYS = 7
 DISCOVERY_MIN_SAMPLE = 10         # менше оголошень — оцінка ненадійна
 DISCOVERY_EXCLUDE = "broken defekt teile parts kaputt"
+# Приховані 🙈 і оцінені через «💶» товари — лише для статистики продажів, раз на добу
+# і лише поки є запас запитів (пошук знахідок — завжди головний)
+EXTRA_SCAN_HOURS = 24
+EXTRA_SCAN_RESERVE = 300          # стільки запитів Browse лишити понад SEARCH_RESERVE
 
 # (емодзі, назва, пошуковий запит, мінімальна ціна — щоб eBay не віддавав аксесуари)
 # Популярні на eBay.de товари для перепродажу: ходова електроніка, яку часто
@@ -244,8 +252,9 @@ def tracked_candidates(chat_id=None):
             if any(_is_same_product(w["query"], query) or _is_same_product(w["label"], query) for w in watches)}
 
 
-def analyze_candidate(emoji, name, query, floor):
-    """Один запит до eBay → метрики кандидата або None, якщо даних замало."""
+def observe(name, query, floor):
+    """Один запит до eBay: поточні оголошення того самого товару з класом кожного; зниклі (продані)
+    записуються в спостереження під назвою name. Повертає (оголошення, дати створення)."""
     items = search_active_items(
         query=query, condition_ids=DEFAULT_CONDITION_IDS, exclude_terms=DISCOVERY_EXCLUDE,
         limit=200, min_price=floor, fresh=True,
@@ -257,9 +266,14 @@ def analyze_candidate(emoji, name, query, floor):
     for it in items:
         it["spec_group"] = (laptop_spec(it["title"], query=query)
                             if is_laptop(it["title"], it.get("category_names"), query) else extract_spec_key(it["title"]))
-
     created = [it["created_at"] for it in items if it.get("created_at")]
     update_discovery_obs(name, items, min(created) if created else None)
+    return items, created
+
+
+def analyze_candidate(emoji, name, query, floor):
+    """Один запит до eBay → метрики кандидата або None, якщо даних замало."""
+    items, created = observe(name, query, floor)
     items = dedupe_offers(items)   # для цін — однакові пропозиції один раз
 
     # Ринок рахуємо для найпоширенішої конфігурації серед вживаних (їх перепродають найчастіше)
@@ -351,19 +365,74 @@ def hidden_names(chat_id):
     return set(get_hidden_candidates(chat_id))
 
 
+def _extra_budget():
+    return browse_budget_left() >= SEARCH_RESERVE + EXTRA_SCAN_RESERVE
+
+
+def _scan_hidden(names):
+    """🙈 приховані — раз на EXTRA_SCAN_HOURS, лише для статистики (у списку «💡» вони не з'являються)."""
+    done = 0
+    for emoji, name, query, floor in CANDIDATES:
+        if name not in names:
+            continue
+        key = f"disc_hidden_at:{name}"
+        if time.time() - float(get_meta(key, "0") or 0) < EXTRA_SCAN_HOURS * 3600:
+            continue
+        if not _extra_budget():
+            break
+        try:
+            result = analyze_candidate(emoji, name, query, floor)
+        except Exception as e:
+            log.warning("«Що перепродавати»: не вдалося переглянути прихований «%s»: %s", name, e)
+            continue
+        if result:
+            save_discovery_result(name, result)
+        set_meta(key, time.time())
+        done += 1
+    return done
+
+
+def scan_appraised():
+    """Товари, оцінені через «💶» (немає ні в «📦», ні в «💡»): раз на EXTRA_SCAN_HOURS збираємо продажі."""
+    done = 0
+    for p in list_appraised_products():
+        if time.time() - (p.get("scanned_at") or 0) < EXTRA_SCAN_HOURS * 3600:
+            continue
+        if not _extra_budget():
+            break
+        try:
+            observe(APPRAISED_PREFIX + p["query"], p["query"], p.get("floor") or 0)
+        except Exception as e:
+            log.warning("«💶 Оцінити»: не вдалося переглянути «%s»: %s", p["query"], e)
+            continue
+        mark_appraised_scanned(p["query"])
+        done += 1
+    return done
+
+
+def archive_old_discovery():
+    """Продажі «💡» і оцінених товарів, старші за LISTING_OBS_RETENTION_DAYS, — в «🗃 Архів продажів»."""
+    queries = {name: query for _, name, query, _ in CANDIDATES}
+    queries.update({APPRAISED_PREFIX + p["query"]: p["query"] for p in list_appraised_products()})
+    return archive_discovery_sales(queries, int(time.time()) - LISTING_OBS_RETENTION_DAYS * 86400,
+                                   prefix=APPRAISED_PREFIX)
+
+
 def run_discovery(force=False):
     """Аналізує кандидатів, якщо минуло DISCOVERY_INTERVAL_HOURS (або force).
-    Повертає кількість проаналізованих. Викликати з потоку."""
+    Потім, якщо лишився запас запитів, — 🙈 приховані й оцінені через «💶» (раз на добу, лише продажі).
+    Повертає кількість проаналізованих кандидатів. Викликати з потоку."""
     last = float(get_meta("discovery_at", "0") or 0)
     if not force and time.time() - last < DISCOVERY_INTERVAL_HOURS * 3600:
         return 0
     done = 0
-    # Те, що власник позначив «🙈 Не цікавить», не аналізуємо — це запити до eBay
-    # і те, що він уже відстежує у «📦 Мої товари» (там свої, точніші дані)
+    # Те, що власник уже відстежує у «📦 Мої товари», не аналізуємо (там свої, точніші дані);
+    # 🙈 «Не цікавить» — окремо й рідше, лише для статистики продажів
     owner = getattr(config, "OWNER_TELEGRAM_ID", 0)
-    skip = (hidden_names(owner) | tracked_candidates(owner)) if owner else set()
+    tracked = tracked_candidates(owner) if owner else set()
+    hidden = (hidden_names(owner) - tracked) if owner else set()
     for emoji, name, query, floor in CANDIDATES:
-        if name in skip:
+        if name in tracked or name in hidden:
             continue
         if browse_budget_left() < SEARCH_RESERVE + 50:
             log.info("«Що перепродавати»: мало запитів до eBay — решту кандидатів перевірю пізніше")
@@ -377,7 +446,15 @@ def run_discovery(force=False):
             save_discovery_result(name, result)
         done += 1
     set_meta("discovery_at", time.time())
-    log.info("«Що перепродавати»: проаналізовано %s товарів", done)
+    extra_hidden = _scan_hidden(hidden)
+    extra_appraised = scan_appraised()
+    try:
+        archived, _ = archive_old_discovery()
+    except Exception as e:
+        log.warning("«Що перепродавати»: не вдалося перенести старі продажі в архів: %s", e)
+        archived = 0
+    log.info("«Що перепродавати»: проаналізовано %s товарів (+ приховані %s, оцінені %s; в архів продажів %s)",
+             done, extra_hidden, extra_appraised, archived)
     return done
 
 

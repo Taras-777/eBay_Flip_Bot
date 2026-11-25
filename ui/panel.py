@@ -49,6 +49,7 @@ MENU_LABELS = {
     "markdowns": "📉 Знизили ціну",
     "addwatch": "➕ Додати товар",
     "discover": "💡 Що перепродавати",
+    "appraise": "💶 Оцінити товар",
     "list": "🗂 Категорії товарів",
     "stats": "📊 Статистика",
     "unknown": "🛠 Нерозпізнані",
@@ -191,10 +192,9 @@ def build_main_menu(user_id: int) -> InlineKeyboardMarkup:
     if extra:
         rows.append(extra)
     rows.append([btn("list"), btn("discover")])
-    second = [btn("stats")]
+    rows.append([btn("appraise"), btn("stats")])
     if unknown:   # «🛠 Нерозпізнані» — лише коли такі оголошення є
-        second.append(InlineKeyboardButton(f"{MENU_LABELS['unknown']} ({unknown})", callback_data="unkall:0"))
-    rows.append(second)
+        rows.append([InlineKeyboardButton(f"{MENU_LABELS['unknown']} ({unknown})", callback_data="unkall:0")])
     offer = menu_offer(user_id)
     if offer:   # щойно щось видалив і пішов у меню — повернути ще можна
         rows.insert(0, [undo_button(offer["id"], offer["label"])])

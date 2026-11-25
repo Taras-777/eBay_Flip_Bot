@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS watches (
     required_aspect TEXT,
     categories_json TEXT,
     deleted_at INTEGER,         -- видалено, але дані ще зберігаються для «↩️ Скасувати»
-    archived_at INTEGER         -- у «🗄 Архів»: не сканується, але історія й налаштування зберігаються
+    archived_at INTEGER,        -- у «🗄 Архів»: не сканується, але історія й налаштування зберігаються
+    observe_until INTEGER       -- «👀 Спостерігати»: лише збирає продажі (без знахідок) до цього часу
 );
 
 CREATE TABLE IF NOT EXISTS market_stats (
@@ -82,6 +83,30 @@ CREATE TABLE IF NOT EXISTS discovery_obs (
     sold_check TEXT,      -- перевірка через Trading API, як у listing_obs
     checked_at INTEGER,
     PRIMARY KEY (candidate, item_id)
+);
+
+-- «🗃 Архів продажів»: продажі старші за 90 днів (лише продані, без даних продавців) — назавжди, для «💶 Оцінити»
+CREATE TABLE IF NOT EXISTS sales_archive (
+    query TEXT NOT NULL,      -- пошуковий запит товару / кандидата «💡»
+    item_id TEXT NOT NULL,
+    source TEXT NOT NULL,     -- watch / disc / appr
+    title TEXT,
+    spec_group TEXT,
+    cond_group TEXT,          -- used — 👤 приватний продавець
+    price REAL NOT NULL,
+    listed_at INTEGER,
+    sold_at INTEGER NOT NULL,
+    confirmed INTEGER DEFAULT 0,   -- 1 — продаж підтвердив eBay
+    PRIMARY KEY (query, item_id)
+);
+
+-- Товари, які оцінювали через «💶», але їх немає ні серед товарів бота, ні в «💡»: бот збирає по них продажі
+CREATE TABLE IF NOT EXISTS appraised_products (
+    query TEXT PRIMARY KEY,
+    title TEXT,
+    floor REAL DEFAULT 0,     -- мінімальна ціна пошуку (щоб не тягнути аксесуари)
+    added_at INTEGER NOT NULL,  -- коли востаннє оцінювали
+    scanned_at INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS discovery_results (
@@ -287,6 +312,8 @@ CREATE INDEX IF NOT EXISTS idx_watches_chat ON watches (chat_id, active);
 CREATE INDEX IF NOT EXISTS idx_undo_chat ON undo_actions (chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_track_watch ON price_track (watch_id, last_seen);
 CREATE INDEX IF NOT EXISTS idx_disc_first_seen ON discovery_obs (first_seen);
+CREATE INDEX IF NOT EXISTS idx_disc_last_seen ON discovery_obs (last_seen);
+CREATE INDEX IF NOT EXISTS idx_sales_archive_sold ON sales_archive (query, sold_at);
 CREATE TABLE IF NOT EXISTS action_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at INTEGER NOT NULL,
@@ -483,6 +510,7 @@ def init_db():
             ("min_profit", "REAL"),   # свій мін. прибуток товару (NULL — загальний користувача)
             ("folder", "TEXT"),       # папка в «🗂 Категорії товарів», обрана вручну (NULL — автоматично)
             ("archived_at", "INTEGER"),   # у «🗄 Архів» (не сканується, дані зберігаються)
+            ("observe_until", "INTEGER"),   # «👀 Спостерігати»: лише збирає продажі до цього часу
         ]:
             if col not in watch_cols:
                 conn.execute(f"ALTER TABLE watches ADD COLUMN {col} {ddl}")

@@ -72,6 +72,12 @@ from analysis.sales import weekly_change
 from ui.style import grid, hint, menu_row, title
 
 
+def _observe_date(watch):
+    from datetime import datetime
+    from core.settings import LOCAL_TZ
+    return datetime.fromtimestamp(watch["observe_until"], LOCAL_TZ).strftime("%d.%m")
+
+
 def profit_source_text(watch, source):
     """«(свій для цього товару)» / «(категорії 🎮 Консолі)» / «(загальний)»."""
     if source == "own":
@@ -132,6 +138,8 @@ def _watch_details_text(watch):
     lines = [
         f"📌 <b>{html.escape(watch['label'])}</b>",
         f"<i>🔎 пошук на eBay: «{html.escape(watch.get('query') or '')}»</i>",
+        *([f"👀 <b>Лише спостереження до {_observe_date(watch)}</b> — бот збирає продажі, знахідок і сповіщень "
+           "немає; потім надішле оцінку й перемістить товар в «🗄 Архів»."] if watch.get("observe_until") else []),
         "",
         "⚙️ <b>Пошук</b>",
         f"🎯 Вигідно, якщо чистий прибуток ≥ <b>{rule_txt}</b> ({html.escape(profit_source_text(watch, source))})"
@@ -225,6 +233,8 @@ async def _show_watch_details(update, context, watch, note=""):
     if learned:   # кнопка лише коли є що прибирати
         extra.append(InlineKeyboardButton(f"🧠 Вивчені слова ({len(learned)})", callback_data=f"lwords:{watch_id}"))
     rows += grid(extra)
+    if watch.get("observe_until"):
+        rows.append([InlineKeyboardButton("✅ Відстежувати повністю", callback_data=f"obsoff:{watch_id}")])
     rows += [
         [
             InlineKeyboardButton("✏️ Редагувати", callback_data=f"editw:{watch_id}"),

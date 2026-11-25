@@ -51,3 +51,16 @@ def test_screens_have_valid_html(monkeypatch):
         ctx.user_data = {}
         asyncio.run(fn(upd, ctx))
         valid(shown[-1][0])
+
+
+def test_appraise_texts_valid_html():
+    from ui import screen_appraise
+    valid(screen_appraise.PROMPT)
+    base = {"title": "Apple <MacBook> & Pro", "spec": 'M3 Pro · 14" · 18GB', "total": 1250.0, "buy_limit": 1343.0,
+            "profit": 153.0, "min_profit": 100.0}
+    for est in ({"sale": 1450.0, "source": "sold", "group": 'M3 Pro · 14" · 18GB', "sold_count": 12,
+                 "sold_range": (1380.0, 1520.0), "sold_days": 4.0},
+                {"sale": 1500.0, "source": "listings", "group": 'M3 Pro · 14"', "listings_count": 9,
+                 "few_sold": (2, 1450.0, 'M3 Pro · 14"')},
+                {"sale": None, "few_sold": None}):
+        valid(screen_appraise.estimate_text(dict(base, estimate=est)))

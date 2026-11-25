@@ -42,8 +42,40 @@ def update_discovery_obs(candidate, items, window_start):
                     conn.execute("UPDATE discovery_obs SET status = 'gone', gone_at = ?, sold_check = 'pending' "
                                  "WHERE candidate = ? AND item_id = ?", (now, candidate, r["item_id"]))
                     gone += 1
-        conn.execute("DELETE FROM discovery_obs WHERE last_seen < ?", (now - 30 * 86400,))
         return gone
+
+
+# ---------- товари, оцінені через «💶»: бот збирає по них продажі ----------
+
+APPRAISED_KEEP_DAYS = 90   # не оцінювали стільки днів — перестаємо збирати
+APPRAISED_MAX = 40         # не більше стількох одночасно (запити до eBay)
+APPRAISED_PREFIX = "appr:"  # так позначені в discovery_obs, щоб не плутати з кандидатами «💡»
+
+
+def add_appraised_product(query, title, floor=0):
+    """Запам'ятати оцінений товар (або оновити дату оцінки). Найстаріші понад APPRAISED_MAX — забуваються."""
+    now = int(time.time())
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO appraised_products (query, title, floor, added_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT(query) DO UPDATE SET title = excluded.title, added_at = excluded.added_at,
+                 floor = CASE WHEN excluded.floor > 0 THEN excluded.floor ELSE appraised_products.floor END""",
+            (query, title, floor or 0, now))
+        conn.execute("DELETE FROM appraised_products WHERE added_at < ?", (now - APPRAISED_KEEP_DAYS * 86400,))
+        conn.execute("""DELETE FROM appraised_products WHERE query NOT IN
+                        (SELECT query FROM appraised_products ORDER BY added_at DESC LIMIT ?)""", (APPRAISED_MAX,))
+
+
+def list_appraised_products():
+    """Оцінені товари, найдавніше скановані першими: [{query, title, floor, added_at, scanned_at}]."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM appraised_products ORDER BY scanned_at, added_at DESC").fetchall()]
+
+
+def mark_appraised_scanned(query):
+    with get_conn() as conn:
+        conn.execute("UPDATE appraised_products SET scanned_at = ? WHERE query = ?", (int(time.time()), query))
 
 
 def discovery_gone_stats(candidate, days=7):

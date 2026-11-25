@@ -78,7 +78,8 @@ async def watch_group_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     for w in watches:
         no_cat = " ⚠️" if not watch_category_ids(w) else ""
         label = w["label"] if len(w["label"]) <= 40 else w["label"][:39] + "…"
-        rows.append([InlineKeyboardButton(f"📌 {label}{no_cat}", callback_data=f"watch_details:{w['id']}")])
+        icon = "👀" if w.get("observe_until") else "📌"   # 👀 — лише спостереження (збирає продажі)
+        rows.append([InlineKeyboardButton(f"{icon} {label}{no_cat}", callback_data=f"watch_details:{w['id']}")])
     if any(not watch_category_ids(w) for w in watches):
         lines.append("\n⚠️ — не обрано категорію eBay (відкрий товар → ✏️ Редагувати)")
     rows += [[InlineKeyboardButton("➕ Додати товар", callback_data="menu:addwatch")],
